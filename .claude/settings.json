@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh auth *)",
+      "PowerShell(gh auth status)",
+      "PowerShell(winget --version)",
+      "PowerShell(scoop --version 2>$null)",
+      "PowerShell(winget install GitHub.cli --accept-package-agreements --accept-source-agreements)",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); gh --version)",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); gh auth login --web --git-protocol https)",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); gh auth login --web --git-protocol https 2>&1)",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); gh auth status)",
+      "PowerShell(\\(Get-Item \"d:\\\\github\\\\chizunurie\\\\pmtiles.exe\"\\).Length / 1MB)",
+      "PowerShell(Get-ChildItem \"d:\\\\github\\\\chizunurie\\\\frontend\\\\public\\\\data\" -File | Select-Object Name, @{N='MB';E={[math]::Round\\($_.Length/1MB,1\\)}})",
+      "PowerShell(Get-ChildItem \"d:\\\\github\\\\chizunurie\\\\frontend\\\\public\" -Recurse -File | Select-Object FullName, @{N='MB';E={[math]::Round\\($_.Length/1MB,1\\)}} | Sort-Object MB -Descending | Select-Object -First 10)",
+      "PowerShell(@\\(\"japan.geojson\",\"hokkaido_chocho.geojson\",\"tokyo_chocho.geojson\",\"municipalities.geojson\",\"municipalities_poly.geojson\",\"japan.pmtiles\"\\) | ForEach-Object { $f = \"d:\\\\github\\\\chizunurie\\\\frontend\\\\public\\\\data\\\\$_\"; if \\(Test-Path $f\\) { [PSCustomObject]@{File=$_; MB=[math]::Round\\(\\(Get-Item $f\\).Length/1MB,1\\)} } })",
+      "Bash(git checkout *)",
+      "Bash(git add *)"
+    ]
+  }
+}

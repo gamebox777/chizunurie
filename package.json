@@ -1,23 +1,19 @@
 {
-  "name": "chizunurie",
+  "name": "chizunurie-scripts",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start"
+    "dev": "npm run dev --prefix frontend",
+    "build": "npm run build --prefix frontend",
+    "start": "npm run start --prefix frontend",
+    "build-pmtiles": "node scripts/build-pmtiles.mjs"
   },
   "dependencies": {
-    "next": "16.2.6",
-    "react": "19.2.4",
-    "react-dom": "19.2.4"
-  },
-  "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "@mapbox/vector-tile": "^2.0.4",
+    "better-sqlite3": "^12.10.0",
+    "geojson-vt": "^4.0.3",
+    "pbf": "^4.0.1",
+    "vt-pbf": "^3.1.3"
   }
 }
