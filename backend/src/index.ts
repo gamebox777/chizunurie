@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { auth } from "./lib/auth.js";
+import { paintedRouter } from "./routes/painted.js";
 
 const app = new Hono();
 
@@ -20,6 +21,9 @@ app.get("/health", (c) => c.json({ status: "ok" }));
 
 // better-auth のルート（/api/auth/signin, /api/auth/signup 等）
 app.on(["GET", "POST"], "/api/auth/**", (c) => auth.handler(c.req.raw));
+
+// 塗り状態の永続化（Next.js の rewrite 経由で /api/backend/painted から到達）
+app.route("/painted", paintedRouter);
 
 const port = Number(process.env.PORT) || 3001;
 

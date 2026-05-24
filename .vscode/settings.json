@@ -1,0 +1,8 @@
+{
+  "workbench.externalUriOpeners": {
+    "localhost:3000": "default",
+    "localhost:3001": "default",
+    "localhost:5432": "default",
+    "local.drizzle.studio": "default"
+  }
+}

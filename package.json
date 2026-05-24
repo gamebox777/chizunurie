@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n frontend,backend -c cyan,yellow \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "dev": "concurrently -n frontend,backend,studio -c cyan,yellow,magenta \"npm run dev:frontend\" \"npm run dev:backend\" \"npm run dev:studio\"",
     "dev:frontend": "npm run dev --prefix frontend",
     "dev:backend": "npm run dev --prefix backend",
+    "dev:studio": "npm run db:studio --prefix backend",
     "build": "npm run build --prefix frontend",
     "start": "npm run start --prefix frontend",
     "build-pmtiles": "node scripts/build-pmtiles.mjs"

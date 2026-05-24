@@ -23,7 +23,14 @@
       "Bash(dir d:\\\\github\\\\chizunurie /b)",
       "PowerShell(cd d:\\\\github\\\\chizunurie\\\\backend; Start-Process -NoNewWindow -FilePath \"npx\" -ArgumentList \"tsx\",\"src/index.ts\" -PassThru; Start-Sleep -Seconds 3; try { Invoke-WebRequest http://localhost:3001/health -UseBasicParsing | Select-Object -ExpandProperty Content } catch { $_.Exception.Message })",
       "PowerShell(cd d:\\\\github\\\\chizunurie\\\\backend; Start-Job -ScriptBlock { Set-Location d:\\\\github\\\\chizunurie\\\\backend; node_modules\\\\.bin\\\\tsx src/index.ts } | Out-Null; Start-Sleep -Seconds 4; try { Invoke-WebRequest http://localhost:3001/health -UseBasicParsing | Select-Object -ExpandProperty Content } catch { $_.Exception.Message }; Get-Job | Stop-Job; Get-Job | Remove-Job)",
-      "Bash(gh repo *)"
+      "Bash(gh repo *)",
+      "Bash(lsof -nP -iTCP:3001 -sTCP:LISTEN)",
+      "Bash(kill 61200 61260 61284 61288 61296 65756 65836)",
+      "Bash(python3 -c \"import sys,json; d=json.loads\\(sys.stdin.read\\(\\)\\); print\\('keys:', list\\(d.keys\\(\\)\\)\\); f=d.get\\('features',[{}]\\)[0]; print\\('first feature properties:', f.get\\('properties'\\)\\)\")",
+      "Bash(npx tsc *)",
+      "Bash(node --env-file=.env ./node_modules/.bin/drizzle-kit generate)",
+      "Bash(node --env-file=.env ./node_modules/.bin/drizzle-kit push)",
+      "Bash(node --env-file=.env -e ' *)"
     ]
   }
 }

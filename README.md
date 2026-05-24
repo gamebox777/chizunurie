@@ -2,6 +2,17 @@
 
 日本の行政区域をクリックして色を塗る白地図塗りゲームのWebアプリです。
 
+## 開発用URL
+
+ルートで `npm run dev` を実行すると、以下が並列起動します。
+
+| サービス | URL | 用途 |
+|---|---|---|
+| フロントエンド | http://localhost:3000 | Next.js アプリ |
+| バックエンドAPI | http://localhost:3001 | Hono + better-auth |
+| Drizzle Studio | https://local.drizzle.studio | DB GUI（テーブル閲覧・編集・SQL実行） |
+| PostgreSQL | `postgresql://postgres:devpassword@localhost:5432/chizunurie` | Docker コンテナ（`docker compose up -d` で起動） |
+
 ## 必要環境
 
 - Node.js 18以上

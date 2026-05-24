@@ -44,7 +44,13 @@ export default function AuthModal({ initialTab, onClose }: Props) {
   const handleGoogle = async () => {
     setError('');
     try {
-      await signIn.social({ provider: 'google', callbackURL: '/' });
+      const res = await signIn.social({
+        provider: 'google',
+        callbackURL: `${window.location.origin}/`,
+      });
+      if (res?.error) {
+        throw new Error(res.error.message ?? 'Googleログインに失敗しました');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Googleログインに失敗しました');
     }
