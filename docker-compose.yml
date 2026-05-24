@@ -1,0 +1,18 @@
+# 開発用: DB のみ Docker で起動
+# フロントエンド: cd frontend && npm run dev
+# バックエンド:   cd backend  && npm run dev
+
+services:
+  db:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_DB: chizunurie
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

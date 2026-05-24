@@ -15,7 +15,14 @@
       "PowerShell(Get-ChildItem \"d:\\\\github\\\\chizunurie\\\\frontend\\\\public\" -Recurse -File | Select-Object FullName, @{N='MB';E={[math]::Round\\($_.Length/1MB,1\\)}} | Sort-Object MB -Descending | Select-Object -First 10)",
       "PowerShell(@\\(\"japan.geojson\",\"hokkaido_chocho.geojson\",\"tokyo_chocho.geojson\",\"municipalities.geojson\",\"municipalities_poly.geojson\",\"japan.pmtiles\"\\) | ForEach-Object { $f = \"d:\\\\github\\\\chizunurie\\\\frontend\\\\public\\\\data\\\\$_\"; if \\(Test-Path $f\\) { [PSCustomObject]@{File=$_; MB=[math]::Round\\(\\(Get-Item $f\\).Length/1MB,1\\)} } })",
       "Bash(git checkout *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); gh repo create chizunurie --private --description \"白地図塗りゲーム - 日本の行政区域をクリックして色を塗るWebアプリ\" --source \"d:\\\\github\\\\chizunurie\" --remote origin --push)",
+      "Bash(git push *)",
+      "Bash(git stash *)",
+      "Bash(dir d:\\\\github\\\\chizunurie /b)",
+      "PowerShell(cd d:\\\\github\\\\chizunurie\\\\backend; Start-Process -NoNewWindow -FilePath \"npx\" -ArgumentList \"tsx\",\"src/index.ts\" -PassThru; Start-Sleep -Seconds 3; try { Invoke-WebRequest http://localhost:3001/health -UseBasicParsing | Select-Object -ExpandProperty Content } catch { $_.Exception.Message })",
+      "PowerShell(cd d:\\\\github\\\\chizunurie\\\\backend; Start-Job -ScriptBlock { Set-Location d:\\\\github\\\\chizunurie\\\\backend; node_modules\\\\.bin\\\\tsx src/index.ts } | Out-Null; Start-Sleep -Seconds 4; try { Invoke-WebRequest http://localhost:3001/health -UseBasicParsing | Select-Object -ExpandProperty Content } catch { $_.Exception.Message }; Get-Job | Stop-Job; Get-Job | Remove-Job)"
     ]
   }
 }

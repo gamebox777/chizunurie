@@ -1,0 +1,139 @@
+'use client';
+
+import { useState } from 'react';
+import { signIn, signUp } from '@/lib/auth-client';
+
+type Tab = 'login' | 'register';
+
+interface Props {
+  initialTab: Tab;
+  onClose: () => void;
+}
+
+const inputClass =
+  'border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-800 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-400';
+
+export default function AuthModal({ initialTab, onClose }: Props) {
+  const [tab, setTab] = useState<Tab>(initialTab);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      if (tab === 'login') {
+        const res = await signIn.email({ email, password });
+        if (res.error) throw new Error(res.error.message ?? 'ログインに失敗しました');
+      } else {
+        const res = await signUp.email({ email, password, name });
+        if (res.error) throw new Error(res.error.message ?? '登録に失敗しました');
+      }
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '失敗しました');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogle = async () => {
+    setError('');
+    try {
+      await signIn.social({ provider: 'google', callbackURL: '/' });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Googleログインに失敗しました');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6">
+        {/* タブ */}
+        <div className="flex gap-1 mb-6 bg-gray-100 rounded-lg p-1">
+          {(['login', 'register'] as Tab[]).map((t) => (
+            <button
+              key={t}
+              onClick={() => { setTab(t); setError(''); }}
+              className={`flex-1 py-1.5 text-sm rounded-md font-medium transition-colors ${
+                tab === t ? 'bg-white shadow text-gray-800' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {t === 'login' ? 'ログイン' : '新規登録'}
+            </button>
+          ))}
+        </div>
+
+        {/* Google ログイン */}
+        <button
+          type="button"
+          onClick={handleGoogle}
+          className="w-full flex items-center justify-center gap-2 border border-gray-300 rounded-lg py-2 text-sm text-gray-700 bg-white hover:bg-gray-50 transition-colors mb-4"
+        >
+          <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+            <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+            <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+            <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+            <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+            <path fill="none" d="M0 0h48v48H0z"/>
+          </svg>
+          Googleでログイン
+        </button>
+
+        {/* 区切り線 */}
+        <div className="flex items-center gap-3 mb-4">
+          <div className="flex-1 h-px bg-gray-200" />
+          <span className="text-xs text-gray-400">またはメールで</span>
+          <div className="flex-1 h-px bg-gray-200" />
+        </div>
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          {tab === 'register' && (
+            <input
+              type="text"
+              placeholder="ニックネーム"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              className={inputClass}
+            />
+          )}
+          <input
+            type="email"
+            placeholder="メールアドレス"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            className={inputClass}
+          />
+          <input
+            type="password"
+            placeholder="パスワード（8文字以上）"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            minLength={8}
+            className={inputClass}
+          />
+          {error && <p className="text-red-500 text-xs">{error}</p>}
+          <button
+            type="submit"
+            disabled={loading}
+            className="bg-blue-500 text-white rounded-lg py-2 text-sm font-medium hover:bg-blue-600 disabled:opacity-50 mt-1 transition-colors"
+          >
+            {loading ? '処理中...' : tab === 'login' ? 'ログイン' : '登録する'}
+          </button>
+        </form>
+
+        <p className="text-xs text-gray-400 text-center mt-4">
+          ログインしなくてもゲームをお試しいただけます
+        </p>
+      </div>
+    </div>
+  );
+}

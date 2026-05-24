@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "better-auth": "^1.6.11",
     "maplibre-gl": "^5.24.0",
     "next": "16.2.6",
     "pmtiles": "^4.4.1",

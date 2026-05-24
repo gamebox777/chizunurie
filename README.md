@@ -1,36 +1,84 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 地図塗りゲーム（chizunurie）
 
-## Getting Started
+日本の行政区域をクリックして色を塗る白地図塗りゲームのWebアプリです。
 
-First, run the development server:
+## 必要環境
+
+- Node.js 18以上
+- npm
+
+## セットアップ
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# リポジトリのクローン
+git clone https://github.com/ccb-shinro/chizunurie.git
+cd chizunurie
+
+# スクリプト用依存関係のインストール（プロジェクトルートで実行）
+npm install
+
+# フロントエンド用依存関係のインストール
+cd frontend && npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 開発サーバーの起動
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+cd frontend
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+ブラウザで http://localhost:3000 を開くと地図が表示されます。
 
-## Learn More
+## ビルド・本番起動
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+cd frontend
+npm run build
+npm run start
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## データの更新
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+地図データ（GeoJSON）を変更した場合は、PMTilesファイルを再生成してください。
 
-## Deploy on Vercel
+```bash
+# プロジェクトルートで実行
+node scripts/build-pmtiles.mjs
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 都道府県データの追加
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+1. [e-Stat](https://www.e-stat.go.jp/gis/) から対象都道府県のShapefileをダウンロード
+2. `mapshaper` でGeoJSONに変換・簡略化：
+   ```bash
+   mapshaper r2kaXX.shp -simplify 8% -filter-fields KEY_CODE,PREF_NAME,CITY_NAME,S_NAME \
+     -o format=geojson frontend/public/data/XX_chocho.geojson
+   ```
+   （`XX` は都道府県コード2桁）
+3. `scripts/build-pmtiles.mjs` の `LAYERS` 配列に追加
+4. PMTilesを再生成：
+   ```bash
+   node scripts/build-pmtiles.mjs
+   ```
+
+## プロジェクト構造
+
+```
+chizunurie/
+├── frontend/          # Next.js フロントエンドアプリ
+│   ├── src/           #   Reactコンポーネント・ページ
+│   ├── public/data/   #   GeoJSON・PMTilesデータ
+│   ├── package.json
+│   └── next.config.ts
+├── scripts/           # データ処理スクリプト
+│   └── build-pmtiles.mjs
+├── backend/           # バックエンド（将来追加予定）
+└── pmtiles.exe        # go-pmtiles v1.30.2 Windows版
+```
+
+## 技術スタック
+
+- **フロントエンド**: Next.js (App Router) + TypeScript
+- **地図**: MapLibre GL JS + PMTiles
+- **地図データ**: e-Stat / 国土数値情報（Shapefile → GeoJSON → PMTiles）

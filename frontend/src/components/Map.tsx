@@ -263,7 +263,7 @@ export default function Map() {
   const count = Object.keys(painted).length;
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100vh' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
       <div className="absolute bottom-4 left-4 bg-white rounded-lg px-4 py-2 shadow text-sm font-medium text-gray-700">
         塗った地域: {count}
