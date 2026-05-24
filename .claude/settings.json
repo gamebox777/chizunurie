@@ -22,7 +22,8 @@
       "Bash(git stash *)",
       "Bash(dir d:\\\\github\\\\chizunurie /b)",
       "PowerShell(cd d:\\\\github\\\\chizunurie\\\\backend; Start-Process -NoNewWindow -FilePath \"npx\" -ArgumentList \"tsx\",\"src/index.ts\" -PassThru; Start-Sleep -Seconds 3; try { Invoke-WebRequest http://localhost:3001/health -UseBasicParsing | Select-Object -ExpandProperty Content } catch { $_.Exception.Message })",
-      "PowerShell(cd d:\\\\github\\\\chizunurie\\\\backend; Start-Job -ScriptBlock { Set-Location d:\\\\github\\\\chizunurie\\\\backend; node_modules\\\\.bin\\\\tsx src/index.ts } | Out-Null; Start-Sleep -Seconds 4; try { Invoke-WebRequest http://localhost:3001/health -UseBasicParsing | Select-Object -ExpandProperty Content } catch { $_.Exception.Message }; Get-Job | Stop-Job; Get-Job | Remove-Job)"
+      "PowerShell(cd d:\\\\github\\\\chizunurie\\\\backend; Start-Job -ScriptBlock { Set-Location d:\\\\github\\\\chizunurie\\\\backend; node_modules\\\\.bin\\\\tsx src/index.ts } | Out-Null; Start-Sleep -Seconds 4; try { Invoke-WebRequest http://localhost:3001/health -UseBasicParsing | Select-Object -ExpandProperty Content } catch { $_.Exception.Message }; Get-Job | Stop-Job; Get-Job | Remove-Job)",
+      "Bash(gh repo *)"
     ]
   }
 }
