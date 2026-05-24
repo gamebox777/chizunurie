@@ -47,6 +47,18 @@ npm run start
 node scripts/build-pmtiles.mjs
 ```
 
+実行には `pmtiles` バイナリ（go-pmtiles）が必要です。
+
+- **Windows**: プロジェクトルートの `pmtiles.exe` が使われます（追加作業不要）
+- **Mac / Linux**: [Releases](https://github.com/protomaps/go-pmtiles/releases) から
+  プラットフォームに合うバイナリをダウンロードし、プロジェクトルートに `pmtiles` という名前で配置してください。
+  例（Apple Silicon, v1.30.2）:
+  ```bash
+  curl -L -o /tmp/pm.zip \
+    https://github.com/protomaps/go-pmtiles/releases/download/v1.30.2/go-pmtiles-1.30.2_Darwin_arm64.zip
+  unzip -o /tmp/pm.zip -d /tmp/pm && mv /tmp/pm/pmtiles ./pmtiles && chmod +x ./pmtiles
+  ```
+
 ## 都道府県データの追加
 
 1. [e-Stat](https://www.e-stat.go.jp/gis/) から対象都道府県のShapefileをダウンロード

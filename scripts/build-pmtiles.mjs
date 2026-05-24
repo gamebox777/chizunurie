@@ -5,6 +5,7 @@ import { readFileSync, existsSync, unlinkSync } from 'fs';
 import { execSync } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { platform } from 'os';
 import Database from 'better-sqlite3';
 import geojsonvt from 'geojson-vt';
 import vtpbf from 'vt-pbf';
@@ -15,6 +16,27 @@ const root = join(__dirname, '..');
 const publicData = join(root, 'frontend', 'public', 'data');
 const mbtilesPath = join(root, 'tmp.mbtiles');
 const outputPath = join(publicData, 'japan.pmtiles');
+
+// プラットフォームに応じた pmtiles 実行ファイルを解決する
+// 優先順: 1) プロジェクトルートのプラットフォーム別バイナリ 2) PATH上の `pmtiles`
+function resolvePmtilesBin() {
+  const isWin = platform() === 'win32';
+  const localBin = join(root, isWin ? 'pmtiles.exe' : 'pmtiles');
+  if (existsSync(localBin)) return localBin;
+  // PATH 上に pmtiles があればそれを使う（Mac: `brew install protomaps/go-pmtiles/go-pmtiles` など）
+  try {
+    execSync(isWin ? 'where pmtiles' : 'command -v pmtiles', { stdio: 'ignore' });
+    return 'pmtiles';
+  } catch {
+    throw new Error(
+      `pmtiles バイナリが見つかりません。次のいずれかを実施してください:\n` +
+      `  - Mac:   brew install protomaps/go-pmtiles/go-pmtiles\n` +
+      `  - 任意:  https://github.com/protomaps/go-pmtiles/releases から取得し、\n` +
+      `          実行ファイルをプロジェクトルートに ` +
+      (isWin ? '`pmtiles.exe`' : '`pmtiles`') + ` として配置`
+    );
+  }
+}
 
 // 日本の bbox
 const BOUNDS = { minLon: 122.9, maxLon: 154.0, minLat: 20.4, maxLat: 45.6 };
@@ -160,7 +182,8 @@ console.log(`\nMBTiles完成 (合計 ${total} タイル)`);
 // PMTilesに変換
 console.log('PMTiles変換中...');
 if (existsSync(outputPath)) unlinkSync(outputPath);
-execSync(`"${join(root,'pmtiles.exe')}" convert "${mbtilesPath}" "${outputPath}"`, { stdio: 'inherit' });
+const pmtilesBin = resolvePmtilesBin();
+execSync(`"${pmtilesBin}" convert "${mbtilesPath}" "${outputPath}"`, { stdio: 'inherit' });
 unlinkSync(mbtilesPath);
 
 const sizeMB = (readFileSync(outputPath).length / 1024 / 1024).toFixed(1);

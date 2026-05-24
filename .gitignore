@@ -46,3 +46,6 @@ next-env.d.ts
 tmp.mbtiles
 tmp.mbtiles-shm
 tmp.mbtiles-wal
+
+# pmtiles binary (Mac/Linux 用ローカル配置: Windows版の pmtiles.exe は git 管理対象)
+/pmtiles
