@@ -6,14 +6,21 @@ import AuthModal from './AuthModal';
 
 type ModalTab = 'login' | 'register';
 
-export default function Header() {
+type HeaderProps = {
+  hoverAddress?: string;
+};
+
+export default function Header({ hoverAddress = '' }: HeaderProps) {
   const { data: session, isPending } = useSession();
   const [modal, setModal] = useState<ModalTab | null>(null);
 
   return (
     <>
-      <header className="h-12 bg-white shadow-sm flex items-center px-4 z-10 shrink-0">
-        <h1 className="text-base font-bold text-gray-800 flex-1">白地図ゲーム</h1>
+      <header className="h-12 bg-white shadow-sm flex items-center px-4 z-10 shrink-0 gap-4">
+        <h1 className="text-base font-bold text-gray-800 shrink-0">白地図ゲーム</h1>
+        <span className="flex-1 text-sm text-gray-600 truncate min-w-0" title={hoverAddress}>
+          {hoverAddress}
+        </span>
 
         {!isPending && (
           session ? (

@@ -8,6 +8,8 @@
     "start": "next start"
   },
   "dependencies": {
+    "@turf/boolean-intersects": "^7.3.5",
+    "@turf/buffer": "^7.3.5",
     "better-auth": "^1.6.11",
     "maplibre-gl": "^5.24.0",
     "next": "16.2.6",

@@ -1,5 +1,6 @@
 import {
   boolean,
+  integer,
   pgTable,
   serial,
   text,
@@ -70,8 +71,24 @@ export const paintedRegions = pgTable(
     sourceLayer: text("source_layer").notNull(),
     // GeoJSON の KEY_CODE（行政コード。PMTiles 再生成後も不変）
     keyCode: text("key_code").notNull(),
+    // 塗り方モード: 'gps'（実際に訪問・最優先・黄）/ 'manual'（マウス・隣接・茶）
+    mode: text("mode").notNull().default("manual"),
     color: text("color").notNull().default("#3b82f6"),
     paintedAt: timestamp("painted_at", { withTimezone: true }).defaultNow(),
   },
   (t) => [unique().on(t.userId, t.sourceLayer, t.keyCode)]
 );
+
+// 塗りポイント残高。GPS（実際の移動）は無料だが、それ以外の隣接塗り／離れた場所の
+// 塗りは塗りポイントを消費する。ポイントは時間経過で回復する（points.ts のロジック参照）。
+// updatedAt は「回復時計のアンカー」。現在値は読み取り時に updatedAt からの経過時間で
+// 遅延計算して確定させる（lazy regen）。1ユーザー1行。
+export const userPoints = pgTable("user_points", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+  points: integer("points").notNull().default(10),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});

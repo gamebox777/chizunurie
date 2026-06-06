@@ -1,10 +1,9 @@
 import type { NextConfig } from "next";
-import path from "path";
 
 const nextConfig: NextConfig = {
   output: "standalone",
   turbopack: {
-    root: path.resolve(__dirname, ".."),
+    root: __dirname,
   },
   async rewrites() {
     const backendUrl = process.env.BACKEND_URL ?? "http://localhost:3001";

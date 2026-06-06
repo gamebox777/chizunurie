@@ -59,11 +59,13 @@ function toTMS(z, x, y) { return (1 << z) - 1 - y; }
 
 // レイヤー定義
 const LAYERS = [
-  { name: 'municipalities', file: 'municipalities_poly.geojson', minZoom: 4, maxZoom: 10 },
-  { name: 'chocho',         file: 'tokyo_chocho.geojson',        minZoom: 8, maxZoom: 13 },
-  { name: 'chocho',         file: 'hokkaido_chocho.geojson',     minZoom: 8, maxZoom: 13 },
+  { name: 'municipalities', file: 'municipalities_poly.geojson', minZoom: 4, maxZoom: 13 },
+  // 約1kmの等面積メッシュ（塗りの単位）。低ズームはセルが多すぎるので minZoom を上げる
+  { name: 'mesh',           file: 'mesh.geojson',                minZoom: 9,  maxZoom: 13 },
   { name: 'prefectures',    file: 'japan.geojson',               minZoom: 4, maxZoom: 8  },
   { name: 'labels',         file: 'municipalities.geojson',      minZoom: 6, maxZoom: 13 },
+  // 政令指定都市の外周（区を市単位に dissolve したもの）。枠線・市名ラベル用
+  { name: 'cities',         file: 'designated_cities.geojson',   minZoom: 6, maxZoom: 13 },
 ];
 
 const GLOBAL_MAX_ZOOM = 13;
@@ -88,9 +90,10 @@ db.prepare('INSERT INTO metadata VALUES (?,?)').run('type', 'overlay');
 db.prepare('INSERT INTO metadata VALUES (?,?)').run('json', JSON.stringify({
   vector_layers: [
     { id: 'municipalities', fields: { N03_001:'String', N03_004:'String', N03_005:'String', N03_007:'String' } },
-    { id: 'chocho',         fields: { KEY_CODE:'String', PREF_NAME:'String', CITY_NAME:'String', S_NAME:'String' } },
+    { id: 'mesh',           fields: { MESHCODE:'String', PREF_NAME:'String', CITY_NAME:'String', S_NAME:'String' } },
     { id: 'prefectures',    fields: { nam_ja:'String', id:'Number' } },
     { id: 'labels',         fields: { N03_001:'String', N03_004:'String', N03_005:'String', N03_007:'String' } },
+    { id: 'cities',         fields: { N03_001:'String', N03_004:'String' } },
   ]
 }));
 
@@ -102,14 +105,10 @@ function assignStableIds(geojson, layer) {
     if (layer.name === 'municipalities' || layer.name === 'labels') {
       const code = p?.N03_007;
       feature.id = code && code.length >= 5 ? parseInt(code, 10) : undefined;
-    } else if (layer.name === 'chocho') {
-      const code = p?.KEY_CODE;
-      if (code && code.length >= 11) {
-        feature.id = parseInt(code, 10);
-      } else {
-        // 青ヶ島村・海域など KEY_CODE が短いデgenerate features
-        feature.id = collisionCounter++;
-      }
+    } else if (layer.name === 'mesh') {
+      // 8桁の地域メッシュコードを安定IDに使う（リロードでも不変）
+      const code = p?.MESHCODE;
+      feature.id = code && code.length === 8 ? parseInt(code, 10) : collisionCounter++;
     }
     // prefectures は元々 id フィールドを持つので変更不要
   }

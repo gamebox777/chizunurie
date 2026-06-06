@@ -4,13 +4,18 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "docker compose up -d db",
     "dev": "concurrently -n frontend,backend,studio -c cyan,yellow,magenta \"npm run dev:frontend\" \"npm run dev:backend\" \"npm run dev:studio\"",
     "dev:frontend": "npm run dev --prefix frontend",
     "dev:backend": "npm run dev --prefix backend",
     "dev:studio": "npm run db:studio --prefix backend",
     "build": "npm run build --prefix frontend",
     "start": "npm run start --prefix frontend",
-    "build-pmtiles": "node scripts/build-pmtiles.mjs"
+    "fetch-chocho": "node scripts/fetch-chocho.mjs",
+    "build-mesh": "node --max-old-space-size=8192 scripts/build-mesh.mjs",
+    "build-muni-stats": "node --max-old-space-size=8192 scripts/build-muni-stats.mjs",
+    "build-muni-kana": "node scripts/build-muni-kana.mjs",
+    "build-pmtiles": "node --max-old-space-size=8192 scripts/build-pmtiles.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

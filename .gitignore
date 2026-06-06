@@ -46,6 +46,8 @@ next-env.d.ts
 tmp.mbtiles
 tmp.mbtiles-shm
 tmp.mbtiles-wal
+# 約100MBの生成中間ファイル（japan.pmtiles に取り込まれる。build-mesh で再生成可）
+frontend/public/data/mesh.geojson
 
 # pmtiles binary (Mac/Linux 用ローカル配置: Windows版の pmtiles.exe は git 管理対象)
 /pmtiles

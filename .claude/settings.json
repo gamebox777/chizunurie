@@ -30,7 +30,11 @@
       "Bash(npx tsc *)",
       "Bash(node --env-file=.env ./node_modules/.bin/drizzle-kit generate)",
       "Bash(node --env-file=.env ./node_modules/.bin/drizzle-kit push)",
-      "Bash(node --env-file=.env -e ' *)"
+      "Bash(node --env-file=.env -e ' *)",
+      "Bash(cat /var/folders/j7/0gw1ntm53wg0mrb02hzgmh1m0000gn/T/next-panic-4f8ea17601832011f16afc0e4fcca33c.log 2>/dev/null | head -50)",
+      "Read(//private/var/folders/j7/0gw1ntm53wg0mrb02hzgmh1m0000gn/T/**)",
+      "Bash(cd frontend *)",
+      "Read(//Users/ryohei/github/**)"
     ]
   }
 }
