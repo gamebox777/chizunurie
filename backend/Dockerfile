@@ -6,8 +6,10 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
-# `npm run build`(→ tsc) は node_modules/.bin の symlink / PATH 経由で tsc を探すが、
-# Coolify 環境ではこれが効かず exit 127 になる。typescript 本体を node で直接叩く。
+# 診断: npm ci が typescript を実際に入れたか確認する。
+# 入っていなければ「DIAG_npm_ci_did_NOT_install_typescript」を出して落とす（Coolifyのエラー要約に行が出る）。
+RUN test -f node_modules/typescript/bin/tsc || { echo "DIAG_npm_ci_did_NOT_install_typescript"; ls node_modules; exit 11; }
+# typescript 本体を node で直接叩く（.bin/PATH 非依存）。
 RUN node ./node_modules/typescript/bin/tsc
 
 FROM node:20-alpine AS runner
