@@ -5,6 +5,14 @@ FROM base AS deps
 COPY package*.json ./
 # next build にも devDependencies が必要。NODE_ENV=production でも devDeps を省かせない。
 RUN npm ci --include=dev
+# Coolify 環境では npm ci 後も devDeps が入らないことがある（backend で確認）。
+# typescript が無ければビルド用 devDeps を明示インストールして自己修復する。
+RUN if [ -e node_modules/typescript/bin/tsc ]; then \
+      echo ">>> devDeps present after npm ci"; \
+    else \
+      echo ">>> devDeps MISSING after npm ci (Coolify) — ビルド用 devDeps を明示インストールします"; \
+      npm install --no-save typescript@5 @tailwindcss/postcss@4 tailwindcss@4 @types/node@20 @types/react@19 @types/react-dom@19; \
+    fi
 
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules

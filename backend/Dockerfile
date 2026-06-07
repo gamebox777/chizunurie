@@ -1,19 +1,23 @@
 # build と deps を1ステージにまとめる。
-# 以前は deps ステージで npm ci → builder ステージへ COPY node_modules していたが、
-# Coolify 環境でのみ `npm run build`(tsc) が exit 127 で落ちていた（ローカルでは再現せず）。
-# クロスステージ COPY を排除し、同一ステージで install→検証→build する。
+# Coolify 環境でのみ `tsc` が exit 127（= ./node_modules/.bin/tsc が無い）で落ちる。
+# ローカル(docker / docker compose build)では --include=dev で必ず devDeps が入り再現しない。
+# → Coolify では npm ci 後に typescript(devDep) が入っていないと判断。
+#   下で有無をログに出し、無ければ明示インストールして自己修復する。
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-# devDependencies(tsc など)も必ず入れる（NODE_ENV/omit 設定に左右されないよう --include=dev）。
 RUN npm ci --include=dev
-# 診断＆ガード：ここで tsc が無ければ install 段階の問題と分かる（build まで進まず明示的に失敗）。
-RUN node --version && npm --version && echo "PATH=$PATH" \
- && ls -la node_modules/.bin/ | grep -iE 'tsc|tsx' || true
-RUN ./node_modules/.bin/tsc --version
+# tsc(typescript) の有無を確認。無ければ明示的に入れる（ログで原因も分かる）。
+RUN if [ -e node_modules/typescript/bin/tsc ]; then \
+      echo ">>> typescript present after npm ci"; \
+    else \
+      echo ">>> typescript MISSING after npm ci (Coolify が devDeps を入れていない) — 明示インストールします"; \
+      ls -la node_modules/.bin/ || true; \
+      npm install --no-save typescript@5; \
+    fi
 COPY . .
-# npm run build ではなく直接 tsc を叩く（PATH 解決に依存しない）。
-RUN ./node_modules/.bin/tsc
+# npx は node_modules のローカル tsc を使う（PATH 非依存）。
+RUN npx tsc
 
 FROM node:20-alpine AS runner
 WORKDIR /app
