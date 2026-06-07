@@ -6,7 +6,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
-RUN npm run build
+# `npm run build`(→ tsc) は node_modules/.bin の symlink / PATH 経由で tsc を探すが、
+# Coolify 環境ではこれが効かず exit 127 になる。typescript 本体を node で直接叩く。
+RUN node ./node_modules/typescript/bin/tsc
 
 FROM node:20-alpine AS runner
 WORKDIR /app

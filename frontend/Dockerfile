@@ -19,7 +19,9 @@ ENV BACKEND_URL=$BACKEND_URL
 ARG NEXT_PUBLIC_APP_ENV=production
 ENV NEXT_PUBLIC_APP_ENV=$NEXT_PUBLIC_APP_ENV
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run build
+# backend と同様、Coolify 環境では .bin/PATH 経由の解決が効かず exit 127 になるため、
+# next 本体を node で直接叩く。
+RUN node node_modules/next/dist/bin/next build
 
 FROM base AS runner
 ENV NODE_ENV=production
