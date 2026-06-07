@@ -1,8 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { useSession, signOut } from '@/lib/auth-client';
+import { useSession } from '@/lib/auth-client';
 import AuthModal from './AuthModal';
+import NicknameModal from './NicknameModal';
+import SettingsMenu from './SettingsMenu';
 
 type ModalTab = 'login' | 'register';
 
@@ -11,29 +13,30 @@ type HeaderProps = {
 };
 
 export default function Header({ hoverAddress = '' }: HeaderProps) {
-  const { data: session, isPending } = useSession();
+  const { data: session, isPending, refetch } = useSession();
   const [modal, setModal] = useState<ModalTab | null>(null);
+  const [editingNickname, setEditingNickname] = useState(false);
 
   return (
     <>
       <header className="h-12 bg-white shadow-sm flex items-center px-4 z-10 shrink-0 gap-4">
-        <h1 className="text-base font-bold text-gray-800 shrink-0">白地図ゲーム</h1>
+        <h1 className="text-base font-bold text-gray-800 shrink-0">ちずぬりえ</h1>
         <span className="flex-1 text-sm text-gray-600 truncate min-w-0" title={hoverAddress}>
           {hoverAddress}
         </span>
 
         {!isPending && (
           session ? (
-            <div className="flex items-center gap-3">
-              <span className="text-sm text-gray-500 hidden sm:block">
-                {session.user.name || session.user.email}
+            // 本名・メールは表示しない。ニックネームのみ表示する。
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-sm font-medium text-gray-700">
+                {session.user.name}
               </span>
-              <button
-                onClick={() => signOut()}
-                className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
-              >
-                ログアウト
-              </button>
+              <SettingsMenu
+                name={session.user.name}
+                onEditNickname={() => setEditingNickname(true)}
+                onSignedOut={() => refetch()}
+              />
             </div>
           ) : (
             <div className="flex items-center gap-2">
@@ -56,6 +59,23 @@ export default function Header({ hoverAddress = '' }: HeaderProps) {
 
       {modal && (
         <AuthModal initialTab={modal} onClose={() => setModal(null)} />
+      )}
+
+      {/* ニックネーム未設定（Google ログイン等）なら入力を促す */}
+      {!isPending && session && !session.user.name && (
+        <NicknameModal onDone={() => refetch()} />
+      )}
+
+      {/* 設定からのニックネーム変更 */}
+      {editingNickname && session && (
+        <NicknameModal
+          initialName={session.user.name}
+          onClose={() => setEditingNickname(false)}
+          onDone={() => {
+            setEditingNickname(false);
+            refetch();
+          }}
+        />
       )}
     </>
   );

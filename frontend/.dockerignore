@@ -1,0 +1,11 @@
+# public/ は除外しない（PMTiles/GeoJSON データを含むため）
+node_modules
+.next
+.git
+.env
+.env.*
+!.env.production.example
+npm-debug.log*
+Dockerfile
+.dockerignore
+README.md

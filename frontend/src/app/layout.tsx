@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "白地図ゲーム",
+  title: "地図ぬりえ",
   description: "地域を塗っていく白地図ゲーム",
 };
 

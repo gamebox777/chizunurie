@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
 import { useSession } from '@/lib/auth-client';
+import { RUN_MODE, RUN_MODE_LABEL, RUN_MODE_BADGE } from '@/lib/runtime-env';
 
 const PAINT_API = '/api/backend/painted';
 const POINTS_API = '/api/backend/points';
@@ -11,12 +12,22 @@ const POINTS_API = '/api/backend/points';
 // 約37万セル分を含むため map 表示後に遅延ロードする（build-muni-stats.mjs が生成）。
 const MUNI_STATS_URL = '/data/muni-stats.json';
 
-// ── 塗りポイント（GPS移動は無料・それ以外の塗りはポイント消費） ──────────
-// ※サーバー側（backend/src/lib/points.ts）と値を揃えること。今後バランス調整予定。
-const MAX_PAINT_POINTS = 50; // 時間回復の上限（初期値10より多い固定値）。デバッグ等でこれを超える残高は許容する。
-const REGEN_INTERVAL_MS = 60 * 60 * 1000; // 1時間で1ポイント回復
+// ── 塗りポイント／レベル（GPS移動は無料・それ以外の塗りはポイント消費） ──────────
+// ※サーバー側（backend/src/lib/points.ts）が権威。max・level・exp はサーバーから受け取る。
+const DEFAULT_MAX_POINTS = 10; // level 1 の最大塗りポイント（サーバー応答前の初期表示用）
+const REGEN_INTERVAL_MS = 30 * 60 * 1000; // 30分で1ポイント回復
 const COST_ADJACENT = 1; // 塗り済みに隣接する場所
 const COST_FAR = 10; // 離れた場所（確認ダイアログ付き）
+
+// サーバーの塗りポイント状態（backend/src/lib/points.ts の PointsState と一致）
+type ServerPoints = {
+  points: number;
+  max: number;
+  regenAt: number | null;
+  level: number;
+  exp: number;
+  expToNext: number;
+};
 
 // 「+1まで mm:ss」表示用
 function formatCountdown(ms: number): string {
@@ -113,6 +124,63 @@ type GeocodeResult = {
   properties: { title: string };
 };
 
+// 国土地理院の逆ジオコーダ（経緯度→住所）。現地塗りで「グリッド内の近似住所」では
+// なく、現在地そのものの正確な住所（町丁目まで）を表示するのに使う。
+const REVERSE_GEOCODE_URL =
+  'https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress';
+// muniCd（5桁市区町村コード）→「都道府県名＋市区町村名」の対応表（旧地理院地図）
+const MUNI_JS_URL = 'https://maps.gsi.go.jp/js/muni.js';
+
+// muni.js を一度だけ取得して muniCd→「都道府県市区町村」表を作る（モジュール内キャッシュ）
+let muniMapPromise: Promise<Map<string, string>> | null = null;
+function loadMuniMap(): Promise<Map<string, string>> {
+  if (!muniMapPromise) {
+    muniMapPromise = fetch(MUNI_JS_URL)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.text();
+      })
+      .then((text) => {
+        // 例: GSI.MUNI_ARRAY["13103"] = '13,東京都,13103,港区';
+        const map = new Map<string, string>();
+        const re = /MUNI_ARRAY\["(\d+)"\]\s*=\s*'\d+,([^,]+),\d+,([^']+)'/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(text)) !== null) {
+          // 政令市は「札幌市　中央区」のように全角空白が入るので除去する
+          map.set(m[1], (m[2] + m[3]).replace(/[\s　]/g, '')); // 都道府県名 + 市区町村名
+        }
+        return map;
+      })
+      .catch((err) => {
+        console.warn('muni.js load failed', err);
+        muniMapPromise = null; // 失敗時は次回再試行できるようにする
+        return new Map<string, string>();
+      });
+  }
+  return muniMapPromise;
+}
+
+// 経緯度→正確な住所（都道府県＋市区町村＋町丁目）。取得失敗時は空文字を返す。
+async function reverseGeocode(lng: number, lat: number): Promise<string> {
+  try {
+    const res = await fetch(`${REVERSE_GEOCODE_URL}?lat=${lat}&lon=${lng}`);
+    if (!res.ok) return '';
+    const data = (await res.json()) as {
+      results?: { muniCd?: string; lv01Nm?: string };
+    };
+    const r = data.results;
+    if (!r || !r.muniCd) return ''; // 海上など住所が無い地点は {} が返る
+    const muniMap = await loadMuniMap();
+    // muni.js のキーは先頭ゼロ無し（北海道は "1101"）。reverse は "01101" を返すので正規化する
+    const muniName = muniMap.get(String(Number(r.muniCd))) ?? muniMap.get(r.muniCd) ?? '';
+    const town = r.lv01Nm && r.lv01Nm !== '-' ? r.lv01Nm : '';
+    return muniName + town;
+  } catch (err) {
+    console.warn('reverse geocode failed', err);
+    return '';
+  }
+}
+
 // 検索（虫眼鏡）ボタンを位置情報アイコンの下に積むためのカスタムコントロール
 class SearchControl implements maplibregl.IControl {
   private onClick: () => void;
@@ -155,6 +223,32 @@ class DebugControl implements maplibregl.IControl {
     btn.setAttribute('aria-label', 'デバッグメニューを開く');
     btn.innerHTML =
       '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:auto"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>';
+    btn.addEventListener('click', () => this.onClick());
+    this.container.appendChild(btn);
+    return this.container;
+  }
+  onRemove(): void {
+    this.container?.parentNode?.removeChild(this.container);
+    this.container = undefined;
+  }
+}
+
+// 位置情報アイコンの下に「自分のデータ詳細」を開く棒グラフアイコンを積むカスタムコントロール
+class StatsControl implements maplibregl.IControl {
+  private onClick: () => void;
+  private container?: HTMLDivElement;
+  constructor(onClick: () => void) {
+    this.onClick = onClick;
+  }
+  onAdd(): HTMLElement {
+    this.container = document.createElement('div');
+    this.container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.title = 'データ詳細';
+    btn.setAttribute('aria-label', '自分のデータ詳細を開く');
+    btn.innerHTML =
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:auto"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>';
     btn.addEventListener('click', () => this.onClick());
     this.container.appendChild(btn);
     return this.container;
@@ -216,12 +310,21 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const [painted, setPainted] = useState<PaintedState>({});
   const paintedRef = useRef<PaintedState>({});
   const zoomLabelRef = useRef<HTMLSpanElement>(null);
-  // 塗りポイント（ログインユーザーのみ）。ref は塗りハンドラ内から同期参照する。
+  // 塗りポイント／レベル（ログインユーザーのみ）。ref は塗りハンドラ内から同期参照する。
   const [points, setPoints] = useState(0);
   const [regenAt, setRegenAt] = useState<number | null>(null); // 次の回復時刻(ms) / 満タンなら null
+  const [maxPoints, setMaxPoints] = useState(DEFAULT_MAX_POINTS); // 現在レベルの最大塗りポイント（回復上限）
+  const [level, setLevel] = useState(1);
+  const [exp, setExp] = useState(0); // 現在レベル内の経験値
+  const [expToNext, setExpToNext] = useState(0); // 次レベルまでに必要な経験値
   const pointsRef = useRef(0);
   const regenAtRef = useRef<number | null>(null);
+  const maxPointsRef = useRef(DEFAULT_MAX_POINTS);
+  const levelRef = useRef<number | null>(null); // 直近のレベル（レベルアップ検出用・未取得は null）
   const [nowTick, setNowTick] = useState(() => Date.now()); // カウントダウン再描画用
+  // レベルアップ演出（{ to: 到達レベル } を一時表示）
+  const [levelUp, setLevelUp] = useState<{ to: number } | null>(null);
+  const levelUpTimerRef = useRef<number | null>(null);
   // 離れた場所（10ポイント）の確認ダイアログ。map init の外（JSX）から確定させる。
   const [confirmPaint, setConfirmPaint] = useState<{
     id: number;
@@ -249,7 +352,21 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const [debugMoving, setDebugMoving] = useState(false);
+  // デバッグ用：マウスで塗った場所を消すモード。ON の間はクリックで塗らずに消す
+  // （現地塗り・となり塗り問わず消せる）。クリックハンドラから同期参照するため ref も持つ。
+  const [eraseMode, setEraseMode] = useState(false);
+  const eraseModeRef = useRef(false);
+  // デバッグ用：マウスオーバーしただけで塗るモード（ポイント消費なし・無料）。
+  // ON の間はクリック不要でカーソルが通ったセルを次々に塗る。mousemove から同期参照するため ref も持つ。
+  const [hoverPaintMode, setHoverPaintMode] = useState(false);
+  const hoverPaintModeRef = useRef(false);
   const debugCleanupRef = useRef<(() => void) | null>(null);
+  const addressMarkerRef = useRef<maplibregl.Marker | null>(null); // 現在地の住所ラベル
+  // 塗り方の操作モード。genchi=現地塗り（GPSの現在地のみ自動で塗る）/
+  // tonari=となり塗り（マウスで隣接セルを塗れる）。GPS自動塗りは両モード共通。
+  // map init effect 内のクリックハンドラから同期参照するため ref も持つ。
+  const [paintMode, setPaintMode] = useState<'genchi' | 'tonari'>('genchi');
+  const paintModeRef = useRef<'genchi' | 'tonari'>('genchi');
   // 地名検索ダイアログ
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -261,10 +378,20 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const openSearchRef = useRef<() => void>(() => {});
   // デバッグメニュー（右からスライドするパネル）
   const [debugOpen, setDebugOpen] = useState(false);
+  // 「塗りを全部消す」の確認ダイアログ
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
   const openDebugRef = useRef<() => void>(() => {});
+  // データ詳細（右からスライドするパネル）。自分の塗り実績を集計して見せる。
+  const [statsOpen, setStatsOpen] = useState(false);
+  const openStatsRef = useRef<() => void>(() => {});
   const { data: session, isPending } = useSession();
   const userId = session?.user?.id ?? null;
   const userIdRef = useRef<string | null>(null);
+  // 開発者だけがデバッグメニューを使える。一般ユーザーには表示しない。
+  const isDeveloper =
+    (session?.user as { role?: string } | undefined)?.role === 'developer';
+  // デバッグメニュー（レンチ）コントロールは権限に応じて後から付け外しする
+  const debugControlRef = useRef<DebugControl | null>(null);
 
   const showToast = (message: string) => {
     if (!message) return;
@@ -278,13 +405,44 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     }, 2500);
   };
 
-  // 塗りポイントの残高を ref と state の両方へ反映（ハンドラからの同期参照用 + 表示用）
+  // 塗りポイントの残高だけを ref と state へ反映（クライアント側の時間回復・楽観更新用）。
   const applyPointsState = useCallback((p: number, nextRegenAt: number | null) => {
     pointsRef.current = p;
     regenAtRef.current = nextRegenAt;
     setPoints(p);
     setRegenAt(nextRegenAt);
   }, []);
+
+  // レベルアップ演出を一時表示する（3秒で自動的に消える）。
+  const showLevelUp = useCallback((to: number) => {
+    setLevelUp({ to });
+    if (levelUpTimerRef.current !== null) {
+      window.clearTimeout(levelUpTimerRef.current);
+    }
+    levelUpTimerRef.current = window.setTimeout(() => {
+      setLevelUp(null);
+      levelUpTimerRef.current = null;
+    }, 3500);
+  }, []);
+
+  // サーバーの権威的な塗りポイント状態（残高・最大値・レベル・経験値）をまとめて反映する。
+  // レベルが上がっていたら演出を出す（初回取得時は演出しない）。
+  const applyServerPoints = useCallback(
+    (s: ServerPoints) => {
+      applyPointsState(s.points, s.regenAt);
+      maxPointsRef.current = s.max;
+      setMaxPoints(s.max);
+      setLevel(s.level);
+      setExp(s.exp);
+      setExpToNext(s.expToNext);
+      const prevLevel = levelRef.current;
+      levelRef.current = s.level;
+      if (prevLevel !== null && s.level > prevLevel) {
+        showLevelUp(s.level);
+      }
+    },
+    [applyPointsState, showLevelUp]
+  );
 
   // 離れた場所（10ポイント）の確認ダイアログで「塗る」を押したとき
   const confirmFarPaint = useCallback(() => {
@@ -314,6 +472,14 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     openDebugRef.current = openDebug;
   }, [openDebug]);
 
+  // データ詳細パネルを開く（カスタムコントロールから呼ばれる）
+  const openStats = useCallback(() => {
+    setStatsOpen(true);
+  }, []);
+  useEffect(() => {
+    openStatsRef.current = openStats;
+  }, [openStats]);
+
   // デバッグ用：塗りポイント残高を指定値にセットする（MAX を超える値も可）。
   const setDebugPoints = useCallback(
     async (value: number) => {
@@ -332,15 +498,15 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           showToast('ポイントの変更に失敗しました');
           return;
         }
-        const data = (await res.json()) as { points: number; regenAt: number | null };
-        applyPointsState(data.points, data.regenAt);
+        const data = (await res.json()) as ServerPoints;
+        applyServerPoints(data);
         showToast(`塗りポイントを ${data.points} にしました`);
       } catch (err) {
         console.warn('failed to set debug points', err);
         showToast('ポイントの変更に失敗しました');
       }
     },
-    [applyPointsState]
+    [applyServerPoints]
   );
 
   // 地名/住所を検索（国土地理院API）
@@ -389,6 +555,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         window.clearTimeout(labelRefreshTimerRef.current);
         labelRefreshTimerRef.current = null;
       }
+      if (levelUpTimerRef.current !== null) {
+        window.clearTimeout(levelUpTimerRef.current);
+        levelUpTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -396,10 +566,34 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     userIdRef.current = userId;
   }, [userId]);
 
+  useEffect(() => {
+    eraseModeRef.current = eraseMode;
+  }, [eraseMode]);
+
+  useEffect(() => {
+    hoverPaintModeRef.current = hoverPaintMode;
+  }, [hoverPaintMode]);
+
+  useEffect(() => {
+    paintModeRef.current = paintMode;
+    // 現在地の住所ラベルは現地塗りモード専用。となり塗りに切り替えたら消す。
+    if (paintMode !== 'genchi') {
+      addressMarkerRef.current?.remove();
+      addressMarkerRef.current = null;
+    }
+  }, [paintMode]);
+
   // ログイン時に塗りポイント残高を取得。ログアウト時は 0 にリセット。
   useEffect(() => {
     if (!userId) {
+      // ログアウト：残高・レベルを初期表示に戻す（レベルアップ検出もリセット）
       applyPointsState(0, null);
+      maxPointsRef.current = DEFAULT_MAX_POINTS;
+      setMaxPoints(DEFAULT_MAX_POINTS);
+      setLevel(1);
+      setExp(0);
+      setExpToNext(0);
+      levelRef.current = null;
       return;
     }
     let cancelled = false;
@@ -407,9 +601,9 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       try {
         const res = await fetch(POINTS_API, { credentials: 'include' });
         if (!res.ok) return;
-        const data = (await res.json()) as { points: number; regenAt: number | null };
+        const data = (await res.json()) as ServerPoints;
         if (cancelled) return;
-        applyPointsState(data.points, data.regenAt);
+        applyServerPoints(data);
       } catch (err) {
         console.warn('failed to load paint points', err);
       }
@@ -417,7 +611,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     return () => {
       cancelled = true;
     };
-  }, [userId, applyPointsState]);
+  }, [userId, applyPointsState, applyServerPoints]);
 
   // 塗りポイントの時間回復（クライアント側）。1秒ごとに回復時刻を過ぎていれば加算し、
   // カウントダウン表示用に nowTick も更新する。サーバーが権威なので塗り時に再同期される。
@@ -428,9 +622,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       let r = regenAtRef.current;
       if (r !== null && now >= r) {
         let p = pointsRef.current;
-        while (r !== null && now >= r && p < MAX_PAINT_POINTS) {
+        const max = maxPointsRef.current;
+        while (r !== null && now >= r && p < max) {
           p += 1;
-          r = p >= MAX_PAINT_POINTS ? null : r + REGEN_INTERVAL_MS;
+          r = p >= max ? null : r + REGEN_INTERVAL_MS;
         }
         applyPointsState(p, r);
       }
@@ -491,6 +686,42 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     }
     paintedByMuniRef.current = counts;
     refreshHoverStat();
+  }, [refreshHoverStat]);
+
+  // デバッグ用：自分の塗りを全消去する（地図・state・サーバーすべて）。ポイントは返金しない。
+  const clearAllPaint = useCallback(async () => {
+    const map = mapRef.current;
+    if (map) {
+      for (const key of Object.keys(paintedRef.current)) {
+        const [sourceLayer, idStr] = key.split(':');
+        const id = Number(idStr);
+        if (!Number.isFinite(id)) continue;
+        map.setFeatureState(
+          { source: 'japan', sourceLayer, id },
+          { painted: false, mode: null }
+        );
+      }
+    }
+    paintedRef.current = {};
+    setPainted({});
+    paintedByMuniRef.current = new Map();
+    refreshHoverStat();
+
+    if (!userIdRef.current) return;
+    try {
+      const res = await fetch(`${PAINT_API}/all`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        showToast('塗りの全消去に失敗しました');
+        return;
+      }
+      showToast('塗りをすべて消しました');
+    } catch (err) {
+      console.warn('failed to clear all painted regions', err);
+      showToast('塗りの全消去に失敗しました');
+    }
   }, [refreshHoverStat]);
 
   // ラベル（市区町村・政令市・都道府県）のテキストに塗り％を差し込んで再描画する。
@@ -620,6 +851,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       center: [136.5, 37],
       zoom: 4.5,
       localIdeographFontFamily: "'Hiragino Sans', 'Yu Gothic', 'Noto Sans JP', sans-serif",
+      attributionControl: false,
     });
 
     // Shift+ドラッグの矩形ズームを無効化（Shift+クリックのデバッグ塗りと競合するため）
@@ -635,8 +867,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     // 位置情報アイコンの下に虫眼鏡（地名検索）ボタンを積む
     map.addControl(new SearchControl(() => openSearchRef.current()), 'top-right');
 
-    // さらにその下にデバッグメニュー（レンチ）ボタンを積む
-    map.addControl(new DebugControl(() => openDebugRef.current()), 'top-right');
+    // 検索ボタンの下にデータ詳細（棒グラフ）ボタンを積む
+    map.addControl(new StatsControl(() => openStatsRef.current()), 'top-right');
+
+    // デバッグメニュー（レンチ）は開発者のみ表示。下の useEffect で権限に応じて付け外しする。
 
     map.on('zoom', () => {
       if (zoomLabelRef.current) {
@@ -808,7 +1042,18 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         if (map.getZoom() >= MESH_MIN_ZOOM) {
           const mesh = map.queryRenderedFeatures(e.point, { layers: ['mesh-fill'] });
           if (mesh.length > 0 && mesh[0].id !== undefined) {
-            setHover('japan', 'mesh', mesh[0].id as number, mesh[0].properties);
+            const id = mesh[0].id as number;
+            setHover('japan', 'mesh', id, mesh[0].properties);
+            // デバッグ：マウスオーバー塗りモードはカーソルが通ったセルを無料で塗る。
+            // 消しモードとは排他。gps（現地）は上書きしない。トーストは出さない（連発防止）。
+            if (
+              hoverPaintModeRef.current &&
+              !eraseModeRef.current &&
+              paintedRef.current[`mesh:${id}`] !== 'gps'
+            ) {
+              const result = commitLocalPaint('japan', 'mesh', id, 'manual', mesh[0].properties, true);
+              if (result !== 'skip') syncPaint('POST', 'mesh', id, 'manual');
+            }
             return;
           }
         }
@@ -833,9 +1078,18 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sourceLayer, keyCode: String(id), mode }),
-        }).catch((err) => {
-          console.warn('failed to sync painted region', err);
-        });
+        })
+          .then(async (res) => {
+            // POST（GPS塗り・なぞり塗り）はサーバーが経験値・レベルを返す。反映してレベルアップ演出も出す。
+            if (method !== 'POST' || !res.ok) return;
+            const data = (await res.json().catch(() => null)) as {
+              points?: ServerPoints;
+            } | null;
+            if (data?.points) applyServerPoints(data.points);
+          })
+          .catch((err) => {
+            console.warn('failed to sync painted region', err);
+          });
       };
 
       // 指定モードでローカル（地図 + state）にだけ塗る。サーバー同期はしない。
@@ -845,7 +1099,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         sourceLayer: string,
         id: string | number,
         mode: PaintMode,
-        properties?: Record<string, unknown> | null
+        properties?: Record<string, unknown> | null,
+        silent = false
       ): 'new' | 'promoted' | 'skip' => {
         const key = `${sourceLayer}:${id}`;
         const current = paintedRef.current;
@@ -858,7 +1113,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         setPainted(paintedRef.current);
 
         if (!existing) {
-          showToast(formatAddress(sourceLayer, properties));
+          if (!silent) showToast(formatAddress(sourceLayer, properties));
           // 新規セルのみ市区町村カウントを +1（gps への昇格では増やさない）
           if (sourceLayer === 'mesh') {
             const muni = muniKeyFor(Number(id), properties);
@@ -905,7 +1160,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         return true;
       };
 
-      // マウス塗りの取り消し（manual のみ）。ポイントは返金しない。
+      // 塗りの取り消し（ローカル＋サーバー）。ポイントは返金しない。
+      // 通常クリックでは manual のみ消すが、デバッグ消しモードでは gps も消せる。
       const removePaint = (source: string, sourceLayer: string, id: string | number) => {
         if (removeLocalPaint(source, sourceLayer, id)) {
           syncPaint('DELETE', sourceLayer, id);
@@ -929,7 +1185,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         const prevRegenAt = regenAtRef.current;
         if (cost > 0) {
           // 楽観的にポイントを減算。満タンから消費したら回復時計を今から開始する。
-          const wasFull = prevPoints >= MAX_PAINT_POINTS;
+          const wasFull = prevPoints >= maxPointsRef.current;
           applyPointsState(
             Math.max(0, prevPoints - cost),
             wasFull ? Date.now() + REGEN_INTERVAL_MS : prevRegenAt
@@ -944,13 +1200,13 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             body: JSON.stringify({ sourceLayer: 'mesh', keyCode: String(id), mode: 'manual', cost }),
           });
           const data = (await res.json().catch(() => null)) as {
-            points?: { points: number; regenAt: number | null };
+            points?: ServerPoints;
           } | null;
 
           if (res.status === 402) {
             // 残高不足：塗りとポイントを巻き戻す
             removeLocalPaint('japan', 'mesh', id);
-            if (data?.points) applyPointsState(data.points.points, data.points.regenAt);
+            if (data?.points) applyServerPoints(data.points);
             else applyPointsState(prevPoints, prevRegenAt);
             showToast('塗りポイントが足りません');
             return;
@@ -959,8 +1215,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             console.warn('failed to sync painted region', res.status);
             return;
           }
-          // サーバーの確定値で同期
-          if (data?.points) applyPointsState(data.points.points, data.points.regenAt);
+          // サーバーの確定値（残高・レベル・経験値）で同期。経験値が貯まればレベルアップ演出も出る。
+          if (data?.points) applyServerPoints(data.points);
         } catch (err) {
           console.warn('failed to sync painted region', err);
         }
@@ -1025,6 +1281,27 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       };
 
       map.on('click', (e) => {
+        // デバッグの消しモード：クリックしたセルの塗りを消す（現地・となり問わず）。
+        if (eraseModeRef.current) {
+          if (map.getZoom() < MESH_MIN_ZOOM) {
+            showToast('もっとズームすると消せます');
+            return;
+          }
+          const picked = pickFeatureAt(e.point);
+          if (!picked) return;
+          const id = picked.feature.id as number;
+          if (!paintedRef.current[`mesh:${id}`]) return; // 未塗りは何もしない
+          removePaint('japan', 'mesh', id);
+          showToast('塗りを消しました');
+          return;
+        }
+        // となり塗り（マウスでの塗り）はとなり塗りモード時のみ。
+        // Shift+クリックの無料デバッグ塗りはモードを無視して許可する。
+        const shiftHeld = (e.originalEvent as MouseEvent | undefined)?.shiftKey ?? false;
+        if (paintModeRef.current !== 'tonari' && !shiftHeld) {
+          showToast('となり塗りモードにするとマウスで塗れます');
+          return;
+        }
         if (map.getZoom() < MESH_MIN_ZOOM) {
           showToast('もっとズームすると塗れます');
           return;
@@ -1046,7 +1323,6 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         // 未塗り → 塗りポイントを使って塗る（ログイン必須）。
         //   隣接（海越え可）= COST_ADJACENT / 離れた場所 = COST_FAR（確認ダイアログ）。
         // Shift を押しながらだと隣接判定もコストも無視して無料で塗れる（デバッグ用）。
-        const shiftHeld = (e.originalEvent as MouseEvent | undefined)?.shiftKey ?? false;
         if (!userIdRef.current) {
           showToast('ログインすると塗りポイントを使って塗れます');
           return;
@@ -1064,8 +1340,40 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         doManualPaint(id, feature.properties, cost);
       });
 
+      // ── 現在地の住所ラベル（青い点の真下に正確な住所を表示）──────────
+      const createAddressLabelEl = () => {
+        const el = document.createElement('div');
+        el.style.marginTop = '6px'; // 青い点と重ならないよう少し下げる
+        el.style.padding = '2px 8px';
+        el.style.background = 'rgba(255,255,255,0.9)';
+        el.style.border = '1px solid rgba(0,0,0,0.15)';
+        el.style.borderRadius = '6px';
+        el.style.fontSize = '12px';
+        el.style.fontWeight = '600';
+        el.style.color = '#1f2937';
+        el.style.whiteSpace = 'nowrap';
+        el.style.boxShadow = '0 1px 3px rgba(0,0,0,0.2)';
+        el.style.pointerEvents = 'none';
+        return el;
+      };
+      const showCurrentAddress = (lngLat: [number, number], address: string) => {
+        if (!addressMarkerRef.current) {
+          // anchor:'top' で要素の上端を現在地に合わせる＝青い点の下に表示される
+          addressMarkerRef.current = new maplibregl.Marker({
+            element: createAddressLabelEl(),
+            anchor: 'top',
+          })
+            .setLngLat(lngLat)
+            .addTo(map);
+        } else {
+          addressMarkerRef.current.setLngLat(lngLat);
+        }
+        addressMarkerRef.current.getElement().textContent = address;
+      };
+
       // ── GPS 自動塗り（移動中も追跡して現在地を黄色く塗る）──────────
       // メッシュコードは座標から数式で求まるので、タイル未ロードでも塗れる。
+      let lastGeocodedId: number | null = null; // 逆ジオコーダの連打防止（セルが変わった時だけ）
       const paintGpsAt = (lngLat: [number, number]) => {
         const id = meshCodeAt(lngLat[0], lngLat[1]);
         // 表示用の地名は描画済みセルがあれば拾う（ズームが浅い時は省略）
@@ -1075,6 +1383,17 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           if (f.length > 0) props = f[0].properties;
         }
         applyPaint('japan', 'mesh', id, 'gps', props);
+        // 現地塗りモードでは、グリッド内の近似住所ではなく現在地の正確な住所を表示する。
+        // 同じメッシュセル内では再取得しない（移動して別セルに入った時だけ問い合わせる）。
+        if (paintModeRef.current === 'genchi' && id !== lastGeocodedId) {
+          lastGeocodedId = id;
+          reverseGeocode(lngLat[0], lngLat[1]).then((address) => {
+            // 取得待ちの間に別セルへ移動していたら反映しない（古い結果の上書き防止）
+            if (address && lastGeocodedId === id) {
+              showCurrentAddress(lngLat, address);
+            }
+          });
+        }
       };
       geolocate.on('geolocate', (pos: GeolocationPosition) => {
         paintGpsAt([pos.coords.longitude, pos.coords.latitude]);
@@ -1164,6 +1483,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         debugMarker?.remove();
         debugMarker = null;
         debugPos = null;
+        addressMarkerRef.current?.remove();
+        addressMarkerRef.current = null;
       };
 
       // 読み込み完了後に自動で位置取得を開始（許可されれば現在地を黄色く塗る）。
@@ -1189,9 +1510,26 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       map.remove();
       maplibregl.removeProtocol('pmtiles');
       mapRef.current = null;
+      debugControlRef.current = null; // map.remove() で除去済み。ref も戻して再マウントに備える
       setMapReady(false);
     };
   }, []);
+
+  // デバッグメニュー（レンチ）コントロールは開発者だけに表示する。
+  // session は非同期で確定するため、権限が分かった時点で付け外しする。
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    if (isDeveloper && !debugControlRef.current) {
+      const ctrl = new DebugControl(() => openDebugRef.current());
+      map.addControl(ctrl, 'top-right');
+      debugControlRef.current = ctrl;
+    } else if (!isDeveloper && debugControlRef.current) {
+      map.removeControl(debugControlRef.current);
+      debugControlRef.current = null;
+      setDebugOpen(false);
+    }
+  }, [isDeveloper, mapReady]);
 
   // ログイン状態に応じて DB から復元 / ログアウト時にクリア
   useEffect(() => {
@@ -1408,37 +1746,114 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const gpsCount = modes.filter((m) => m === 'gps').length;
   const manualCount = count - gpsCount;
 
+  // データ詳細パネル用の集計（パネルを開いている間だけ計算する）。
+  // 塗り済みメッシュを市区町村→都道府県に辿って、訪れた都道府県・市区町村数と
+  // 都道府県ごとの塗り％（多い順）を作る。muni-stats.json 未ロード時は地域内訳は空。
+  const TOTAL_PREFS = 47;
+  const stats = statsOpen
+    ? (() => {
+        const lookup = muniByMeshRef.current;
+        const paintedByPref = new Map<string, number>();
+        const visitedMuni = new Set<string>();
+        if (lookup) {
+          for (const key of Object.keys(painted)) {
+            const [layer, idStr] = key.split(':');
+            if (layer !== 'mesh') continue;
+            const muni = lookup.get(Number(idStr));
+            if (!muni) continue;
+            visitedMuni.add(muni);
+            const pref = muni.split('|')[0];
+            paintedByPref.set(pref, (paintedByPref.get(pref) ?? 0) + 1);
+          }
+        }
+        const totalByPref = new Map<string, number>();
+        let nationTotal = 0; // 日本全体のメッシュ総数（塗り％の分母）
+        for (const [key, t] of totalByMuniRef.current) {
+          const pref = key.split('|')[0];
+          totalByPref.set(pref, (totalByPref.get(pref) ?? 0) + t);
+          nationTotal += t;
+        }
+        const prefs = [...paintedByPref.entries()]
+          .map(([name, p]) => ({ name, painted: p, total: totalByPref.get(name) ?? 0 }))
+          .sort((a, b) => b.painted - a.painted);
+        return {
+          prefVisited: paintedByPref.size,
+          muniVisited: visitedMuni.size,
+          nationTotal,
+          prefs,
+        };
+      })()
+    : null;
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
-      <div className="absolute bottom-4 left-4 bg-white rounded-lg px-4 py-2 shadow text-sm font-medium text-gray-700 space-y-1">
-        {hoverStat && (
-          <div className="text-gray-900 font-semibold border-b border-gray-200 pb-1 mb-1">
-            {hoverStat}
-          </div>
-        )}
-        {userId && (
-          <div className="border-b border-gray-200 pb-1 mb-1">
-            <div className="text-gray-900 font-semibold">
-              塗りポイント: {points} / {MAX_PAINT_POINTS}
-            </div>
-            {regenAt !== null && points < MAX_PAINT_POINTS && (
-              <div className="text-xs text-gray-500">
-                +1まで {formatCountdown(regenAt - nowTick)}
-              </div>
-            )}
-          </div>
-        )}
-        <div>塗った地域: {count}</div>
-        <div className="flex items-center gap-1.5 text-xs text-gray-600">
-          <span className="inline-block w-3 h-3 rounded-sm" style={{ background: COLOR_GPS }} />
-          訪問 (GPS): {gpsCount}
-        </div>
-        <div className="flex items-center gap-1.5 text-xs text-gray-600">
-          <span className="inline-block w-3 h-3 rounded-sm" style={{ background: COLOR_MANUAL }} />
-          隣接塗り: {manualCount}
-        </div>
+      {/* 塗り方モード切り替え（左上・タイトルバーの下）。
+          現地塗り＝GPSの現在地のみ自動で塗る / となり塗り＝マウスで隣接セルを塗れる。 */}
+      <div className="absolute top-4 left-4 flex rounded-lg shadow overflow-hidden text-sm font-medium select-none">
+        <button
+          type="button"
+          aria-pressed={paintMode === 'genchi'}
+          onClick={() => setPaintMode('genchi')}
+          className={`px-3 py-2 transition-colors ${
+            paintMode === 'genchi'
+              ? 'bg-yellow-400 text-gray-900'
+              : 'bg-white text-gray-600 hover:bg-gray-50'
+          }`}
+        >
+          現地塗り
+        </button>
+        <button
+          type="button"
+          aria-pressed={paintMode === 'tonari'}
+          onClick={() => setPaintMode('tonari')}
+          className={`px-3 py-2 transition-colors ${
+            paintMode === 'tonari'
+              ? 'text-white'
+              : 'bg-white text-gray-600 hover:bg-gray-50'
+          }`}
+          style={paintMode === 'tonari' ? { background: COLOR_MANUAL } : undefined}
+        >
+          となり塗り
+        </button>
       </div>
+      {(hoverStat || userId) && (
+        <div className="absolute bottom-4 left-4 bg-white rounded-lg px-4 py-2 shadow text-sm font-medium text-gray-700 space-y-1">
+          {hoverStat && (
+            <div className="text-gray-900 font-semibold">
+              {hoverStat}
+            </div>
+          )}
+          {userId && (
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center rounded-md bg-yellow-400 px-2 py-0.5 text-xs font-bold text-gray-900">
+                  Lv.{level}
+                </span>
+                <div className="h-2 flex-1 min-w-[80px] overflow-hidden rounded-full bg-gray-200">
+                  <div
+                    className="h-full rounded-full bg-yellow-400 transition-[width] duration-500"
+                    style={{
+                      width: expToNext > 0 ? `${Math.min(100, (exp / expToNext) * 100)}%` : '0%',
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="text-[10px] text-gray-500">
+                経験値 {exp} / {expToNext}
+              </div>
+              <div className="text-gray-900 font-semibold">
+                塗りポイント: {points} / {maxPoints}
+              </div>
+              {regenAt !== null && points < maxPoints && (
+                <div className="text-xs text-gray-500">
+                  +1まで {formatCountdown(regenAt - nowTick)}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       <div className="absolute bottom-4 right-4 bg-white rounded-lg px-3 py-2 shadow text-sm font-mono text-gray-600">
         zoom: <span ref={zoomLabelRef}>4.5</span>
       </div>
@@ -1448,6 +1863,27 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           移動モード（十字キー：移動 / Space：解除）
         </div>
       )}
+      {eraseMode && (
+        <button
+          type="button"
+          onClick={() => setEraseMode(false)}
+          className="absolute top-4 right-4 z-10 bg-red-600 text-white rounded-lg px-3 py-2 shadow text-xs font-medium flex items-center gap-1.5 hover:bg-red-700"
+        >
+          <span className="inline-block w-2.5 h-2.5 rounded-full bg-white" />
+          消しモード（クリックで塗りを消す / タップで解除）
+        </button>
+      )}
+      {hoverPaintMode && (
+        <button
+          type="button"
+          onClick={() => setHoverPaintMode(false)}
+          style={{ background: COLOR_MANUAL }}
+          className="absolute top-4 right-4 z-10 text-white rounded-lg px-3 py-2 shadow text-xs font-medium flex items-center gap-1.5 hover:opacity-90"
+        >
+          <span className="inline-block w-2.5 h-2.5 rounded-full bg-white" />
+          なぞり塗りモード（マウスオーバーで塗る / タップで解除）
+        </button>
+      )}
       {toast && (
         <div
           className="absolute top-4 left-1/2 -translate-x-1/2 bg-gray-900/85 text-white rounded-lg px-4 py-2 shadow text-sm font-medium pointer-events-none"
@@ -1455,6 +1891,25 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           aria-live="polite"
         >
           {toast}
+        </div>
+      )}
+      {levelUp && (
+        <div
+          className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="level-up-pop flex flex-col items-center gap-1 rounded-2xl bg-gradient-to-b from-yellow-400 to-amber-500 px-8 py-5 text-center shadow-2xl ring-4 ring-yellow-200">
+            <span className="text-xs font-bold tracking-widest text-amber-900">
+              LEVEL UP!
+            </span>
+            <span className="text-4xl font-black text-white drop-shadow">
+              Lv.{levelUp.to}
+            </span>
+            <span className="text-xs font-semibold text-amber-900">
+              塗りポイント上限 +1
+            </span>
+          </div>
         </div>
       )}
       {confirmPaint && (
@@ -1561,7 +2016,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           </div>
         </div>
       )}
-      {debugOpen && (
+      {debugOpen && isDeveloper && (
         <div
           className="absolute inset-0 z-10 flex justify-end bg-black/30"
           onClick={() => setDebugOpen(false)}
@@ -1583,6 +2038,19 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                 ×
               </button>
             </div>
+            <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-gray-500">実行モード</span>
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${RUN_MODE_BADGE[RUN_MODE]}`}
+                >
+                  {RUN_MODE_LABEL[RUN_MODE]}
+                </span>
+              </div>
+              <div className="mt-1 text-[11px] text-gray-400">
+                {typeof window !== 'undefined' ? window.location.host : ''}
+              </div>
+            </div>
             <div className="space-y-2">
               <button
                 type="button"
@@ -1591,7 +2059,251 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               >
                 塗りポイントを100にする
               </button>
+              <button
+                type="button"
+                aria-pressed={eraseMode}
+                className={`w-full text-left px-3 py-2 text-sm font-medium rounded-lg border ${
+                  eraseMode
+                    ? 'bg-red-600 text-white border-red-600 hover:bg-red-700'
+                    : 'text-gray-800 border-gray-200 hover:bg-gray-50'
+                }`}
+                onClick={() => {
+                  setEraseMode((v) => !v);
+                  setHoverPaintMode(false);
+                  setDebugOpen(false);
+                }}
+              >
+                {eraseMode ? '消しモードを解除する' : 'マウスで塗りを消すモード'}
+              </button>
+              <button
+                type="button"
+                aria-pressed={hoverPaintMode}
+                className={`w-full text-left px-3 py-2 text-sm font-medium rounded-lg border ${
+                  hoverPaintMode
+                    ? 'text-white border-transparent hover:opacity-90'
+                    : 'text-gray-800 border-gray-200 hover:bg-gray-50'
+                }`}
+                style={hoverPaintMode ? { background: COLOR_MANUAL } : undefined}
+                onClick={() => {
+                  setHoverPaintMode((v) => !v);
+                  setEraseMode(false);
+                  setDebugOpen(false);
+                }}
+              >
+                {hoverPaintMode ? 'なぞり塗りを解除する' : 'マウスオーバーで塗るモード'}
+              </button>
+              <button
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50"
+                onClick={() => {
+                  setDebugOpen(false);
+                  setConfirmClearAll(true);
+                }}
+              >
+                塗りを全部消す
+              </button>
             </div>
+          </div>
+        </div>
+      )}
+      {confirmClearAll && (
+        <div
+          className="absolute inset-0 z-20 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setConfirmClearAll(false)}
+        >
+          <div
+            className="w-80 max-w-full rounded-xl bg-white p-5 shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-label="塗りの全消去の確認"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-base font-bold text-gray-900">塗りを全部消す</h2>
+            <p className="mt-2 text-sm text-gray-600">
+              塗った場所をすべて消します。この操作は元に戻せません。よろしいですか？
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50"
+                onClick={() => setConfirmClearAll(false)}
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700"
+                onClick={() => {
+                  setConfirmClearAll(false);
+                  clearAllPaint();
+                }}
+              >
+                全部消す
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {statsOpen && (
+        <div
+          className="absolute inset-0 z-10 flex justify-end bg-black/30"
+          onClick={() => setStatsOpen(false)}
+        >
+          <div
+            className="w-80 max-w-[85%] h-full bg-white shadow-xl p-4 overflow-y-auto"
+            role="dialog"
+            aria-label="データ詳細"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-bold text-gray-800">データ詳細</h2>
+              <button
+                type="button"
+                aria-label="閉じる"
+                className="text-gray-400 hover:text-gray-600 text-lg leading-none"
+                onClick={() => setStatsOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+
+            {userId && (
+              <div className="mb-4 rounded-lg bg-yellow-50 px-3 py-2 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center rounded-md bg-yellow-400 px-2 py-0.5 text-xs font-bold text-gray-900">
+                    Lv.{level}
+                  </span>
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-yellow-200">
+                    <div
+                      className="h-full rounded-full bg-yellow-500 transition-[width] duration-500"
+                      style={{
+                        width: expToNext > 0 ? `${Math.min(100, (exp / expToNext) * 100)}%` : '0%',
+                      }}
+                    />
+                  </div>
+                  <span className="text-[10px] text-gray-500 whitespace-nowrap">
+                    {exp} / {expToNext}
+                  </span>
+                </div>
+                <div className="text-sm font-semibold text-gray-900">
+                  塗りポイント: {points} / {maxPoints}
+                </div>
+                {regenAt !== null && points < maxPoints && (
+                  <div className="text-xs text-gray-500">
+                    +1まで {formatCountdown(regenAt - nowTick)}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 塗りの合計 */}
+            <div className="grid grid-cols-3 gap-2 mb-4">
+              <div className="rounded-lg bg-gray-50 px-2 py-2 text-center">
+                <div className="text-lg font-bold text-gray-900">{count}</div>
+                <div className="text-[11px] text-gray-500">塗った地域</div>
+              </div>
+              <div className="rounded-lg bg-gray-50 px-2 py-2 text-center">
+                <div className="text-lg font-bold" style={{ color: COLOR_GPS }}>
+                  {gpsCount}
+                </div>
+                <div className="text-[11px] text-gray-500">訪問(GPS)</div>
+              </div>
+              <div className="rounded-lg bg-gray-50 px-2 py-2 text-center">
+                <div className="text-lg font-bold" style={{ color: COLOR_MANUAL }}>
+                  {manualCount}
+                </div>
+                <div className="text-[11px] text-gray-500">隣接塗り</div>
+              </div>
+            </div>
+
+            {/* 訪れた都道府県・市区町村数 */}
+            <div className="grid grid-cols-2 gap-2 mb-4">
+              <div className="rounded-lg bg-gray-50 px-3 py-2">
+                <div className="text-sm font-bold text-gray-900">
+                  {stats ? stats.prefVisited : 0}
+                  <span className="text-xs font-normal text-gray-400"> / {TOTAL_PREFS}</span>
+                </div>
+                <div className="text-[11px] text-gray-500">訪れた都道府県</div>
+              </div>
+              <div className="rounded-lg bg-gray-50 px-3 py-2">
+                <div className="text-sm font-bold text-gray-900">
+                  {stats ? stats.muniVisited : 0}
+                </div>
+                <div className="text-[11px] text-gray-500">訪れた市区町村</div>
+              </div>
+            </div>
+
+            {/* 日本全体の塗り％ */}
+            <div className="mb-4 rounded-lg border border-gray-200 px-3 py-2.5">
+              <div className="flex items-baseline justify-between mb-1">
+                <span className="text-sm font-bold text-gray-800">🗾 日本全体</span>
+                <span className="text-sm text-gray-600">
+                  {(() => {
+                    const nt = stats?.nationTotal ?? 0;
+                    if (nt <= 0) return count === 0 ? '0%' : '計算中…';
+                    const pct = (count / nt) * 100;
+                    const label =
+                      pct > 0 && pct < 0.1 ? '<0.1%' : `${pct < 10 ? pct.toFixed(2) : Math.round(pct)}%`;
+                    return (
+                      <>
+                        <span className="font-bold text-gray-900">{label}</span>
+                        <span className="text-gray-400">（{count}/{nt}）</span>
+                      </>
+                    );
+                  })()}
+                </span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-gray-100 overflow-hidden">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: (() => {
+                      const nt = stats?.nationTotal ?? 0;
+                      if (nt <= 0) return '0%';
+                      const pct = (count / nt) * 100;
+                      return `${Math.min(100, Math.max(pct, pct > 0 ? 2 : 0))}%`;
+                    })(),
+                    background: COLOR_GPS,
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* 都道府県ごとの塗り％（多い順） */}
+            <h3 className="text-xs font-semibold text-gray-600 mb-2">都道府県ごとの塗り</h3>
+            {stats && stats.prefs.length > 0 ? (
+              <ul className="space-y-2">
+                {stats.prefs.map((p) => {
+                  const pct = p.total > 0 ? (p.painted / p.total) * 100 : 0;
+                  const pctLabel =
+                    pct > 0 && pct < 0.1 ? '<0.1%' : `${pct < 10 ? pct.toFixed(1) : Math.round(pct)}%`;
+                  return (
+                    <li key={p.name}>
+                      <div className="flex items-baseline justify-between text-xs mb-0.5">
+                        <span className="font-medium text-gray-800">{p.name}</span>
+                        <span className="text-gray-500">
+                          {pctLabel}
+                          <span className="text-gray-400">（{p.painted}/{p.total}）</span>
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full rounded-full bg-gray-100 overflow-hidden">
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${Math.min(100, Math.max(pct, pct > 0 ? 2 : 0))}%`,
+                            background: COLOR_GPS,
+                          }}
+                        />
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="text-xs text-gray-400">
+                {count === 0 ? 'まだ塗った地域がありません' : '地域内訳を計算中…'}
+              </p>
+            )}
           </div>
         </div>
       )}

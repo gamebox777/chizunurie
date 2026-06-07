@@ -3,7 +3,15 @@ import { and, eq } from "drizzle-orm";
 import { auth } from "../lib/auth.js";
 import { db } from "../db/index.js";
 import { paintedRegions } from "../db/schema.js";
-import { ALLOWED_COSTS, COST_ADJACENT, ensurePoints, spendPoints } from "../lib/points.js";
+import {
+  ALLOWED_COSTS,
+  COST_ADJACENT,
+  EXP_PAINT,
+  EXP_VISIT,
+  addExp,
+  ensurePoints,
+  spendPoints,
+} from "../lib/points.js";
 
 export const paintedRouter = new Hono();
 
@@ -59,30 +67,63 @@ paintedRouter.post("/", async (c) => {
   const parsed = parseBody(await c.req.json().catch(() => null));
   if (!parsed) return c.json({ error: "invalid body" }, 400);
 
+  const now = Date.now();
+
   if (parsed.mode === "gps") {
-    // GPS（実際の移動）は無料。最優先なので既存（manual含む）があれば gps に昇格。
-    await db
-      .insert(paintedRegions)
-      .values({
-        userId: user.id,
-        sourceLayer: parsed.sourceLayer,
-        keyCode: parsed.keyCode,
-        mode: parsed.mode,
-      })
-      .onConflictDoUpdate({
-        target: [
-          paintedRegions.userId,
-          paintedRegions.sourceLayer,
-          paintedRegions.keyCode,
-        ],
-        set: { mode: "gps" },
-      });
-    return c.json({ ok: true });
+    // GPS（実際の移動）はポイント無料。最優先なので既存（manual含む）があれば gps に昇格。
+    // 「実際に訪れる」と経験値 EXP_VISIT を獲得する。新規セル・となり塗りからの昇格の
+    // どちらも 1 回ずつ付与し、既に gps 済みのセルへの再 POST では付与しない。
+    const result = await db.transaction(async (tx) => {
+      const inserted = await tx
+        .insert(paintedRegions)
+        .values({
+          userId: user.id,
+          sourceLayer: parsed.sourceLayer,
+          keyCode: parsed.keyCode,
+          mode: "gps",
+        })
+        .onConflictDoNothing()
+        .returning({ id: paintedRegions.id });
+
+      if (inserted.length > 0) {
+        // 新規セルを訪問 → 経験値付与
+        const state = await addExp(user.id, EXP_VISIT, now, tx);
+        return { ok: true as const, points: state };
+      }
+
+      // 既存セル：となり塗り（manual）なら gps に昇格して経験値付与。既に gps なら据え置き。
+      const existing = await tx
+        .select({ mode: paintedRegions.mode })
+        .from(paintedRegions)
+        .where(
+          and(
+            eq(paintedRegions.userId, user.id),
+            eq(paintedRegions.sourceLayer, parsed.sourceLayer),
+            eq(paintedRegions.keyCode, parsed.keyCode)
+          )
+        );
+      if (existing[0]?.mode !== "gps") {
+        await tx
+          .update(paintedRegions)
+          .set({ mode: "gps" })
+          .where(
+            and(
+              eq(paintedRegions.userId, user.id),
+              eq(paintedRegions.sourceLayer, parsed.sourceLayer),
+              eq(paintedRegions.keyCode, parsed.keyCode)
+            )
+          );
+        const state = await addExp(user.id, EXP_VISIT, now, tx);
+        return { ok: true as const, points: state };
+      }
+      const state = await ensurePoints(user.id, now, tx);
+      return { ok: true as const, points: state };
+    });
+    return c.json(result);
   }
 
   // manual：新規セルのみ塗りポイントを消費する。残高不足ならロールバックして 402 を返す。
-  // 既存セルへの再 POST（idempotent）は課金しない。
-  const now = Date.now();
+  // 既存セルへの再 POST（idempotent）は課金しない。新規かつ有料（cost>0）なら経験値 EXP_PAINT を付与。
   try {
     const result = await db.transaction(async (tx) => {
       const inserted = await tx
@@ -102,11 +143,14 @@ paintedRouter.post("/", async (c) => {
         return { ok: true as const, points: state };
       }
 
-      const state = await spendPoints(user.id, parsed.cost, now, tx);
-      if (!state) {
+      const spent = await spendPoints(user.id, parsed.cost, now, tx);
+      if (!spent) {
         // 残高不足 → トランザクションを巻き戻して塗りを取り消す
         throw new InsufficientPointsError();
       }
+      // 有料の塗り（となり塗り／離れた場所）のみ経験値付与。cost===0 のデバッグ塗りは付与しない。
+      const state =
+        parsed.cost > 0 ? await addExp(user.id, EXP_PAINT, now, tx) : spent;
       return { ok: true as const, points: state };
     });
     return c.json(result);
@@ -120,6 +164,14 @@ paintedRouter.post("/", async (c) => {
 });
 
 class InsufficientPointsError extends Error {}
+
+// ユーザーの塗りを全消去する（デバッグ用）。ポイントは返金しない。
+paintedRouter.delete("/all", async (c) => {
+  const user = await requireUser(c.req.raw);
+  if (!user) return c.json({ error: "unauthorized" }, 401);
+  await db.delete(paintedRegions).where(eq(paintedRegions.userId, user.id));
+  return c.json({ ok: true });
+});
 
 paintedRouter.delete("/", async (c) => {
   const user = await requireUser(c.req.raw);

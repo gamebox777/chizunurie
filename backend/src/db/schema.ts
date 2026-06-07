@@ -15,6 +15,9 @@ export const user = pgTable("user", {
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
+  // 権限。'user'=一般ユーザー（既定）/ 'developer'=開発者（デバッグメニュー表示）。
+  // 新規登録時は必ず 'user'。開発者にするには DB で手動で 'developer' に変更する。
+  role: text("role").notNull().default("user"),
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
 });
@@ -79,15 +82,22 @@ export const paintedRegions = pgTable(
   (t) => [unique().on(t.userId, t.sourceLayer, t.keyCode)]
 );
 
-// 塗りポイント残高。GPS（実際の移動）は無料だが、それ以外の隣接塗り／離れた場所の
-// 塗りは塗りポイントを消費する。ポイントは時間経過で回復する（points.ts のロジック参照）。
+// 塗りポイント残高＋ユーザーレベル。GPS（実際の移動）は無料だが、それ以外の隣接塗り／
+// 離れた場所の塗りは塗りポイントを消費する。ポイントは時間経過で回復する（points.ts 参照）。
 // updatedAt は「回復時計のアンカー」。現在値は読み取り時に updatedAt からの経過時間で
 // 遅延計算して確定させる（lazy regen）。1ユーザー1行。
+//
+// level / exp はゲームのレベル概念。塗ると経験値が貯まり、規定値に達するとレベルアップする。
+// レベルが上がると塗りポイントの最大値（回復上限）が +1 され、さらにその最大値ぶんポイントが
+// 即時加算される。level アップ時の加算で上限を超えた残高は保持される（時間回復では増えない）。
+// 詳細な計算式は points.ts（maxPointsForLevel / expToNext / addExp）にある。
 export const userPoints = pgTable("user_points", {
   userId: text("user_id")
     .primaryKey()
     .references(() => user.id, { onDelete: "cascade" }),
   points: integer("points").notNull().default(10),
+  level: integer("level").notNull().default(1),
+  exp: integer("exp").notNull().default(0),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

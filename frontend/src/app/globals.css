@@ -25,3 +25,30 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* レベルアップ演出：ポンと出てふわっと消える */
+@keyframes level-up-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  20% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+  35% {
+    transform: scale(1);
+  }
+  80% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.96);
+    opacity: 0;
+  }
+}
+
+.level-up-pop {
+  animation: level-up-pop 3.5s ease-in-out forwards;
+}

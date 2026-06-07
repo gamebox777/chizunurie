@@ -80,7 +80,7 @@ db.exec(`
   CREATE TABLE tiles (zoom_level INTEGER, tile_column INTEGER, tile_row INTEGER, tile_data BLOB,
     PRIMARY KEY (zoom_level, tile_column, tile_row));
 `);
-db.prepare('INSERT INTO metadata VALUES (?,?)').run('name', '白地図ゲーム');
+db.prepare('INSERT INTO metadata VALUES (?,?)').run('name', '地図ぬりえ');
 db.prepare('INSERT INTO metadata VALUES (?,?)').run('format', 'pbf');
 db.prepare('INSERT INTO metadata VALUES (?,?)').run('minzoom', String(GLOBAL_MIN_ZOOM));
 db.prepare('INSERT INTO metadata VALUES (?,?)').run('maxzoom', String(GLOBAL_MAX_ZOOM));
