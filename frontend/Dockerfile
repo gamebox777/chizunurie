@@ -3,7 +3,8 @@ WORKDIR /app
 
 FROM base AS deps
 COPY package*.json ./
-RUN npm ci
+# next build にも devDependencies が必要。NODE_ENV=production でも devDeps を省かせない。
+RUN npm ci --include=dev
 
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules

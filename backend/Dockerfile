@@ -1,7 +1,10 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+# ビルドには tsc(typescript) など devDependencies が必要。Coolify のビルド環境では
+# NODE_ENV=production が効いて npm ci が devDeps を省く（→ `tsc: not found` / exit 127）ため、
+# --include=dev で必ず devDeps も入れる。
+RUN npm ci --include=dev
 
 FROM node:20-alpine AS builder
 WORKDIR /app
