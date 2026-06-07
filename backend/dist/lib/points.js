@@ -17,8 +17,12 @@ const BASE_MAX_POINTS = 10; // level 1 のときの最大塗りポイント
 const BASE_EXP_TO_NEXT = 1000;
 const EXP_TO_NEXT_STEP = 100;
 // 塗りで得られる経験値
-export const EXP_VISIT = 100; // 実際に訪れる（GPS塗り・manual→gps 昇格）
+export const EXP_VISIT = 100; // 実際に訪れる（GPS塗り・manual→gps 昇格・再訪）
 export const EXP_PAINT = 50; // となり塗り／離れた場所塗り（manual・有料）
+// 再訪クールダウン：既に gps 済みのセルへ GPS で入り直した時、前回の訪問から
+// この時間が経過していれば再び EXP_VISIT を付与する。GPS は静止中も連続発火するため、
+// この間隔で「再訪あたり1回」に制限して無限獲得を防ぐ（painted_regions.lastVisitAt で判定）。
+export const REVISIT_EXP_COOLDOWN_MS = 60 * 60 * 1000; // 1時間に1回
 // level のときの最大塗りポイント（回復上限）
 export function maxPointsForLevel(level) {
     return BASE_MAX_POINTS + (level - 1);

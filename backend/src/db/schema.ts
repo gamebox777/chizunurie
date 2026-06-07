@@ -95,6 +95,11 @@ export const paintedRegions = pgTable(
     // stateMeta[adm1_code].adm0_a3 から導出する。日本の外を塗った時だけ入る。
     region: text("region"),
     paintedAt: timestamp("painted_at", { withTimezone: true }).defaultNow(),
+    // 直近に GPS で実際に訪れた時刻。再訪（既に gps 済みのセルへ GPS で入り直す）で
+    // 経験値を再付与する際のクールダウン判定に使う。訪問のたびに同じ行を上書き更新する
+    // ので、訪問履歴で行が増えず DB が肥大化しない（1セル1行のまま）。GPS 塗り／manual→gps
+    // 昇格／再訪で now に更新。manual 塗りでは触らない（GPS で訪れた記録ではないため）。
+    lastVisitAt: timestamp("last_visit_at", { withTimezone: true }),
   },
   (t) => [unique().on(t.userId, t.sourceLayer, t.keyCode)]
 );

@@ -1,0 +1,1 @@
+ALTER TABLE "painted_regions" ADD COLUMN "last_visit_at" timestamp with time zone;

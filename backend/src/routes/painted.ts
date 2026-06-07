@@ -8,6 +8,7 @@ import {
   COST_ADJACENT,
   EXP_PAINT,
   EXP_VISIT,
+  REVISIT_EXP_COOLDOWN_MS,
   addExp,
   ensurePoints,
   spendPoints,
@@ -111,8 +112,14 @@ paintedRouter.post("/", async (c) => {
 
   if (parsed.mode === "gps") {
     // GPS（実際の移動）はポイント無料。最優先なので既存（manual含む）があれば gps に昇格。
-    // 「実際に訪れる」と経験値 EXP_VISIT を獲得する。新規セル・となり塗りからの昇格の
-    // どちらも 1 回ずつ付与し、既に gps 済みのセルへの再 POST では付与しない。
+    // 「実際に訪れる」と経験値 EXP_VISIT を獲得する。新規セル・となり塗りからの昇格に加え、
+    // 既に gps 済みのセルへ入り直した「再訪」も、前回訪問から REVISIT_EXP_COOLDOWN_MS 以上
+    // 経っていれば再付与する（lastVisitAt を上書き更新するので行は増えない＝DB は肥大化しない）。
+    const cellWhere = and(
+      eq(paintedRegions.userId, user.id),
+      eq(paintedRegions.sourceLayer, parsed.sourceLayer),
+      eq(paintedRegions.keyCode, parsed.keyCode)
+    );
     const result = await db.transaction(async (tx) => {
       const inserted = await tx
         .insert(paintedRegions)
@@ -121,6 +128,7 @@ paintedRouter.post("/", async (c) => {
           sourceLayer: parsed.sourceLayer,
           keyCode: parsed.keyCode,
           mode: "gps",
+          lastVisitAt: new Date(now),
           ...context,
         })
         .onConflictDoNothing()
@@ -129,36 +137,44 @@ paintedRouter.post("/", async (c) => {
       if (inserted.length > 0) {
         // 新規セルを訪問 → 経験値付与
         const state = await addExp(user.id, EXP_VISIT, now, tx);
-        return { ok: true as const, points: state };
+        return { ok: true as const, points: state, gainedExp: EXP_VISIT };
       }
 
-      // 既存セル：となり塗り（manual）なら gps に昇格して経験値付与。既に gps なら据え置き。
+      // 既存セル：となり塗り（manual）なら gps に昇格して経験値付与。
+      // 既に gps 済みなら再訪扱い（クールダウン経過時のみ再付与）。
       const existing = await tx
-        .select({ mode: paintedRegions.mode })
+        .select({
+          mode: paintedRegions.mode,
+          lastVisitAt: paintedRegions.lastVisitAt,
+        })
         .from(paintedRegions)
-        .where(
-          and(
-            eq(paintedRegions.userId, user.id),
-            eq(paintedRegions.sourceLayer, parsed.sourceLayer),
-            eq(paintedRegions.keyCode, parsed.keyCode)
-          )
-        );
+        .where(cellWhere);
       if (existing[0]?.mode !== "gps") {
+        // manual → gps 昇格。訪問時刻も now に更新する。
         await tx
           .update(paintedRegions)
-          .set({ mode: "gps" })
-          .where(
-            and(
-              eq(paintedRegions.userId, user.id),
-              eq(paintedRegions.sourceLayer, parsed.sourceLayer),
-              eq(paintedRegions.keyCode, parsed.keyCode)
-            )
-          );
+          .set({ mode: "gps", lastVisitAt: new Date(now) })
+          .where(cellWhere);
         const state = await addExp(user.id, EXP_VISIT, now, tx);
-        return { ok: true as const, points: state };
+        return { ok: true as const, points: state, gainedExp: EXP_VISIT };
       }
+
+      // 再訪：前回訪問から十分時間が経っていれば再び経験値を付与する。
+      // 履歴は残さず lastVisitAt を上書きするだけなので行数は増えない。
+      const last = existing[0]?.lastVisitAt ?? null;
+      const canReward =
+        last === null || now - last.getTime() >= REVISIT_EXP_COOLDOWN_MS;
+      if (canReward) {
+        await tx
+          .update(paintedRegions)
+          .set({ lastVisitAt: new Date(now) })
+          .where(cellWhere);
+        const state = await addExp(user.id, EXP_VISIT, now, tx);
+        return { ok: true as const, points: state, gainedExp: EXP_VISIT };
+      }
+      // クールダウン中：経験値なし（lastVisitAt も触らない）
       const state = await ensurePoints(user.id, now, tx);
-      return { ok: true as const, points: state };
+      return { ok: true as const, points: state, gainedExp: 0 };
     });
     return c.json(result);
   }
@@ -182,7 +198,7 @@ paintedRouter.post("/", async (c) => {
       if (inserted.length === 0) {
         // 既に塗り済み → 課金せず現在の残高を返す
         const state = await ensurePoints(user.id, now, tx);
-        return { ok: true as const, points: state };
+        return { ok: true as const, points: state, gainedExp: 0 };
       }
 
       const spent = await spendPoints(user.id, parsed.cost, now, tx);
@@ -193,7 +209,7 @@ paintedRouter.post("/", async (c) => {
       // 新規セルの塗りに経験値を付与。cost===0 の Shift+デバッグ塗り（開発者のみ・96行目で
       // チェック済み）も経験値が入るようにする。spent は cost===0 でも残高据え置きで返るので使わない。
       const state = await addExp(user.id, EXP_PAINT, now, tx);
-      return { ok: true as const, points: state };
+      return { ok: true as const, points: state, gainedExp: EXP_PAINT };
     });
     return c.json(result);
   } catch (err) {

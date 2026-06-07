@@ -137,6 +137,9 @@ const ja: Dict = {
   flyToPref: 'この都道府県の塗った場所へ移動',
   noPainted: 'まだ塗った地域がありません',
   calcBreakdown: '地域内訳を計算中…',
+  viewJapan: '日本',
+  viewWorld: '世界',
+  perCountryTitle: '国ごとの塗り',
 
   // Map: トースト（ゲーム向け）
   needLoginVideo: 'ログインすると動画でポイントを回復できます',
@@ -149,6 +152,10 @@ const ja: Dict = {
   gpsLocked: '実際に訪れた場所です（マウスでは変更できません）',
   notEnoughPoints: '塗りポイントが足りません',
   notEnoughPointsLeft: (n: number) => `塗りポイントが足りません（残り ${n}）`,
+  foreignBulkHint: '🌏 外国は10×10まとめ塗り！',
+  foreignPainted: (n: number) => `外国を${n}マスまとめ塗り！`,
+  expGained: (n: number) => `経験値 +${n} 🎉`,
+  expRevisit: (n: number) => `再訪ボーナス 経験値 +${n} 🎉`,
   geoDenied: '位置情報の利用が許可されていません（ブラウザの設定を確認してください）',
   geoTimeout: '位置情報の取得がタイムアウトしました',
   geoFailed: '位置情報を取得できませんでした',
@@ -281,6 +288,9 @@ const en: Dict = {
   flyToPref: 'Jump to painted areas in this prefecture',
   noPainted: 'No painted areas yet',
   calcBreakdown: 'Calculating breakdown…',
+  viewJapan: 'Japan',
+  viewWorld: 'World',
+  perCountryTitle: 'Painted by country',
 
   // Map: toasts (game)
   needLoginVideo: 'Sign in to recover points by watching videos',
@@ -293,6 +303,10 @@ const en: Dict = {
   gpsLocked: 'This is a place you actually visited (cannot be changed by mouse)',
   notEnoughPoints: 'Not enough paint points',
   notEnoughPointsLeft: (n: number) => `Not enough paint points (${n} left)`,
+  foreignBulkHint: '🌏 Abroad paints 10×10 at once!',
+  foreignPainted: (n: number) => `Painted ${n} cells abroad at once!`,
+  expGained: (n: number) => `EXP +${n} 🎉`,
+  expRevisit: (n: number) => `Revisit bonus  EXP +${n} 🎉`,
   geoDenied: 'Location access is not allowed (check your browser settings)',
   geoTimeout: 'Getting your location timed out',
   geoFailed: 'Could not get your location',
