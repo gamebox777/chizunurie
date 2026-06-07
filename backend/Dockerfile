@@ -1,16 +1,12 @@
-# ビルドに必要な typescript / @types/node は dependencies に入れている。
-# 理由: Coolify のビルド環境では npm ci が devDependencies を入れない（実機で確認）。
-#       本番イメージのビルドに必要なものは dependencies 側に置く方針にした。
+# イメージは GitHub Actions（標準 Docker）でビルドして ghcr.io に push する。
+# Coolify はこのイメージを pull するだけ（Coolify のビルド環境は使わない）。
+# typescript / @types/node は dependencies に置いている（過去の経緯・害は無い）。
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
-# 診断: npm ci が typescript を実際に入れたか確認する。
-# 入っていなければ「DIAG_npm_ci_did_NOT_install_typescript」を出して落とす（Coolifyのエラー要約に行が出る）。
-RUN test -f node_modules/typescript/bin/tsc || { echo "DIAG_npm_ci_did_NOT_install_typescript"; ls node_modules; exit 11; }
-# typescript 本体を node で直接叩く（.bin/PATH 非依存）。
-RUN node ./node_modules/typescript/bin/tsc
+RUN npm run build
 
 FROM node:20-alpine AS runner
 WORKDIR /app

@@ -1,0 +1,79 @@
+# frontend / backend のイメージを「標準 Docker（GitHub Actions）」でビルドして
+# ghcr.io に push する。Coolify はこのイメージを pull するだけ（build しない）。
+# Coolify のビルド環境が devDeps を入れない等で壊れていても影響を受けない確実な経路。
+#
+# 公開イメージ:
+#   ghcr.io/gamebox777/chizunurie-frontend:main
+#   ghcr.io/gamebox777/chizunurie-backend:main
+#
+# 初回のみ必要な手順は docs/Coolifyデプロイ-compose.md 参照（パッケージ公開 or 認証情報）。
+name: build-images
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # 手動実行も可
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # ghcr.io への push に必要
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: backend
+            context: ./backend
+            build_args: ""
+          - service: frontend
+            context: ./frontend
+            # rewrites() の中継先はビルド時に焼き込まれる。compose のサービス名は backend。
+            build_args: |
+              BACKEND_URL=http://backend:3001
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          build-args: ${{ matrix.build_args }}
+          tags: |
+            ghcr.io/gamebox777/chizunurie-${{ matrix.service }}:main
+            ghcr.io/gamebox777/chizunurie-${{ matrix.service }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ビルド完了後に Coolify の Deploy を自動起動する（任意）。
+  # COOLIFY_DEPLOY_WEBHOOK（必要なら COOLIFY_API_TOKEN）を Secrets に入れれば有効化。
+  # 未設定なら Coolify で手動 Deploy するだけ。
+  trigger-deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Coolify deploy (optional)
+        env:
+          WEBHOOK: ${{ secrets.COOLIFY_DEPLOY_WEBHOOK }}
+          TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "COOLIFY_DEPLOY_WEBHOOK 未設定。Coolify で手動 Deploy してください。"
+            exit 0
+          fi
+          if [ -n "$TOKEN" ]; then
+            curl -fsSL -H "Authorization: Bearer $TOKEN" "$WEBHOOK" && echo "Coolify deploy を起動しました"
+          else
+            curl -fsSL "$WEBHOOK" && echo "Coolify deploy を起動しました"
+          fi

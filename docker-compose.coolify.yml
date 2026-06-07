@@ -1,30 +1,24 @@
 # Coolify 用: フロント/バック/DB を Docker Compose 1ファイルでデプロイする。
 #
-# Coolify の「New Resource → Docker Compose」でこのファイルを指定する。
-# 手順は docs/Coolifyデプロイ-compose.md を参照。
+# 【方式】イメージは GitHub Actions（標準 Docker）でビルドして ghcr.io に push 済み。
+#   Coolify はこのファイルの image: を pull するだけ（build はしない）。
+#   → Coolify のビルド環境（npm ci が devDeps を入れない等）の問題を完全に回避する。
+#   ビルドは .github/workflows/build-images.yml が main への push で自動実行する。
+#
+# 【初回セットアップ / 手順】docs/Coolifyデプロイ-compose.md 参照。
 #
 # ポイント：
 # - `SERVICE_FQDN_*` / `SERVICE_URL_*` / `SERVICE_PASSWORD_*` は Coolify のマジック変数。
-#   Coolify がデプロイ時に「公開ドメイン＋TLS の自動設定」「強いパスワードの自動生成」に
-#   置き換える。GOOGLE_* だけは Coolify の UI で手動設定する。
-# - 公開するのは frontend だけ（単一ドメイン構成）。backend / db はドメインを持たず、
-#   Docker 内部ネットワークでサービス名（backend / db）で繋がる。
-# - ホスト公開ポート（ports:）は書かない。Coolify のプロキシ(Traefik)が frontend の
-#   コンテナポート(3000)へルーティングする。
-# - backend は起動時に DB マイグレーションを自動適用する（backend/docker-entrypoint.sh）。
+#   build しなくても実行時に Coolify が置換する（公開ドメイン＋TLS・強いパスワード生成）。
+# - environment は必ずマップ形式（KEY: value）で書く。リスト形式（- KEY=value）だと
+#   Coolify が 0:/1: の数値キーに変換して `non-string key ... environment: 0` で落ちる（coolify#5064）。
+# - 公開するのは frontend だけ。backend / db はサービス名（backend / db）で内部接続する。
 
 services:
   frontend:
-    build:
-      context: ./frontend
-      args:
-        # rewrites() の中継先はビルド時に焼き込まれるため build args で渡す（実行時 env では効かない）。
-        # Coolify は同一 compose のサービスを内部DNSで解決できるので backend:3001 で届く。
-        BACKEND_URL: http://backend:3001
+    # ghcr.io の公開イメージを pull する。tag main は main への push 毎に更新される。
+    image: ghcr.io/gamebox777/chizunurie-frontend:main
     restart: unless-stopped
-    # 注意: environment は必ず「マップ形式（KEY: value）」で書く。リスト形式（- KEY=value）だと
-    #       Coolify が 0:/1: の数値キーに変換してしまい `non-string key ... environment: 0` で
-    #       ビルドが落ちる（coolify#5064）。
     environment:
       # ↓ これを書くと Coolify が frontend に公開ドメイン＋TLS を割り当て、:3000 へルーティングする。
       #   割り当て後、Coolify の UI でこの FQDN を自分の独自ドメインに変更できる。
@@ -37,10 +31,8 @@ services:
         condition: service_healthy
 
   backend:
-    build:
-      context: ./backend
+    image: ghcr.io/gamebox777/chizunurie-backend:main
     restart: unless-stopped
-    # environment はマップ形式で書く（理由は frontend のコメント参照・coolify#5064）。
     environment:
       NODE_ENV: production
       PORT: "3001"
