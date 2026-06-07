@@ -3,7 +3,8 @@
 import { useState } from 'react';
 import { signIn, signUp } from '@/lib/auth-client';
 import { logEvent } from '@/lib/userlog';
-import { validateNickname, NICKNAME_MAX } from './NicknameModal';
+import { useLocale } from '@/lib/i18n';
+import { validateNickname, NICKNAME_MIN, NICKNAME_MAX } from './NicknameModal';
 
 type Tab = 'login' | 'register';
 
@@ -16,6 +17,7 @@ const inputClass =
   'border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-800 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-400';
 
 export default function AuthModal({ initialTab, onClose }: Props) {
+  const { t } = useLocale();
   const [tab, setTab] = useState<Tab>(initialTab);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -30,19 +32,19 @@ export default function AuthModal({ initialTab, onClose }: Props) {
     try {
       if (tab === 'login') {
         const res = await signIn.email({ email, password });
-        if (res.error) throw new Error(res.error.message ?? 'ログインに失敗しました');
+        if (res.error) throw new Error(res.error.message ?? t('loginFailed'));
         logEvent('login');
       } else {
-        const validationError = validateNickname(name);
+        const validationError = validateNickname(name, t);
         if (validationError) throw new Error(validationError);
         // name にはニックネームを保存する（本名は保存しない）
         const res = await signUp.email({ email, password, name: name.trim() });
-        if (res.error) throw new Error(res.error.message ?? '登録に失敗しました');
+        if (res.error) throw new Error(res.error.message ?? t('registerFailed'));
         logEvent('signup');
       }
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '失敗しました');
+      setError(err instanceof Error ? err.message : t('genericFailed'));
     } finally {
       setLoading(false);
     }
@@ -56,10 +58,10 @@ export default function AuthModal({ initialTab, onClose }: Props) {
         callbackURL: `${window.location.origin}/`,
       });
       if (res?.error) {
-        throw new Error(res.error.message ?? 'Googleログインに失敗しました');
+        throw new Error(res.error.message ?? t('googleFailed'));
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Googleログインに失敗しました');
+      setError(err instanceof Error ? err.message : t('googleFailed'));
     }
   };
 
@@ -69,15 +71,15 @@ export default function AuthModal({ initialTab, onClose }: Props) {
       <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6">
         {/* タブ */}
         <div className="flex gap-1 mb-6 bg-gray-100 rounded-lg p-1">
-          {(['login', 'register'] as Tab[]).map((t) => (
+          {(['login', 'register'] as Tab[]).map((tt) => (
             <button
-              key={t}
-              onClick={() => { setTab(t); setError(''); }}
+              key={tt}
+              onClick={() => { setTab(tt); setError(''); }}
               className={`flex-1 py-1.5 text-sm rounded-md font-medium transition-colors ${
-                tab === t ? 'bg-white shadow text-gray-800' : 'text-gray-500 hover:text-gray-700'
+                tab === tt ? 'bg-white shadow text-gray-800' : 'text-gray-500 hover:text-gray-700'
               }`}
             >
-              {t === 'login' ? 'ログイン' : '新規登録'}
+              {tt === 'login' ? t('login') : t('register')}
             </button>
           ))}
         </div>
@@ -95,13 +97,13 @@ export default function AuthModal({ initialTab, onClose }: Props) {
             <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
             <path fill="none" d="M0 0h48v48H0z"/>
           </svg>
-          Googleでログイン
+          {t('googleLogin')}
         </button>
 
         {/* 区切り線 */}
         <div className="flex items-center gap-3 mb-4">
           <div className="flex-1 h-px bg-gray-200" />
-          <span className="text-xs text-gray-400">またはメールで</span>
+          <span className="text-xs text-gray-400">{t('orEmail')}</span>
           <div className="flex-1 h-px bg-gray-200" />
         </div>
 
@@ -109,7 +111,7 @@ export default function AuthModal({ initialTab, onClose }: Props) {
           {tab === 'register' && (
             <input
               type="text"
-              placeholder="ニックネーム（3〜12文字）"
+              placeholder={t('nicknameRegPlaceholder', NICKNAME_MIN as never, NICKNAME_MAX as never)}
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
@@ -119,7 +121,7 @@ export default function AuthModal({ initialTab, onClose }: Props) {
           )}
           <input
             type="email"
-            placeholder="メールアドレス"
+            placeholder={t('emailPlaceholder')}
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
@@ -127,7 +129,7 @@ export default function AuthModal({ initialTab, onClose }: Props) {
           />
           <input
             type="password"
-            placeholder="パスワード（8文字以上）"
+            placeholder={t('passwordPlaceholder')}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
@@ -140,12 +142,12 @@ export default function AuthModal({ initialTab, onClose }: Props) {
             disabled={loading}
             className="bg-blue-500 text-white rounded-lg py-2 text-sm font-medium hover:bg-blue-600 disabled:opacity-50 mt-1 transition-colors"
           >
-            {loading ? '処理中...' : tab === 'login' ? 'ログイン' : '登録する'}
+            {loading ? t('processing') : tab === 'login' ? t('login') : t('registerSubmit')}
           </button>
         </form>
 
         <p className="text-xs text-gray-400 text-center mt-4">
-          ログインしなくてもゲームをお試しいただけます
+          {t('guestNote')}
         </p>
       </div>
     </div>

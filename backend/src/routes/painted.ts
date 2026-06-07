@@ -32,6 +32,7 @@ type PaintBody = {
   lat?: unknown;
   lng?: unknown;
   municipality?: unknown;
+  region?: unknown;
 };
 
 // 緯度経度の妥当性チェック（範囲外・非数値は null）。塗った位置の記録用。
@@ -61,7 +62,12 @@ function parseBody(body: PaintBody | null) {
     typeof body.municipality === "string" && body.municipality.length <= 128
       ? body.municipality
       : null;
-  return { sourceLayer, keyCode, mode: resolvedMode, cost: resolvedCost, lat, lng, municipality };
+  // 世界版の州・県コード（adm1_code）。日本の外を塗った時だけ入る。
+  const region =
+    typeof body.region === "string" && body.region.length <= 32
+      ? body.region
+      : null;
+  return { sourceLayer, keyCode, mode: resolvedMode, cost: resolvedCost, lat, lng, municipality, region };
 }
 
 paintedRouter.get("/", async (c) => {
@@ -73,6 +79,7 @@ paintedRouter.get("/", async (c) => {
       keyCode: paintedRegions.keyCode,
       mode: paintedRegions.mode,
       municipality: paintedRegions.municipality,
+      region: paintedRegions.region,
     })
     .from(paintedRegions)
     .where(eq(paintedRegions.userId, user.id));
@@ -99,6 +106,7 @@ paintedRouter.post("/", async (c) => {
     lat: parsed.lat,
     lng: parsed.lng,
     municipality: parsed.municipality,
+    region: parsed.region,
   };
 
   if (parsed.mode === "gps") {

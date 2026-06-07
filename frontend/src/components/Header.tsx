@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useSession } from '@/lib/auth-client';
+import { useLocale } from '@/lib/i18n';
 import AuthModal from './AuthModal';
 import NicknameModal from './NicknameModal';
 import SettingsMenu from './SettingsMenu';
@@ -14,13 +15,14 @@ type HeaderProps = {
 
 export default function Header({ hoverAddress = '' }: HeaderProps) {
   const { data: session, isPending, refetch } = useSession();
+  const { t } = useLocale();
   const [modal, setModal] = useState<ModalTab | null>(null);
   const [editingNickname, setEditingNickname] = useState(false);
 
   return (
     <>
       <header className="h-12 bg-white shadow-sm flex items-center px-4 z-10 shrink-0 gap-4">
-        <h1 className="text-base font-bold text-gray-800 shrink-0">ちずぬりえ</h1>
+        <h1 className="text-base font-bold text-gray-800 shrink-0">{t('appTitle')}</h1>
         <span className="flex-1 text-sm text-gray-600 truncate min-w-0" title={hoverAddress}>
           {hoverAddress}
         </span>
@@ -45,13 +47,13 @@ export default function Header({ hoverAddress = '' }: HeaderProps) {
                 onClick={() => setModal('login')}
                 className="text-sm text-gray-600 hover:text-gray-800 transition-colors px-2 py-1"
               >
-                ログイン
+                {t('login')}
               </button>
               <button
                 onClick={() => setModal('register')}
                 className="text-sm bg-blue-500 text-white px-3 py-1.5 rounded-lg hover:bg-blue-600 transition-colors"
               >
-                新規登録
+                {t('register')}
               </button>
             </div>
           )

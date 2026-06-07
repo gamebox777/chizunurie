@@ -18,6 +18,9 @@
     "build-mesh": "node --max-old-space-size=8192 scripts/build-mesh.mjs",
     "build-muni-stats": "node --max-old-space-size=8192 scripts/build-muni-stats.mjs",
     "build-muni-kana": "node scripts/build-muni-kana.mjs",
+    "build-world-land": "node scripts/build-world-land.mjs",
+    "build-world": "node --max-old-space-size=8192 scripts/build-world.mjs",
+    "build-world-stats": "node --max-old-space-size=8192 scripts/build-world-stats.mjs",
     "build-pmtiles": "node --max-old-space-size=8192 scripts/build-pmtiles.mjs"
   },
   "devDependencies": {

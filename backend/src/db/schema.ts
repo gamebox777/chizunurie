@@ -90,6 +90,10 @@ export const paintedRegions = pgTable(
     lat: doublePrecision("lat"),
     lng: doublePrecision("lng"),
     municipality: text("municipality"),
+    // 世界版の塗り％集計用。塗った時点で world-states レイヤーから解決した
+    // 州・県コード（Natural Earth の adm1_code）。国は world-stats.json の
+    // stateMeta[adm1_code].adm0_a3 から導出する。日本の外を塗った時だけ入る。
+    region: text("region"),
     paintedAt: timestamp("painted_at", { withTimezone: true }).defaultNow(),
   },
   (t) => [unique().on(t.userId, t.sourceLayer, t.keyCode)]

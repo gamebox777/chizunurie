@@ -43,7 +43,12 @@
       "Bash(node -e \"const d=require\\('./frontend/public/data/muni-stats.json'\\); console.log\\('munis:',d.munis.length\\); console.log\\('sample:',JSON.stringify\\(d.munis.slice\\(0,3\\)\\)\\); console.log\\('has c[]?', d.munis.some\\(m=>'c' in m\\), ' has n?', d.munis.every\\(m=>typeof m.n==='number'\\)\\);\")",
       "Bash(./pmtiles show *)",
       "Bash(grep -iA12 \"vector_layers\\\\|layer\")",
-      "Bash(node -e \"let s='';process.stdin.on\\('data',d=>s+=d\\).on\\('end',\\(\\)=>{try{const m=JSON.parse\\(s\\);console.log\\('layers:',\\(m.vector_layers||[]\\).map\\(l=>l.id\\).join\\(', '\\)\\);}catch\\(e\\){console.log\\(s.slice\\(0,400\\)\\)}}\\)\")"
+      "Bash(node -e \"let s='';process.stdin.on\\('data',d=>s+=d\\).on\\('end',\\(\\)=>{try{const m=JSON.parse\\(s\\);console.log\\('layers:',\\(m.vector_layers||[]\\).map\\(l=>l.id\\).join\\(', '\\)\\);}catch\\(e\\){console.log\\(s.slice\\(0,400\\)\\)}}\\)\")",
+      "Bash(npx mapshaper *)",
+      "Bash(node scripts/build-world-land.mjs)",
+      "Bash(node -e \"const g=require\\('./frontend/public/data/world-land.geojson'\\); console.log\\('type',g.type,'features',g.features.length\\); const t={}; for\\(const f of g.features\\) t[f.geometry.type]=\\(t[f.geometry.type]||0\\)+1; console.log\\(t\\);\")",
+      "Bash(node -e \"const fs=require\\('fs'\\);const g=JSON.parse\\(fs.readFileSync\\('./frontend/public/data/world-land.geojson','utf8'\\)\\);console.log\\('type',g.type,'features',g.features&&g.features.length\\);const t={};for\\(const f of g.features\\)t[f.geometry.type]=\\(t[f.geometry.type]||0\\)+1;console.log\\(t\\);\")",
+      "Bash(node -e \"const fs=require\\('fs'\\);const g=JSON.parse\\(fs.readFileSync\\('public/data/prefectures.geojson','utf8'\\)\\);console.log\\('count',g.features.length\\);console.log\\(g.features.slice\\(0,3\\).map\\(f=>f.properties\\)\\);const names=g.features.map\\(f=>f.properties.nam_ja||f.properties.name||JSON.stringify\\(f.properties\\)\\);console.log\\(names.join\\(' '\\)\\);\")"
     ]
   }
 }

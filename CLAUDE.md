@@ -144,6 +144,60 @@ npm run build-muni-stats && npm run build-pmtiles
  mesh を除く市区町村・県境・ラベル・政令市レイヤーだけを焼く。メモリのため
  `--max-old-space-size=8192` 付き）
 
+### 世界版（国＋州・県）のデータパイプライン
+
+日本の外も同じ約1kmメッシュ（`meshCodeAt`・全球で CELLID 一意）で塗れる。地名・塗り％の
+集計単位だけ日本（市区町村）から **国（admin_0）＋州・県（admin_1）** に差し替える。
+日本版の `japan.pmtiles + muni-stats + muni-kana + 地理院ジオコーダ` 一式に対応する世界版は
+`world.pmtiles + world-stats + Natural Earth 10m`。下地・境界・ラベル・ホバー地名解決まで
+日本版と同じ構造を踏襲する。
+
+```bash
+npm run build-world        # NE 10m の国(admin_0)＋州/県(admin_1)を取得・簡略化し world.pmtiles を焼く
+npm run build-world-stats  # 州・県/国ごとの約1kmセル数（塗り％の分母）と地名メタを生成
+```
+
+データフロー：
+
+```
+Natural Earth Vector 10m（admin_0_countries / admin_1_states_provinces）
+  ↓ mapshaper（属性絞り込み・小島除去・簡略化）
+frontend/public/data/world-countries.geojson, world-states.geojson（中間ソース）
+  ├ scripts/build-world.mjs（geojson-vt + vt-pbf + pmtiles）
+  │   → frontend/public/data/world.pmtiles（layers: countries, states・zoom 0–8・約11MB）
+  └ scripts/build-world-stats.mjs（scanline ラスタライザ）
+      → frontend/public/data/world-stats.json（約500KB）
+        { states:{adm1_code→セル数}, countries:{adm0_a3→セル数},
+          stateMeta:{adm1_code→{name,name_ja,admin,adm0_a3}}, countryMeta:{adm0_a3→{name,name_ja}} }
+```
+
+ポイント（データ量・設計）：
+
+- **塗りの単位は焼かない**：日本と同じく約1kmメッシュは PMTiles に焼かず `Map.tsx` が表示範囲を
+  数式生成する。世界に広げても実行時コストは増えない（焼くと約100GB）。
+- **states は z8 まで**しか焼かない。塗りズーム（z10+）では MapLibre が z8 タイルを
+  **オーバーズーム**して表示・`queryRenderedFeatures` するので、地名解決が成立する。
+  これで世界全域でもタイル数・`world.pmtiles` サイズ（約11MB）が現実的に収まる。
+- **分母づくりは scanline 必須**：陸地は全球で約2億セル。`build-muni-stats` の per-cell
+  point-in-polygon では非現実的なので、`build-world-stats.mjs` は行ごとにエッジ交点を求めて
+  区間を一気に数える **scanline 方式**（セルを Set に貯めず O(総セル数)・低メモリ）。出力は約500KB。
+- **高緯度の歪みは未補正**：緯度1/120°・経度1/80°の等角グリッドのため、極に近い国
+  （ロシア・カナダ・グリーンランド等）はセル数が水増しされ % が低めに出る。仕様として割り切る。
+
+`Map.tsx` の地名・塗り％（日本版との対応）：
+
+- 下地・国境・州境・国名/州名ラベルは `world.pmtiles` の `countries`/`states` レイヤー。
+  地名解決は不可視の `world-states-fill`（opacity 0・クエリ専用）への `queryRenderedFeatures`。
+- 塗ったセルの州キー（`adm1_code`）は `regionByPaintedCellRef`（CELLID→adm1_code）に持ち、
+  塗り時に backend の `painted_regions.region` 列へ保存（日本の `municipality` 列に相当）。
+  国は `world-stats.json` の `stateMeta[adm1_code].adm0_a3` から導出する。
+- ホバー時、日本（市区町村キーあり）は従来どおり市区町村％、日本の外は **国％と州・県％を2段**で
+  左下パネルに表示する（`refreshHoverStat`）。分母 = `world-stats`、分子 = 塗りから集計（`rebuildPaintedByRegion`）。
+
+> backend スキーマに `painted_regions.region`（text）を追加済み。マイグレーション
+> （`backend/drizzle/`）を `npm run db:push`（または `db:migrate`）で適用すること。
+> 旧 `build-world-land.mjs` / `world-land.geojson` は `world.pmtiles` に置き換わり未使用。
+
 ### 重要な制約
 
 - `src/app/page.tsx` に `'use client'` が必要（`dynamic` + `ssr: false` を使うため）

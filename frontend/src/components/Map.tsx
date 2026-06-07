@@ -6,12 +6,16 @@ import { Protocol } from 'pmtiles';
 import { useSession } from '@/lib/auth-client';
 import { logEvent, setLastKnownLocation } from '@/lib/userlog';
 import { RUN_MODE, RUN_MODE_LABEL, RUN_MODE_BADGE } from '@/lib/runtime-env';
+import { useLocale, type Lang, type TFunc } from '@/lib/i18n';
+import { kanaToRomaji, prefRomaji } from '@/lib/romaji';
 
 const PAINT_API = '/api/backend/painted';
 const POINTS_API = '/api/backend/points';
 // 市区町村ごとの総メッシュ数（塗り％の分母）と meshcode→市区町村 の対応表。
 // 約37万セル分を含むため map 表示後に遅延ロードする（build-muni-stats.mjs が生成）。
 const MUNI_STATS_URL = '/data/muni-stats.json';
+// 世界版の塗り％の分母（州・県 adm1_code → セル数 / 国 adm0_a3 → セル数）と地名メタ。
+const WORLD_STATS_URL = '/data/world-stats.json';
 
 // ── 塗りポイント／レベル（GPS移動は無料・それ以外の塗りはポイント消費） ──────────
 // ※サーバー側（backend/src/lib/points.ts）が権威。max・level・exp はサーバーから受け取る。
@@ -49,29 +53,29 @@ type VideoRewardStatus = {
   available: boolean;
 };
 
-// 「+1まで mm:ss」表示用
-function formatCountdown(ms: number): string {
-  if (ms <= 0) return 'まもなく';
+// 「+1まで mm:ss」表示用。0以下は言語に応じた「まもなく / soon」。
+function formatCountdown(ms: number, t: TFunc): string {
+  if (ms <= 0) return t('countdownSoon');
   const total = Math.ceil(ms / 1000);
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-// 合計プレイ時間（秒）を「X時間Y分Z秒」などの日本語に整形する（秒単位まで表示）
-function formatPlayTime(sec: number): string {
-  if (!Number.isFinite(sec) || sec <= 0) return '0秒';
+// 合計プレイ時間（秒）を「X時間Y分Z秒 / Xh Ym Zs」に整形する（秒単位まで表示）
+function formatPlayTime(sec: number, t: TFunc): string {
+  if (!Number.isFinite(sec) || sec <= 0) return t('timeSec', 0 as never);
   const totalSec = Math.floor(sec);
   const d = Math.floor(totalSec / 86400);
   const h = Math.floor((totalSec % 86400) / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
   const s = totalSec % 60;
   const parts: string[] = [];
-  if (d > 0) parts.push(`${d}日`);
-  if (d > 0 || h > 0) parts.push(`${h}時間`);
-  if (d > 0 || h > 0 || m > 0) parts.push(`${m}分`);
-  parts.push(`${s}秒`);
-  return parts.join('');
+  if (d > 0) parts.push(t('timeDay', d as never));
+  if (d > 0 || h > 0) parts.push(t('timeHour', h as never));
+  if (d > 0 || h > 0 || m > 0) parts.push(t('timeMin', m as never));
+  parts.push(t('timeSec', s as never));
+  return parts.join('').trim();
 }
 
 // 塗り方モード。gps = 実際に訪問（最優先・黄）、manual = マウスで隣接塗り（茶）
@@ -83,7 +87,10 @@ const COLOR_MANUAL = '#a0522d'; // 茶色
 const BLANK_STYLE: maplibregl.StyleSpecification = {
   version: 8,
   sources: {},
-  glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+  // demotiles のフォントサーバーは Open Sans Regular を持たず 404 になるため、
+  // ラテン文字・数字（国名/州名ラベル・塗り％）を配信できる openmaptiles を使う。
+  // CJK は localIdeographFontFamily でローカル描画されるのでここには含まれない。
+  glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
   layers: [
     {
       id: 'background',
@@ -150,13 +157,83 @@ function meshCellRing(code: number): [number, number][] {
   ];
 }
 
-// 国土地理院の住所検索API（キー不要・日本の地名/住所→経緯度）
+// 国土地理院の住所検索API（キー不要・日本の地名/住所→経緯度・市区町村〜町丁目の細かさ）
 const GEOCODE_URL = 'https://msearch.gsi.go.jp/address-search/AddressSearch';
 
 type GeocodeResult = {
   geometry: { coordinates: [number, number]; type: 'Point' };
   properties: { title: string };
 };
+
+// 世界の地名検索（OpenStreetMap Nominatim・キー不要・日本語クエリ/表示にも対応）。
+// 日本は国土地理院の方が細かいので、Nominatim は主に日本の外をカバーする（粒度は粗め）。
+const WORLD_GEOCODE_URL = 'https://nominatim.openstreetmap.org/search';
+
+type NominatimResult = {
+  lat: string;
+  lon: string;
+  display_name: string;
+};
+
+// 検索結果の統一型。scope で日本（国土地理院・細かい）／世界（Nominatim・粗い）を区別する。
+type SearchHit = {
+  title: string;
+  lng: number;
+  lat: number;
+  scope: 'jp' | 'world';
+};
+
+// 検索でこの bbox 内の世界(Nominatim)結果は国土地理院の結果と重複しがちなので落とす。
+const JP_SEARCH_BOUNDS = { minLng: 122.9, maxLng: 154.0, minLat: 20.4, maxLat: 45.6 };
+function isInJapanBounds(lng: number, lat: number): boolean {
+  return (
+    lng >= JP_SEARCH_BOUNDS.minLng &&
+    lng <= JP_SEARCH_BOUNDS.maxLng &&
+    lat >= JP_SEARCH_BOUNDS.minLat &&
+    lat <= JP_SEARCH_BOUNDS.maxLat
+  );
+}
+
+// 国土地理院（日本・細かい）で検索。失敗時は空配列。
+async function searchJapan(query: string): Promise<SearchHit[]> {
+  try {
+    const res = await fetch(`${GEOCODE_URL}?q=${encodeURIComponent(query)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as GeocodeResult[];
+    if (!Array.isArray(data)) return [];
+    return data.map((r) => ({
+      title: r.properties.title,
+      lng: r.geometry.coordinates[0],
+      lat: r.geometry.coordinates[1],
+      scope: 'jp' as const,
+    }));
+  } catch (err) {
+    console.warn('gsi geocode failed', err);
+    return [];
+  }
+}
+
+// Nominatim（世界・粗い）で検索。accept-language で表示名の言語を切り替える。失敗時は空配列。
+async function searchWorld(query: string, lang: Lang): Promise<SearchHit[]> {
+  try {
+    const url =
+      `${WORLD_GEOCODE_URL}?format=jsonv2&limit=8&accept-language=${lang}` +
+      `&q=${encodeURIComponent(query)}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as NominatimResult[];
+    if (!Array.isArray(data)) return [];
+    return data.map((r) => ({
+      title: r.display_name,
+      lng: Number(r.lon),
+      lat: Number(r.lat),
+      scope: 'world' as const,
+    }));
+  } catch (err) {
+    console.warn('nominatim geocode failed', err);
+    return [];
+  }
+}
 
 // 国土地理院の逆ジオコーダ（経緯度→住所）。現地塗りで「グリッド内の近似住所」では
 // なく、現在地そのものの正確な住所（町丁目まで）を表示するのに使う。
@@ -405,10 +482,17 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     id: number;
     cost: number;
     muniKey: string | null;
+    region: { key: string; a3: string } | null;
     address: string;
   } | null>(null);
   const doManualPaintRef = useRef<
-    (id: number, muniKey: string | null, address: string, cost: number) => void
+    (
+      id: number,
+      muniKey: string | null,
+      region: { key: string; a3: string } | null,
+      address: string,
+      cost: number
+    ) => void
   >(() => {});
   // 動画リワード（動画視聴でそのレベルの満タン分を回復）
   const [rewardStatus, setRewardStatus] = useState<VideoRewardStatus | null>(null);
@@ -427,6 +511,16 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const totalByMuniRef = useRef<Map<string, number>>(new Map()); // "PREF|CITY" → 総セル数（分母）
   const paintedByMuniRef = useRef<Map<string, number>>(new Map()); // "PREF|CITY" → 塗ったセル数（分子）
   const hoverKeyRef = useRef<string | null>(null); // 現在ホバー中の市区町村キー
+  // ── 世界版の塗り％（州・県 adm1_code ＋ 国 adm0_a3 単位）──────────────────
+  // 日本の muni と同じ二段（分母=world-stats / 分子=塗ったセルから集計）。日本の外を塗ると入る。
+  const regionByPaintedCellRef = useRef<Map<number, string>>(new Map()); // CELLID → adm1_code
+  const totalByStateRef = useRef<Map<string, number>>(new Map()); // adm1_code → 総セル数（分母）
+  const totalByCountryRef = useRef<Map<string, number>>(new Map()); // adm0_a3 → 総セル数（分母）
+  const paintedByStateRef = useRef<Map<string, number>>(new Map()); // adm1_code → 塗ったセル数
+  const paintedByCountryRef = useRef<Map<string, number>>(new Map()); // adm0_a3 → 塗ったセル数
+  const stateMetaRef = useRef<Map<string, { name: string; name_ja: string; admin: string; adm0_a3: string }>>(new Map());
+  const countryMetaRef = useRef<Map<string, { name: string; name_ja: string }>>(new Map());
+  const hoverRegionRef = useRef<string | null>(null); // 現在ホバー中の adm1_code（日本外）
   // ラベル横に塗り％を出すためのクライアント側 GeoJSON（PMTiles のラベルは静的なので使えない）
   const muniLabelFCRef = useRef<GeoJSON.FeatureCollection | null>(null); // 市区町村名ポイント
   const cityLabelFCRef = useRef<GeoJSON.FeatureCollection | null>(null); // 政令指定都市ポリゴン
@@ -457,7 +551,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   // 地名検索ダイアログ
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<GeocodeResult[]>([]);
+  const [searchResults, setSearchResults] = useState<SearchHit[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -472,6 +566,12 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const [statsOpen, setStatsOpen] = useState(false);
   const openStatsRef = useRef<() => void>(() => {});
   const { data: session, isPending } = useSession();
+  // 言語（ゲーム画面の用語・地名のローマ字表示）。effect 内の同期参照用に ref も持つ。
+  const { t, lang } = useLocale();
+  const tRef = useRef<TFunc>(t);
+  tRef.current = t;
+  const langRef = useRef<Lang>(lang);
+  langRef.current = lang;
   const userId = session?.user?.id ?? null;
   const userIdRef = useRef<string | null>(null);
   // 開発者だけがデバッグメニューを使える。一般ユーザーには表示しない。
@@ -553,7 +653,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   // モック動画モーダルを開いて視聴カウントダウンを開始する。
   const openVideoReward = useCallback(() => {
     if (!userIdRef.current) {
-      showToast('ログインすると動画でポイントを回復できます');
+      showToast(tRef.current('needLoginVideo'));
       return;
     }
     setVideoPhase('watching');
@@ -588,10 +688,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         const reason = (data as { error?: string } | null)?.error;
         showToast(
           reason === 'cooldown'
-            ? 'まだ動画を見られません（クールダウン中）'
+            ? tRef.current('videoNotYet')
             : reason === 'daily_limit'
-              ? '本日の視聴上限に達しました'
-              : 'ポイントの回復に失敗しました'
+              ? tRef.current('rewardDailyLimit')
+              : tRef.current('recoverFailed')
         );
         closeVideoReward();
         return;
@@ -600,7 +700,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       if (ok.points) applyServerPoints(ok.points);
       if (ok.status) setRewardStatus(ok.status);
       closeVideoReward();
-      showToast(`動画視聴で塗りポイントを ${ok.granted ?? 0} 回復しました`);
+      showToast(tRef.current('recovered', (ok.granted ?? 0) as never));
     } catch (err) {
       console.warn('failed to claim video reward', err);
       setVideoPhase('error');
@@ -611,7 +711,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const confirmFarPaint = useCallback(() => {
     setConfirmPaint((pending) => {
       if (pending) {
-        doManualPaintRef.current(pending.id, pending.muniKey, pending.address, pending.cost);
+        doManualPaintRef.current(pending.id, pending.muniKey, pending.region, pending.address, pending.cost);
       }
       return null;
     });
@@ -672,7 +772,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     [applyServerPoints]
   );
 
-  // 地名/住所を検索（国土地理院API）
+  // 地名/住所を検索（日本＝国土地理院・細かい／世界＝Nominatim・粗い を並列で引いて統合）。
   const runSearch = useCallback(async (q: string) => {
     const query = q.trim();
     if (!query) return;
@@ -681,27 +781,33 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     setSearchError(null);
     setSearchResults([]);
     try {
-      const res = await fetch(`${GEOCODE_URL}?q=${encodeURIComponent(query)}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as GeocodeResult[];
-      if (!Array.isArray(data) || data.length === 0) {
-        setSearchError('見つかりませんでした');
+      const [jp, world] = await Promise.all([
+        searchJapan(query),
+        searchWorld(query, langRef.current),
+      ]);
+      // 日本は国土地理院が細かいので優先。世界結果のうち日本 bbox 内は重複なので落とす
+      // （ただし国土地理院が何も返さなかった時は世界結果をそのまま使う）。
+      const worldFiltered =
+        jp.length > 0 ? world.filter((h) => !isInJapanBounds(h.lng, h.lat)) : world;
+      const merged = [...jp.slice(0, 8), ...worldFiltered].slice(0, 12);
+      if (merged.length === 0) {
+        setSearchError(tRef.current('searchNotFound'));
         return;
       }
-      setSearchResults(data.slice(0, 10));
+      setSearchResults(merged);
     } catch (err) {
       console.warn('geocode failed', err);
-      setSearchError('検索に失敗しました');
+      setSearchError(tRef.current('searchFailed'));
     } finally {
       setSearchLoading(false);
     }
   }, []);
 
   // 検索結果の地点へ移動（メッシュが見える zoom 12 まで寄せる）
-  const flyToResult = useCallback((r: GeocodeResult) => {
+  const flyToResult = useCallback((r: SearchHit) => {
     const map = mapRef.current;
     if (!map) return;
-    const [lng, lat] = r.geometry.coordinates;
+    const { lng, lat } = r;
     map.flyTo({ center: [lng, lat], zoom: 12, duration: 1500 });
     setSearchOpen(false);
     setSearchResults([]);
@@ -896,23 +1002,64 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     []
   );
 
-  // ホバー中市区町村の塗り％を組み立てて state に反映
+  // ホバー中の塗り％を組み立てて state に反映。日本（市区町村）と世界（国・州/県）の
+  // どちらか — 日本の muni キーがあれば日本式、無ければホバー中の adm1_code で世界式。
   const refreshHoverStat = useCallback(() => {
     const key = hoverKeyRef.current;
-    if (!key) {
+    if (key) {
+      const city = key.split('|')[1] || key;
+      const total = totalByMuniRef.current.get(key);
+      if (total === undefined) {
+        setHoverStat(
+          totalByMuniRef.current.size === 0 ? tRef.current('hoverMeasuring', city as never) : null
+        );
+        return;
+      }
+      const paintedCount = paintedByMuniRef.current.get(key) ?? 0;
+      const pct = total > 0 ? Math.round((paintedCount / total) * 100) : 0;
+      setHoverStat(
+        tRef.current('hoverStat', city as never, String(pct) as never, paintedCount as never, total as never)
+      );
+      return;
+    }
+    // ── 世界（日本の外）：国％と州・県％を2段で出す ──
+    const rk = hoverRegionRef.current;
+    if (!rk) {
       setHoverStat(null);
       return;
     }
-    const city = key.split('|')[1] || key;
-    const total = totalByMuniRef.current.get(key);
-    if (total === undefined) {
-      // 統計ファイル未ロード or 対象外
-      setHoverStat(totalByMuniRef.current.size === 0 ? `${city}：計測中…` : null);
-      return;
+    const en = langRef.current === 'en';
+    const meta = stateMetaRef.current.get(rk);
+    // 分母が巨大なので整数丸めで 0% になる小さい値は小数（<0.1%）で見せる
+    const pctText = (painted: number, total: number) => {
+      if (total <= 0) return '0%';
+      const raw = (painted / total) * 100;
+      const r = Math.round(raw);
+      if (r === 0 && raw > 0) return raw < 0.1 ? '<0.1%' : `${raw.toFixed(1)}%`;
+      return `${r}%`;
+    };
+    const lines: string[] = [];
+    const a3 = meta?.adm0_a3 ?? '';
+    const cMeta = countryMetaRef.current.get(a3);
+    const cTotal = totalByCountryRef.current.get(a3);
+    if (cMeta && cTotal !== undefined) {
+      const cName = (en ? cMeta.name : cMeta.name_ja) || cMeta.name || a3;
+      const cPainted = paintedByCountryRef.current.get(a3) ?? 0;
+      lines.push(`${cName} ${pctText(cPainted, cTotal)}（${cPainted}/${cTotal}）`);
     }
-    const paintedCount = paintedByMuniRef.current.get(key) ?? 0;
-    const pct = total > 0 ? Math.round((paintedCount / total) * 100) : 0;
-    setHoverStat(`${city}　${pct}%（${paintedCount}/${total}）`);
+    const sTotal = totalByStateRef.current.get(rk);
+    if (meta && sTotal !== undefined) {
+      const sName = (en ? meta.name : meta.name_ja) || meta.name || rk;
+      const sPainted = paintedByStateRef.current.get(rk) ?? 0;
+      lines.push(`${sName} ${pctText(sPainted, sTotal)}（${sPainted}/${sTotal}）`);
+    }
+    setHoverStat(
+      lines.length > 0
+        ? lines.join('\n')
+        : totalByStateRef.current.size === 0
+          ? tRef.current('hoverMeasuring', (meta?.name_ja || meta?.name || '') as never)
+          : null
+    );
   }, []);
 
   // 塗り状態から市区町村ごとの塗りセル数を作り直す（対応表ロード時・DB復元時に呼ぶ）
@@ -930,6 +1077,27 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     refreshHoverStat();
   }, [refreshHoverStat]);
 
+  // 塗り状態から州・県／国ごとの塗りセル数を作り直す（world-stats ロード時・DB復元時に呼ぶ）。
+  // 国は state メタの adm0_a3 から導出する。
+  const rebuildPaintedByRegion = useCallback(() => {
+    const byState = new Map<string, number>();
+    const byCountry = new Map<string, number>();
+    const lookup = regionByPaintedCellRef.current;
+    const meta = stateMetaRef.current;
+    for (const pkey of Object.keys(paintedRef.current)) {
+      const [layer, idStr] = pkey.split(':');
+      if (layer !== 'mesh') continue;
+      const adm1 = lookup.get(Number(idStr));
+      if (!adm1) continue;
+      byState.set(adm1, (byState.get(adm1) ?? 0) + 1);
+      const a3 = meta.get(adm1)?.adm0_a3;
+      if (a3) byCountry.set(a3, (byCountry.get(a3) ?? 0) + 1);
+    }
+    paintedByStateRef.current = byState;
+    paintedByCountryRef.current = byCountry;
+    refreshHoverStat();
+  }, [refreshHoverStat]);
+
   // デバッグ用：自分の塗りを全消去する（地図・state・サーバーすべて）。ポイントは返金しない。
   const clearAllPaint = useCallback(async () => {
     // 塗りの描画は painted-overlay（painted state 駆動）なので state を空にすれば消える。
@@ -937,6 +1105,9 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     setPainted({});
     muniByPaintedCellRef.current = new Map();
     paintedByMuniRef.current = new Map();
+    regionByPaintedCellRef.current = new Map();
+    paintedByStateRef.current = new Map();
+    paintedByCountryRef.current = new Map();
     refreshHoverStat();
 
     if (!userIdRef.current) return;
@@ -961,6 +1132,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const applyLabelStats = useCallback(() => {
     const map = mapRef.current;
     if (!map) return;
+    const en = langRef.current === 'en'; // 英語版は地名をローマ字で見せる
     const totals = totalByMuniRef.current;
     const paintedC = paintedByMuniRef.current;
     const hasStats = totals.size > 0;
@@ -1013,14 +1185,17 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     if (muniFC) {
       for (const f of muniFC.features) {
         const p = f.properties ?? {};
-        const name = (p.N03_005 as string) || (p.N03_004 as string) || '';
+        const jaName = (p.N03_005 as string) || (p.N03_004 as string) || '';
+        const kana = kanaByCodeRef.current[p.N03_007 as string];
+        // 英語版はローマ字（読みが無ければ日本語名のまま）。読み仮名の添え字は出さない。
+        const name = en ? kanaToRomaji(kana) || jaName : jaName;
         const key = `${p.N03_001 ?? ''}|${p.N03_004 ?? ''}${p.N03_005 ?? ''}`;
         const total = totals.get(key);
         const painted = paintedC.get(key) ?? 0;
         f.properties = {
           ...p,
           nm: name + (hasStats && total ? pctSuffix(painted, total) : ''),
-          ym: yomiLine(kanaByCodeRef.current[p.N03_007 as string]),
+          ym: en ? '' : yomiLine(kana),
         };
       }
       (map.getSource('muni-labels') as maplibregl.GeoJSONSource | undefined)?.setData(muniFC);
@@ -1031,13 +1206,15 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     if (cityFC) {
       for (const f of cityFC.features) {
         const p = f.properties ?? {};
-        const name = (p.N03_004 as string) || '';
+        const jaName = (p.N03_004 as string) || '';
         const cp = `${p.N03_001 ?? ''}|${p.N03_004 ?? ''}`;
+        const kana = kanaByCityRef.current[cp];
+        const name = en ? kanaToRomaji(kana) || jaName : jaName;
         const agg = cityAgg.get(cp);
         f.properties = {
           ...p,
           nm: name + (hasStats && agg ? pctSuffix(agg[0], agg[1]) : ''),
-          ym: yomiLine(kanaByCityRef.current[cp]),
+          ym: en ? '' : yomiLine(kana),
         };
       }
       (map.getSource('city-labels') as maplibregl.GeoJSONSource | undefined)?.setData(cityFC);
@@ -1050,9 +1227,11 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         const p = f.properties ?? {};
         const name = (p.nam_ja as string) || '';
         const agg = prefAgg.get(name);
+        // 集計キーは日本語名のまま。表示だけ英語版でローマ字にする。
+        const display = en ? prefRomaji(name) : name;
         f.properties = {
           ...p,
-          lbl: name + (hasStats && agg ? pctSuffix(agg[0], agg[1]) : ''),
+          lbl: display + (hasStats && agg ? pctSuffix(agg[0], agg[1]) : ''),
         };
       }
       (map.getSource('pref-labels') as maplibregl.GeoJSONSource | undefined)?.setData(prefFC);
@@ -1125,6 +1304,96 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       map.addSource('prefectures-geojson', {
         type: 'geojson',
         data: '/data/prefectures.geojson',
+      });
+
+      // 世界の下地（国＝countries／州・県＝states）。日本版 japan.pmtiles と同じく
+      // PMTiles をタイル単位で range 取得するので、80MB 級でも一括ロードしない。
+      // 最初に追加して最下層に置くので、日本の白地図（municipalities-fill）が上を覆う。
+      // 塗りの単位は日本と同じ約1kmメッシュ（Map.tsx が数式生成）。states/countries は
+      // 下地・境界・ラベルと、ホバー時の地名解決（queryRenderedFeatures）に使う。
+      // states は z8 までしか焼いていないが、MapLibre が高ズームをオーバーズーム表示・
+      // クエリするので塗りズーム（z10+）でも州・県を解決できる（build-world.mjs 参照）。
+      map.addSource('world', {
+        type: 'vector',
+        url: 'pmtiles:///tiles/world',
+        attribution: '© Natural Earth',
+      });
+      // 陸地の白下地（国ポリゴン）。日本の白地図（municipalities-fill）と同じ白で揃える。
+      map.addLayer({
+        id: 'world-countries-fill',
+        type: 'fill',
+        source: 'world',
+        'source-layer': 'countries',
+        paint: { 'fill-color': '#ffffff', 'fill-opacity': 1 },
+      });
+      // 州・県の塗りつぶし（不可視・queryRenderedFeatures での地名解決専用）。
+      // fill-opacity 0 でも MapLibre のクエリ対象には含まれる。
+      map.addLayer({
+        id: 'world-states-fill',
+        type: 'fill',
+        source: 'world',
+        'source-layer': 'states',
+        paint: { 'fill-color': '#000000', 'fill-opacity': 0 },
+      });
+      // 州・県境（細線・z4 以上で薄く）。
+      map.addLayer({
+        id: 'world-states-border',
+        type: 'line',
+        source: 'world',
+        'source-layer': 'states',
+        minzoom: 4,
+        paint: {
+          'line-color': '#bcbcb2',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.2, 8, 0.8],
+          'line-opacity': 0.8,
+        },
+      });
+      // 国境（国どうしの境界線・州境より濃く太く）。
+      map.addLayer({
+        id: 'world-countries-outline',
+        type: 'line',
+        source: 'world',
+        'source-layer': 'countries',
+        paint: { 'line-color': '#a8a89f', 'line-width': ['interpolate', ['linear'], ['zoom'], 1, 0.5, 6, 1.2] },
+      });
+      // 国名ラベル（日本語名・無ければ英名）。
+      map.addLayer({
+        id: 'world-countries-label',
+        type: 'symbol',
+        source: 'world',
+        'source-layer': 'countries',
+        layout: {
+          'text-field': ['coalesce', ['get', 'NAME_JA'], ['get', 'NAME']],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 2, 10, 6, 14],
+          'text-font': ['Open Sans Regular'],
+          'text-max-width': 6,
+          'symbol-placement': 'point',
+        },
+        paint: {
+          'text-color': '#6b6b63',
+          'text-halo-color': '#ffffff',
+          'text-halo-width': 1.2,
+        },
+      });
+      // 州・県名ラベル（z5 以上・日本語名優先）。国名より小さく薄く。
+      map.addLayer({
+        id: 'world-states-label',
+        type: 'symbol',
+        source: 'world',
+        'source-layer': 'states',
+        minzoom: 5,
+        layout: {
+          'text-field': ['coalesce', ['get', 'name_ja'], ['get', 'name']],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 5, 9, 9, 12],
+          'text-font': ['Open Sans Regular'],
+          'text-max-width': 6,
+          'symbol-placement': 'point',
+        },
+        paint: {
+          'text-color': '#8a8a80',
+          'text-halo-color': '#ffffff',
+          'text-halo-width': 1,
+        },
       });
 
       // 市区町村フィル（白地図のベース。塗りはメッシュ側で行う）
@@ -1295,6 +1564,23 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         return { key: `${pref}|${city}`, address: pref + city };
       };
 
+      // 画面上の点 → 世界の州・県情報（adm1_code・国コード・表示名）。海上など無ければ null。
+      // world-states-fill は不可視（opacity 0）だが queryRenderedFeatures の対象になる。
+      // 日本国内でも prefecture を返す（japan の白地図に覆われていてもクエリは通る）。
+      const stateInfoAt = (
+        point: maplibregl.PointLike
+      ): { key: string; a3: string; address: string } | null => {
+        const feats = map.queryRenderedFeatures(point, { layers: ['world-states-fill'] });
+        const p = feats[0]?.properties;
+        if (!p || typeof p.adm1_code !== 'string' || !p.adm1_code) return null;
+        const a3 = typeof p.adm0_a3 === 'string' ? p.adm0_a3 : '';
+        const en = langRef.current === 'en';
+        const a3meta = countryMetaRef.current.get(a3);
+        const cName = (en ? a3meta?.name : a3meta?.name_ja) || a3meta?.name || (typeof p.admin === 'string' ? p.admin : '');
+        const sName = (en ? (p.name as string) : (p.name_ja as string)) || (p.name as string) || '';
+        return { key: p.adm1_code, a3, address: [cName, sName].filter(Boolean).join(' ') };
+      };
+
       // ホバー住所のキャッシュ（CELLID→町丁目入り住所）と逆ジオコーダのデバウンス
       const hoverAddrCache = new Map<number, string>();
       let hoverGeocodeTimer: number | null = null;
@@ -1306,6 +1592,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         meshHoverSrc()?.setData(EMPTY_FC);
         onHoverAddressChangeRef.current?.('');
         hoverKeyRef.current = null;
+        hoverRegionRef.current = null;
         refreshHoverStat();
         if (hoverGeocodeTimer !== null) {
           clearTimeout(hoverGeocodeTimer);
@@ -1313,21 +1600,28 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         }
       };
 
-      const setHover = (id: number, muniKey: string, address: string) => {
+      // muniKey は日本の市区町村キー（無ければ null＝日本の外）。region は世界の州・県。
+      const setHover = (
+        id: number,
+        muniKey: string | null,
+        region: { key: string; a3: string } | null,
+        address: string
+      ) => {
         if (hoverId === id) return;
         hoverId = id;
         meshHoverSrc()?.setData({ type: 'FeatureCollection', features: [cellFeature(id)] });
         map.getCanvas().style.cursor = 'pointer';
         hoverKeyRef.current = muniKey;
+        hoverRegionRef.current = region?.key ?? null;
         refreshHoverStat();
-        // まず市区町村まで即表示。続いて逆ジオコーダで町丁目まで補う（mesh はベイクしない）。
         const cached = hoverAddrCache.get(id);
         onHoverAddressChangeRef.current?.(cached ?? address);
         if (hoverGeocodeTimer !== null) {
           clearTimeout(hoverGeocodeTimer);
           hoverGeocodeTimer = null;
         }
-        if (cached === undefined) {
+        // 逆ジオコーダ（町丁目まで補う）は日本専用。日本の外（muniKey なし）では呼ばない。
+        if (muniKey && cached === undefined) {
           const [ri, ci] = gridFromMeshCode(id);
           const lng = (ci + 0.5) / MESH_LON_DIV;
           const lat = (ri + 0.5) / MESH_LAT_DIV;
@@ -1342,19 +1636,20 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
 
       map.on('mousemove', (e) => {
         if (map.getZoom() >= MESH_MIN_ZOOM) {
-          const info = muniInfoAt(e.point);
-          if (info) {
+          const info = muniInfoAt(e.point);     // 日本の市区町村（無ければ null）
+          const region = stateInfoAt(e.point);  // 世界の州・県（全球・日本含む）
+          if (info || region) {
             const id = meshCodeAt(e.lngLat.lng, e.lngLat.lat);
-            setHover(id, info.key, info.address);
+            // 表示住所は日本なら市区町村、無ければ世界の「国 州/県」
+            setHover(id, info?.key ?? null, region, info?.address ?? region?.address ?? '');
             // デバッグ：マウスオーバー塗りモードはカーソルが通ったセルを無料で塗る。
-            // 消しモードとは排他。gps（現地）は上書きしない。トーストは出さない（連発防止）。
             if (
               hoverPaintModeRef.current &&
               !eraseModeRef.current &&
               paintedRef.current[`mesh:${id}`] !== 'gps'
             ) {
-              const result = commitLocalPaint(id, 'manual', info.key, info.address, true);
-              if (result !== 'skip') syncPaint('POST', id, 'manual');
+              const result = commitLocalPaint(id, 'manual', info?.key ?? null, region, info?.address ?? region?.address ?? '', true);
+              if (result !== 'skip') syncPaint('POST', id, 'manual', region?.key ?? null);
             }
             return;
           }
@@ -1371,17 +1666,19 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       const syncPaint = (
         method: 'POST' | 'DELETE',
         id: number,
-        mode?: PaintMode
+        mode?: PaintMode,
+        regionKey?: string | null
       ) => {
         if (!userIdRef.current) return;
-        // POST のときは塗った位置の文脈（セル中心の緯度経度・市区町村）を添える。
+        // POST のときは塗った位置の文脈（セル中心の緯度経度・市区町村・州県コード）を添える。
         // ip/ua はサーバー側で取得する。DELETE には付けない。
-        const ctx: { lat?: number; lng?: number; municipality?: string | null } = {};
+        const ctx: { lat?: number; lng?: number; municipality?: string | null; region?: string | null } = {};
         if (method === 'POST') {
           const [ri, ci] = gridFromMeshCode(id);
           ctx.lat = (ri + 0.5) / MESH_LAT_DIV;
           ctx.lng = (ci + 0.5) / MESH_LON_DIV;
           ctx.municipality = muniKeyFor(id);
+          ctx.region = regionKey ?? regionByPaintedCellRef.current.get(id) ?? null;
         }
         fetch(PAINT_API, {
           method,
@@ -1406,10 +1703,13 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       // painted-overlay（painted state 駆動）が担うので feature-state は使わない。
       // 優先度 gps > manual（manual は gps を上書きしない）。戻り値で塗りの結果を返す。
       // muniKey は塗ったセルの "PREF|CITY"（陸地判定済みのハンドラ側で求めて渡す）。
+      // muniKey は日本の "PREF|CITY"（無ければ null）。region は世界の州・県（adm1_code＋adm0_a3）。
+      // どちらも陸地判定済みのハンドラ側で求めて渡す。日本では muni、日本の外では region が入る。
       const commitLocalPaint = (
         id: number,
         mode: PaintMode,
         muniKey: string | null,
+        region: { key: string; a3: string } | null,
         address?: string,
         silent = false
       ): 'new' | 'promoted' | 'skip' => {
@@ -1424,20 +1724,34 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
 
         if (!existing) {
           if (!silent && address) showToast(address);
-          // 新規セルのみ市区町村カウントを +1（gps への昇格では増やさない）
+          // 新規セルのみカウントを +1（gps への昇格では増やさない）
+          let changed = false;
           if (muniKey) {
             muniByPaintedCellRef.current.set(id, muniKey);
             paintedByMuniRef.current.set(muniKey, (paintedByMuniRef.current.get(muniKey) ?? 0) + 1);
-            refreshHoverStat();
+            changed = true;
           }
+          // 世界の州・県／国カウント（日本の外。日本内でも prefecture が取れれば加算される）
+          if (region) {
+            regionByPaintedCellRef.current.set(id, region.key);
+            paintedByStateRef.current.set(region.key, (paintedByStateRef.current.get(region.key) ?? 0) + 1);
+            if (region.a3) paintedByCountryRef.current.set(region.a3, (paintedByCountryRef.current.get(region.a3) ?? 0) + 1);
+            changed = true;
+          }
+          if (changed) refreshHoverStat();
         }
         return existing ? 'promoted' : 'new';
       };
 
       // GPS（実際の移動）塗り。無料なのでローカル反映＋同期のみ。
-      const applyPaint = (id: number, mode: PaintMode, muniKey: string | null) => {
-        const result = commitLocalPaint(id, mode, muniKey);
-        if (result !== 'skip') syncPaint('POST', id, mode);
+      const applyPaint = (
+        id: number,
+        mode: PaintMode,
+        muniKey: string | null,
+        region: { key: string; a3: string } | null
+      ) => {
+        const result = commitLocalPaint(id, mode, muniKey, region);
+        if (result !== 'skip') syncPaint('POST', id, mode, region?.key ?? null);
       };
 
       // ローカルの塗りを取り消す（state のみ。サーバー同期はしない）
@@ -1449,14 +1763,30 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         delete next[key];
         paintedRef.current = next;
         setPainted(next);
+        let changed = false;
         const muni = muniByPaintedCellRef.current.get(id);
         if (muni) {
           const n = (paintedByMuniRef.current.get(muni) ?? 0) - 1;
           if (n > 0) paintedByMuniRef.current.set(muni, n);
           else paintedByMuniRef.current.delete(muni);
           muniByPaintedCellRef.current.delete(id);
-          refreshHoverStat();
+          changed = true;
         }
+        const adm1 = regionByPaintedCellRef.current.get(id);
+        if (adm1) {
+          const ns = (paintedByStateRef.current.get(adm1) ?? 0) - 1;
+          if (ns > 0) paintedByStateRef.current.set(adm1, ns);
+          else paintedByStateRef.current.delete(adm1);
+          const a3 = stateMetaRef.current.get(adm1)?.adm0_a3;
+          if (a3) {
+            const nc = (paintedByCountryRef.current.get(a3) ?? 0) - 1;
+            if (nc > 0) paintedByCountryRef.current.set(a3, nc);
+            else paintedByCountryRef.current.delete(a3);
+          }
+          regionByPaintedCellRef.current.delete(id);
+          changed = true;
+        }
+        if (changed) refreshHoverStat();
         return true;
       };
 
@@ -1473,14 +1803,15 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       const doManualPaint = async (
         id: number,
         muniKey: string | null,
+        region: { key: string; a3: string } | null,
         address: string,
         cost: number
       ) => {
         if (!userIdRef.current) {
-          showToast('ログインすると塗りポイントを使って塗れます');
+          showToast(tRef.current('needLoginPaint'));
           return;
         }
-        if (commitLocalPaint(id, 'manual', muniKey, address) === 'skip') return;
+        if (commitLocalPaint(id, 'manual', muniKey, region, address) === 'skip') return;
 
         const prevPoints = pointsRef.current;
         const prevRegenAt = regenAtRef.current;
@@ -1508,6 +1839,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               lat: (ri + 0.5) / MESH_LAT_DIV,
               lng: (ci + 0.5) / MESH_LON_DIV,
               municipality: muniKey,
+              region: region?.key ?? null,
             }),
           });
           const data = (await res.json().catch(() => null)) as {
@@ -1519,7 +1851,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             removeLocalPaint(id);
             if (data?.points) applyServerPoints(data.points);
             else applyPointsState(prevPoints, prevRegenAt);
-            showToast('塗りポイントが足りません');
+            showToast(tRef.current('notEnoughPoints'));
             return;
           }
           if (!res.ok) {
@@ -1576,12 +1908,19 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         isAdjacentToPainted(id) || isAdjacentAcrossSea(id);
 
       // クリック地点のメッシュセルを取得（zoom が足りない or 海上＝陸地でない時は null）。
-      // CELLID は経緯度から数式で求め、陸地判定・市区町村は muniInfoAt で得る。
+      // CELLID は経緯度から数式で求め、陸地判定は日本＝muniInfoAt、世界＝stateInfoAt で行う。
+      // 日本なら muniKey が入り、日本の外でも世界の州・県（region）が取れれば塗れる。
       const pickFeatureAt = (e: maplibregl.MapMouseEvent) => {
         if (map.getZoom() < MESH_MIN_ZOOM) return null;
         const info = muniInfoAt(e.point);
-        if (!info) return null;
-        return { id: meshCodeAt(e.lngLat.lng, e.lngLat.lat), ...info };
+        const region = stateInfoAt(e.point);
+        if (!info && !region) return null; // 海上など陸地でない
+        return {
+          id: meshCodeAt(e.lngLat.lng, e.lngLat.lat),
+          muniKey: info?.key ?? null,
+          region: region ? { key: region.key, a3: region.a3 } : null,
+          address: info?.address ?? region?.address ?? '',
+        };
       };
 
       map.on('click', (e) => {
@@ -1602,45 +1941,45 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         // Shift+クリックの無料デバッグ塗りはモードを無視して許可する。
         const shiftHeld = (e.originalEvent as MouseEvent | undefined)?.shiftKey ?? false;
         if (paintModeRef.current !== 'tonari' && !shiftHeld) {
-          showToast('となり塗りモードにするとマウスで塗れます');
+          showToast(tRef.current('switchTonari'));
           return;
         }
         if (map.getZoom() < MESH_MIN_ZOOM) {
-          showToast('もっとズームすると塗れます');
+          showToast(tRef.current('zoomToPaint'));
           return;
         }
         const picked = pickFeatureAt(e);
         if (!picked) return;
-        const { id, key: muniKey, address } = picked;
+        const { id, muniKey, region, address } = picked;
         const existing = paintedRef.current[`mesh:${id}`];
 
         if (existing === 'gps') {
-          showToast('実際に訪れた場所です（マウスでは変更できません）');
+          showToast(tRef.current('gpsLocked'));
           return;
         }
         if (existing === 'manual') {
-          removePaint(id);
+          // 塗り済みを再クリックしても消さない（消すのはデバッグの消しモードのみ）。
           return;
         }
         // 未塗り → 塗りポイントを使って塗る（ログイン必須）。
         //   隣接（海越え可）= COST_ADJACENT / 離れた場所 = COST_FAR（確認ダイアログ）。
         // Shift を押しながらだと隣接判定もコストも無視して無料で塗れる（開発者のデバッグ用）。
         if (!userIdRef.current) {
-          showToast('ログインすると塗りポイントを使って塗れます');
+          showToast(tRef.current('needLoginPaint'));
           return;
         }
         const freeDebug = shiftHeld && isDeveloperRef.current;
         const cost = freeDebug ? 0 : isAdjacent(id) ? COST_ADJACENT : COST_FAR;
         if (cost > 0 && pointsRef.current < cost) {
-          showToast(`塗りポイントが足りません（残り ${pointsRef.current}）`);
+          showToast(tRef.current('notEnoughPointsLeft', pointsRef.current as never));
           return;
         }
         if (cost >= COST_FAR) {
           // 離れた場所は確認ダイアログを出してから塗る
-          setConfirmPaint({ id, cost, muniKey, address });
+          setConfirmPaint({ id, cost, muniKey, region, address });
           return;
         }
-        doManualPaint(id, muniKey, address, cost);
+        doManualPaint(id, muniKey, region, address, cost);
       });
 
       // ── 現在地の住所ラベル（青い点の真下に正確な住所を表示）──────────
@@ -1682,10 +2021,14 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         // 市区町村キー（塗り％用）は表示中なら municipalities から拾う。ズームが浅い／
         // 画面外なら null（GPS塗り自体は数式で成立するのでセルは塗れる）。
         let muniKey: string | null = null;
+        let region: { key: string; a3: string } | null = null;
         if (map.getZoom() >= MESH_MIN_ZOOM) {
-          muniKey = muniInfoAt(map.project(lngLat))?.key ?? null;
+          const pt = map.project(lngLat);
+          muniKey = muniInfoAt(pt)?.key ?? null;
+          const st = stateInfoAt(pt);
+          region = st ? { key: st.key, a3: st.a3 } : null;
         }
-        applyPaint(id, 'gps', muniKey);
+        applyPaint(id, 'gps', muniKey, region);
         // 現地塗りモードでは、グリッド内の近似住所ではなく現在地の正確な住所を表示する。
         // 同じメッシュセル内では再取得しない（移動して別セルに入った時だけ問い合わせる）。
         if (paintModeRef.current === 'genchi' && id !== lastGeocodedId) {
@@ -1715,10 +2058,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       geolocate.on('error', (err: GeolocationPositionError) => {
         const msg =
           err?.code === 1
-            ? '位置情報の利用が許可されていません（ブラウザの設定を確認してください）'
+            ? tRef.current('geoDenied')
             : err?.code === 3
-              ? '位置情報の取得がタイムアウトしました'
-              : '位置情報を取得できませんでした';
+              ? tRef.current('geoTimeout')
+              : tRef.current('geoFailed');
         showToast(msg);
         console.warn('geolocation error', { code: err?.code, message: err?.message });
       });
@@ -1859,6 +2202,9 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       setPainted({});
       muniByPaintedCellRef.current = new Map();
       paintedByMuniRef.current = new Map();
+      regionByPaintedCellRef.current = new Map();
+      paintedByStateRef.current = new Map();
+      paintedByCountryRef.current = new Map();
       refreshHoverStat();
     };
 
@@ -1878,6 +2224,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             keyCode: string;
             mode?: string;
             municipality?: string | null;
+            region?: string | null;
           }[];
         };
         if (cancelled) return;
@@ -1890,12 +2237,14 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           if (!Number.isFinite(id)) continue;
           const mode: PaintMode = row.mode === 'gps' ? 'gps' : 'manual';
           next[`mesh:${id}`] = mode;
-          // 塗り％集計用に cell→市区町村 を保存時の値から復元する
+          // 塗り％集計用に cell→市区町村 / cell→州県 を保存時の値から復元する
           if (row.municipality) muniByPaintedCellRef.current.set(id, row.municipality);
+          if (row.region) regionByPaintedCellRef.current.set(id, row.region);
         }
         paintedRef.current = next;
         setPainted(next);
         rebuildPaintedByMuni(); // 復元した塗りを市区町村ごとに集計し直す
+        rebuildPaintedByRegion(); // 同じく州・県／国ごとに集計し直す
       } catch (err) {
         console.warn('failed to load painted regions', err);
       }
@@ -1904,7 +2253,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     return () => {
       cancelled = true;
     };
-  }, [userId, isPending, mapReady, refreshHoverStat, rebuildPaintedByMuni]);
+  }, [userId, isPending, mapReady, refreshHoverStat, rebuildPaintedByMuni, rebuildPaintedByRegion]);
 
   // 塗り状態が変わったら低ズーム用オーバーレイを更新
   useEffect(() => {
@@ -2050,6 +2399,43 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     };
   }, [mapReady, rebuildPaintedByMuni, applyLabelStats]);
 
+  // 世界版の塗り％の分母（州・県／国ごとの総セル数）と地名メタを遅延ロード（約500KB）。
+  // build-world-stats.mjs が生成。日本の muni-stats と独立に扱う。
+  useEffect(() => {
+    if (!mapReady || totalByStateRef.current.size > 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(WORLD_STATS_URL);
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          states: Record<string, number>;
+          countries: Record<string, number>;
+          stateMeta: Record<string, { name: string; name_ja: string; admin: string; adm0_a3: string }>;
+          countryMeta: Record<string, { name: string; name_ja: string }>;
+        };
+        if (cancelled) return;
+        totalByStateRef.current = new Map(Object.entries(data.states));
+        totalByCountryRef.current = new Map(Object.entries(data.countries));
+        stateMetaRef.current = new Map(Object.entries(data.stateMeta ?? {}));
+        countryMetaRef.current = new Map(Object.entries(data.countryMeta ?? {}));
+        rebuildPaintedByRegion(); // 既に復元済みの塗りを州・県／国ごとに集計
+      } catch (err) {
+        console.warn('failed to load world stats', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mapReady, rebuildPaintedByRegion]);
+
+  // 言語を切り替えたらラベル（地名のローマ字／日本語）とホバー％を作り直す。
+  useEffect(() => {
+    if (!mapReady) return;
+    applyLabelStats();
+    refreshHoverStat();
+  }, [lang, mapReady, applyLabelStats, refreshHoverStat]);
+
   const modes = Object.values(painted);
   const count = modes.length;
   const gpsCount = modes.filter((m) => m === 'gps').length;
@@ -2108,7 +2494,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               : 'bg-white text-gray-600 hover:bg-gray-50'
           }`}
         >
-          現地塗り
+          {t('modeGenchi')}
         </button>
         <button
           type="button"
@@ -2121,13 +2507,13 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           }`}
           style={paintMode === 'tonari' ? { background: COLOR_MANUAL } : undefined}
         >
-          となり塗り
+          {t('modeTonari')}
         </button>
       </div>
       {(hoverStat || userId) && (
         <div className="absolute bottom-4 left-4 bg-white rounded-lg px-4 py-2 shadow text-sm font-medium text-gray-700 space-y-1">
           {hoverStat && (
-            <div className="text-gray-900 font-semibold">
+            <div className="text-gray-900 font-semibold whitespace-pre-line">
               {hoverStat}
             </div>
           )}
@@ -2147,21 +2533,21 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                 </div>
               </div>
               <div className="text-[10px] text-gray-500">
-                経験値 {exp} / {expToNext}
+                {t('expLabel', exp as never, expToNext as never)}
               </div>
               <div className="text-[10px] text-gray-500">
-                累計獲得経験値 {totalExp.toLocaleString()}
+                {t('totalExpLabel', totalExp.toLocaleString() as never)}
               </div>
               <div
                 className={`font-semibold ${
                   points > maxPoints ? 'text-red-600' : 'text-gray-900'
                 }`}
               >
-                塗りポイント: {points} / {maxPoints}
+                {t('paintPoints', points as never, maxPoints as never)}
               </div>
               {regenAt !== null && points < maxPoints && (
                 <div className="text-xs text-gray-500">
-                  +1まで {formatCountdown(regenAt - nowTick)}
+                  {t('regenIn', formatCountdown(regenAt - nowTick, t) as never)}
                 </div>
               )}
               {/* 動画リワード：動画を見てそのレベルの満タン分を回復 */}
@@ -2186,14 +2572,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                     }`}
                   >
                     {onCooldown
-                      ? `回復まで ${formatCountdown(cooldownLeft)}`
+                      ? t('rewardCooldown', formatCountdown(cooldownLeft, t) as never)
                       : dailyLimit
-                        ? '本日の視聴上限に達しました'
-                        : `▶ 動画を見て回復${
-                            rewardStatus
-                              ? `（残り${rewardStatus.remainingToday}回）`
-                              : ''
-                          }`}
+                        ? t('rewardDailyLimit')
+                        : t('rewardWatch', (rewardStatus ? rewardStatus.remainingToday : undefined) as never)}
                   </button>
                 );
               })()}
@@ -2248,13 +2630,13 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         >
           <div className="level-up-pop flex flex-col items-center gap-1 rounded-2xl bg-gradient-to-b from-yellow-400 to-amber-500 px-8 py-5 text-center shadow-2xl ring-4 ring-yellow-200">
             <span className="text-xs font-bold tracking-widest text-amber-900">
-              LEVEL UP!
+              {t('levelUp')}
             </span>
             <span className="text-4xl font-black text-white drop-shadow">
               Lv.{levelUp.to}
             </span>
             <span className="text-xs font-semibold text-amber-900">
-              塗りポイント上限 +1
+              {t('maxPointPlus')}
             </span>
           </div>
         </div>
@@ -2267,10 +2649,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           <div
             className="w-[90%] max-w-md rounded-xl bg-white p-5 shadow-xl"
             role="dialog"
-            aria-label="動画を見てポイント回復"
+            aria-label={t('videoTitle')}
           >
             <h2 className="mb-3 text-sm font-semibold text-gray-800">
-              動画を見て塗りポイントを回復
+              {t('videoTitle')}
             </h2>
             {/* モック動画プレースホルダ（実広告SDK導入時はここを差し替える） */}
             <div className="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-lg bg-gray-900">
@@ -2281,7 +2663,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                   : '00:00'}
               </span>
               <span className="absolute left-3 top-2 rounded bg-white/20 px-2 py-0.5 text-[10px] font-bold text-white">
-                広告（サンプル）
+                {t('videoAdSample')}
               </span>
             </div>
             {/* 進捗バー */}
@@ -2299,11 +2681,11 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             </div>
             <div className="mt-3 text-center text-sm text-gray-600">
               {videoPhase === 'watching' &&
-                `あと ${videoLeftSec} 秒で「そのレベルの満タン分」を回復します`}
-              {videoPhase === 'claiming' && 'ポイントを回復しています…'}
+                t('videoWatching', videoLeftSec as never)}
+              {videoPhase === 'claiming' && t('videoClaiming')}
               {videoPhase === 'error' && (
                 <span className="text-red-600">
-                  回復に失敗しました。もう一度お試しください。
+                  {t('videoError')}
                 </span>
               )}
             </div>
@@ -2315,14 +2697,14 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                     className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100"
                     onClick={closeVideoReward}
                   >
-                    閉じる
+                    {t('close')}
                   </button>
                   <button
                     type="button"
                     className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600"
                     onClick={claimVideoReward}
                   >
-                    もう一度受け取る
+                    {t('retry')}
                   </button>
                 </>
               ) : (
@@ -2332,7 +2714,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                   onClick={closeVideoReward}
                   disabled={videoPhase === 'claiming'}
                 >
-                  {videoPhase === 'watching' ? 'やめる' : '閉じる'}
+                  {videoPhase === 'watching' ? t('stop') : t('close')}
                 </button>
               )}
             </div>
@@ -2347,16 +2729,14 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           <div
             className="w-[90%] max-w-sm bg-white rounded-xl shadow-xl p-5"
             role="dialog"
-            aria-label="塗りの確認"
+            aria-label={t('confirmFarTitle')}
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="text-sm font-semibold text-gray-800 mb-2">
-              離れた場所を塗りますか？
+              {t('confirmFarTitle')}
             </h2>
-            <p className="text-sm text-gray-600 mb-4">
-              塗り済みエリアから離れているため、塗りポイントを {confirmPaint.cost} 消費します。
-              <br />
-              （残り {points} ポイント）
+            <p className="text-sm text-gray-600 mb-4 whitespace-pre-line">
+              {t('confirmFarBody', confirmPaint.cost as never, points as never)}
             </p>
             <div className="flex justify-end gap-2">
               <button
@@ -2364,14 +2744,14 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                 className="px-4 py-2 text-sm font-medium text-gray-600 rounded-lg hover:bg-gray-100"
                 onClick={() => setConfirmPaint(null)}
               >
-                キャンセル
+                {t('cancel')}
               </button>
               <button
                 type="button"
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"
                 onClick={confirmFarPaint}
               >
-                {confirmPaint.cost}ポイント使って塗る
+                {t('confirmFarPaint', confirmPaint.cost as never)}
               </button>
             </div>
           </div>
@@ -2385,14 +2765,14 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           <div
             className="w-[90%] max-w-md bg-white rounded-xl shadow-xl p-4"
             role="dialog"
-            aria-label="地名検索"
+            aria-label={t('searchTitle')}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-gray-800">地名を検索</h2>
+              <h2 className="text-sm font-semibold text-gray-800">{t('searchTitle')}</h2>
               <button
                 type="button"
-                aria-label="閉じる"
+                aria-label={t('close')}
                 className="text-gray-400 hover:text-gray-600 text-lg leading-none"
                 onClick={() => setSearchOpen(false)}
               >
@@ -2411,7 +2791,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="例：東京都 / 横浜市 / 京都市左京区"
+                placeholder={t('searchPlaceholder')}
                 className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-400"
               />
               <button
@@ -2419,7 +2799,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                 disabled={searchLoading || !searchQuery.trim()}
                 className="bg-blue-600 text-white rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50 hover:bg-blue-700"
               >
-                {searchLoading ? '検索中…' : '検索'}
+                {searchLoading ? t('searching') : t('searchButton')}
               </button>
             </form>
             {searchError && (
@@ -2428,13 +2808,22 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             {searchResults.length > 0 && (
               <ul className="mt-3 max-h-72 overflow-y-auto divide-y divide-gray-100">
                 {searchResults.map((r, i) => (
-                  <li key={`${r.properties.title}-${i}`}>
+                  <li key={`${r.title}-${i}`}>
                     <button
                       type="button"
-                      className="w-full text-left px-2 py-2 text-sm text-gray-800 hover:bg-gray-50 rounded"
+                      className="flex w-full items-start gap-2 px-2 py-2 text-left text-sm text-gray-800 hover:bg-gray-50 rounded"
                       onClick={() => flyToResult(r)}
                     >
-                      {r.properties.title}
+                      <span
+                        className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                          r.scope === 'jp'
+                            ? 'bg-blue-50 text-blue-600'
+                            : 'bg-emerald-50 text-emerald-600'
+                        }`}
+                      >
+                        {t(r.scope === 'jp' ? 'searchScopeJp' : 'searchScopeWorld')}
+                      </span>
+                      <span className="flex-1">{r.title}</span>
                     </button>
                   </li>
                 ))}
@@ -2594,14 +2983,14 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           <div
             className="w-80 max-w-[85%] h-full bg-white shadow-xl p-4 overflow-y-auto"
             role="dialog"
-            aria-label="データ詳細"
+            aria-label={t('statsTitle')}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-bold text-gray-800">データ詳細</h2>
+              <h2 className="text-base font-bold text-gray-800">{t('statsTitle')}</h2>
               <button
                 type="button"
-                aria-label="閉じる"
+                aria-label={t('close')}
                 className="text-gray-400 hover:text-gray-600 text-lg leading-none"
                 onClick={() => setStatsOpen(false)}
               >
@@ -2628,17 +3017,17 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                   </span>
                 </div>
                 <div className="flex items-baseline justify-between">
-                  <span className="text-[11px] text-gray-500">累計獲得経験値</span>
+                  <span className="text-[11px] text-gray-500">{t('totalExpShort')}</span>
                   <span className="text-sm font-semibold text-gray-900 tabular-nums">
                     {totalExp.toLocaleString()}
                   </span>
                 </div>
                 <div className="text-sm font-semibold text-gray-900">
-                  塗りポイント: {points} / {maxPoints}
+                  {t('paintPoints', points as never, maxPoints as never)}
                 </div>
                 {regenAt !== null && points < maxPoints && (
                   <div className="text-xs text-gray-500">
-                    +1まで {formatCountdown(regenAt - nowTick)}
+                    {t('regenIn', formatCountdown(regenAt - nowTick, t) as never)}
                   </div>
                 )}
               </div>
@@ -2647,13 +3036,14 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             {/* 合計プレイ時間（パネル表示中は前回計上からの経過秒を足して秒単位でリアルタイム更新） */}
             {userId && (
               <div className="mb-4 flex items-baseline justify-between rounded-lg bg-gray-50 px-3 py-2">
-                <span className="text-[11px] text-gray-500">⏱ 合計プレイ時間</span>
+                <span className="text-[11px] text-gray-500">{t('playTime')}</span>
                 <span className="text-sm font-semibold text-gray-900 tabular-nums">
                   {formatPlayTime(
                     playTimeSec +
                       (lastBeatRef.current > 0
                         ? Math.max(0, Math.floor((nowTick - lastBeatRef.current) / 1000))
-                        : 0)
+                        : 0),
+                    t
                   )}
                 </span>
               </div>
@@ -2663,19 +3053,19 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             <div className="grid grid-cols-3 gap-2 mb-4">
               <div className="rounded-lg bg-gray-50 px-2 py-2 text-center">
                 <div className="text-lg font-bold text-gray-900">{count}</div>
-                <div className="text-[11px] text-gray-500">塗った地域</div>
+                <div className="text-[11px] text-gray-500">{t('paintedRegions')}</div>
               </div>
               <div className="rounded-lg bg-gray-50 px-2 py-2 text-center">
                 <div className="text-lg font-bold" style={{ color: COLOR_GPS }}>
                   {gpsCount}
                 </div>
-                <div className="text-[11px] text-gray-500">訪問(GPS)</div>
+                <div className="text-[11px] text-gray-500">{t('visitedGps')}</div>
               </div>
               <div className="rounded-lg bg-gray-50 px-2 py-2 text-center">
                 <div className="text-lg font-bold" style={{ color: COLOR_MANUAL }}>
                   {manualCount}
                 </div>
-                <div className="text-[11px] text-gray-500">隣接塗り</div>
+                <div className="text-[11px] text-gray-500">{t('adjacentPaint')}</div>
               </div>
             </div>
 
@@ -2686,24 +3076,24 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                   {stats ? stats.prefVisited : 0}
                   <span className="text-xs font-normal text-gray-400"> / {TOTAL_PREFS}</span>
                 </div>
-                <div className="text-[11px] text-gray-500">訪れた都道府県</div>
+                <div className="text-[11px] text-gray-500">{t('prefVisited')}</div>
               </div>
               <div className="rounded-lg bg-gray-50 px-3 py-2">
                 <div className="text-sm font-bold text-gray-900">
                   {stats ? stats.muniVisited : 0}
                 </div>
-                <div className="text-[11px] text-gray-500">訪れた市区町村</div>
+                <div className="text-[11px] text-gray-500">{t('muniVisited')}</div>
               </div>
             </div>
 
             {/* 日本全体の塗り％ */}
             <div className="mb-4 rounded-lg border border-gray-200 px-3 py-2.5">
               <div className="flex items-baseline justify-between mb-1">
-                <span className="text-sm font-bold text-gray-800">🗾 日本全体</span>
+                <span className="text-sm font-bold text-gray-800">{t('japanWhole')}</span>
                 <span className="text-sm text-gray-600">
                   {(() => {
                     const nt = stats?.nationTotal ?? 0;
-                    if (nt <= 0) return count === 0 ? '0%' : '計算中…';
+                    if (nt <= 0) return count === 0 ? '0%' : t('calculating');
                     const pct = (count / nt) * 100;
                     const label =
                       pct > 0 && pct < 0.1 ? '<0.1%' : `${pct < 10 ? pct.toFixed(2) : Math.round(pct)}%`;
@@ -2733,7 +3123,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             </div>
 
             {/* 都道府県ごとの塗り％（多い順） */}
-            <h3 className="text-xs font-semibold text-gray-600 mb-2">都道府県ごとの塗り</h3>
+            <h3 className="text-xs font-semibold text-gray-600 mb-2">{t('perPrefTitle')}</h3>
             {stats && stats.prefs.length > 0 ? (
               <ul className="space-y-2">
                 {stats.prefs.map((p) => {
@@ -2743,7 +3133,9 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                   return (
                     <li key={p.name}>
                       <div className="flex items-baseline justify-between text-xs mb-0.5">
-                        <span className="font-medium text-gray-800">{p.name}</span>
+                        <span className="font-medium text-gray-800">
+                          {lang === 'en' ? prefRomaji(p.name) : p.name}
+                        </span>
                         <span className="text-gray-500">
                           {pctLabel}
                           <span className="text-gray-400">（{p.painted}/{p.total}）</span>
@@ -2764,7 +3156,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               </ul>
             ) : (
               <p className="text-xs text-gray-400">
-                {count === 0 ? 'まだ塗った地域がありません' : '地域内訳を計算中…'}
+                {count === 0 ? t('noPainted') : t('calcBreakdown')}
               </p>
             )}
           </div>
