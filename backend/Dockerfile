@@ -1,23 +1,12 @@
-# build と deps を1ステージにまとめる。
-# Coolify 環境でのみ `tsc` が exit 127（= ./node_modules/.bin/tsc が無い）で落ちる。
-# ローカル(docker / docker compose build)では --include=dev で必ず devDeps が入り再現しない。
-# → Coolify では npm ci 後に typescript(devDep) が入っていないと判断。
-#   下で有無をログに出し、無ければ明示インストールして自己修復する。
+# ビルドに必要な typescript / @types/node は dependencies に入れている。
+# 理由: Coolify のビルド環境では npm ci が devDependencies を入れない（実機で確認）。
+#       本番イメージのビルドに必要なものは dependencies 側に置く方針にした。
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --include=dev
-# tsc(typescript) の有無を確認。無ければ明示的に入れる（ログで原因も分かる）。
-RUN if [ -e node_modules/typescript/bin/tsc ]; then \
-      echo ">>> typescript present after npm ci"; \
-    else \
-      echo ">>> typescript MISSING after npm ci (Coolify が devDeps を入れていない) — 明示インストールします"; \
-      ls -la node_modules/.bin/ || true; \
-      npm install --no-save typescript@5; \
-    fi
+RUN npm ci
 COPY . .
-# npx は node_modules のローカル tsc を使う（PATH 非依存）。
-RUN npx tsc
+RUN npm run build
 
 FROM node:20-alpine AS runner
 WORKDIR /app
