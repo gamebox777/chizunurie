@@ -65,6 +65,11 @@ services:
       # frontend/backend の DATABASE_URL と同じマジック変数を使うので値が一致する。
       POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
       POSTGRES_DB: chizunurie
+    # DBeaver 等から Tailscale 越しの SSH トンネルで覗くため、ホストの 127.0.0.1 にだけ
+    # 5432 を公開する（インターネットには出ない・SSH=Tailscale 経由からのみ到達）。
+    # 詳細は docs/本番DB-DBeaver接続.md を参照。
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

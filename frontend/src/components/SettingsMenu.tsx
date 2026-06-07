@@ -5,6 +5,13 @@ import Link from 'next/link';
 import { signOut } from '@/lib/auth-client';
 import { logEvent } from '@/lib/userlog';
 import { useLocale } from '@/lib/i18n';
+import {
+  isSeEnabled,
+  setSeEnabled,
+  getBgmTrack,
+  setBgmTrack,
+  type BgmTrack,
+} from '@/lib/sound';
 
 type Props = {
   // 現在のニックネーム（メニュー先頭に表示）
@@ -22,6 +29,30 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const { lang, setLang, t } = useLocale();
+
+  // サウンド設定（localStorage 永続化）。初期値は描画後に同期する（SSR/水和対策）。
+  const [seOn, setSeOn] = useState(true);
+  const [bgmTrack, setTrack] = useState<BgmTrack>(0);
+  useEffect(() => {
+    setSeOn(isSeEnabled());
+    setTrack(getBgmTrack());
+  }, []);
+  const toggleSe = () => {
+    const next = !seOn;
+    setSeOn(next);
+    setSeEnabled(next);
+  };
+  const selectBgm = (track: BgmTrack) => {
+    setTrack(track);
+    setBgmTrack(track); // クリック=ユーザー操作なので、曲選択で即再生開始
+  };
+  // BGM 選択肢（OFF＋曲3つ）。
+  const bgmOptions: { value: BgmTrack; label: string }[] = [
+    { value: 0, label: t('bgmOff') },
+    { value: 1, label: t('bgmSong1') },
+    { value: 2, label: t('bgmSong2') },
+    { value: 3, label: t('bgmSong3') },
+  ];
 
   // role の値 → 画面に出すラベル（言語に追従）。
   const roleLabel = (r?: string | null): string =>
@@ -101,6 +132,51 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
               >
                 English
               </button>
+            </div>
+          </div>
+          {/* サウンド（効果音 / BGM） */}
+          <div className="px-4 py-2 border-b border-gray-100">
+            <p className="text-xs text-gray-400 mb-1.5">{t('sound')}</p>
+            <div className="flex flex-col gap-1.5">
+              <button
+                type="button"
+                onClick={toggleSe}
+                aria-pressed={seOn}
+                className="flex items-center justify-between text-sm text-gray-700"
+              >
+                <span>{t('soundEffects')}</span>
+                <span
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                    seOn ? 'bg-blue-500' : 'bg-gray-300'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      seOn ? 'translate-x-4' : 'translate-x-0.5'
+                    }`}
+                  />
+                </span>
+              </button>
+              <div>
+                <p className="text-sm text-gray-700 mb-1">{t('bgm')}</p>
+                <div className="grid grid-cols-2 gap-1">
+                  {bgmOptions.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => selectBgm(opt.value)}
+                      aria-pressed={bgmTrack === opt.value}
+                      className={`py-1 rounded-lg text-sm transition-colors ${
+                        bgmTrack === opt.value
+                          ? 'bg-blue-500 text-white font-medium'
+                          : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
           <button

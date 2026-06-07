@@ -190,9 +190,9 @@ paintedRouter.post("/", async (c) => {
         // 残高不足 → トランザクションを巻き戻して塗りを取り消す
         throw new InsufficientPointsError();
       }
-      // 有料の塗り（となり塗り／離れた場所）のみ経験値付与。cost===0 のデバッグ塗りは付与しない。
-      const state =
-        parsed.cost > 0 ? await addExp(user.id, EXP_PAINT, now, tx) : spent;
+      // 新規セルの塗りに経験値を付与。cost===0 の Shift+デバッグ塗り（開発者のみ・96行目で
+      // チェック済み）も経験値が入るようにする。spent は cost===0 でも残高据え置きで返るので使わない。
+      const state = await addExp(user.id, EXP_PAINT, now, tx);
       return { ok: true as const, points: state };
     });
     return c.json(result);

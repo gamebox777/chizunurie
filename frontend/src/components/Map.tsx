@@ -8,6 +8,7 @@ import { logEvent, setLastKnownLocation } from '@/lib/userlog';
 import { RUN_MODE, RUN_MODE_LABEL, RUN_MODE_BADGE } from '@/lib/runtime-env';
 import { useLocale, type Lang, type TFunc } from '@/lib/i18n';
 import { kanaToRomaji, prefRomaji } from '@/lib/romaji';
+import { playPaint, playLevelUp, unlockAudio } from '@/lib/sound';
 
 const PAINT_API = '/api/backend/painted';
 const POINTS_API = '/api/backend/points';
@@ -306,6 +307,7 @@ class SearchControl implements maplibregl.IControl {
     btn.type = 'button';
     btn.title = '地名を検索';
     btn.setAttribute('aria-label', '地名を検索');
+    btn.style.color = '#1a1a1a';
     btn.innerHTML =
       '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:auto"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
     btn.addEventListener('click', () => this.onClick());
@@ -332,6 +334,7 @@ class DebugControl implements maplibregl.IControl {
     btn.type = 'button';
     btn.title = 'デバッグメニュー';
     btn.setAttribute('aria-label', 'デバッグメニューを開く');
+    btn.style.color = '#1a1a1a';
     btn.innerHTML =
       '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:auto"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>';
     btn.addEventListener('click', () => this.onClick());
@@ -358,6 +361,7 @@ class StatsControl implements maplibregl.IControl {
     btn.type = 'button';
     btn.title = 'データ詳細';
     btn.setAttribute('aria-label', '自分のデータ詳細を開く');
+    btn.style.color = '#1a1a1a';
     btn.innerHTML =
       '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:auto"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>';
     btn.addEventListener('click', () => this.onClick());
@@ -606,6 +610,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   // レベルアップ演出を一時表示する（3秒で自動的に消える）。
   const showLevelUp = useCallback((to: number) => {
     setLevelUp({ to });
+    playLevelUp();
     if (levelUpTimerRef.current !== null) {
       window.clearTimeout(levelUpTimerRef.current);
     }
@@ -635,6 +640,22 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     },
     [applyPointsState, showLevelUp]
   );
+
+  // 自動再生ポリシー対策：最初のユーザー操作で AudioContext を resume し、
+  // BGM が ON なら再生を開始する。一度動いたらリスナーは外す。
+  useEffect(() => {
+    const onGesture = () => {
+      unlockAudio();
+      window.removeEventListener('pointerdown', onGesture);
+      window.removeEventListener('keydown', onGesture);
+    };
+    window.addEventListener('pointerdown', onGesture);
+    window.addEventListener('keydown', onGesture);
+    return () => {
+      window.removeEventListener('pointerdown', onGesture);
+      window.removeEventListener('keydown', onGesture);
+    };
+  }, []);
 
   // 動画リワードの利用可否（残り回数・クールダウン）をサーバーから取得する。
   const refreshRewardStatus = useCallback(async () => {
@@ -813,6 +834,27 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     setSearchResults([]);
     setSearchError(null);
     setSearchQuery('');
+  }, []);
+
+  // データ詳細パネルで都道府県名を押したとき、その県の塗ったセル全体が収まる範囲へ寄せる。
+  const flyToPref = useCallback((prefName: string) => {
+    const map = mapRef.current;
+    if (!map) return;
+    const lookup = muniByPaintedCellRef.current;
+    const bounds = new maplibregl.LngLatBounds();
+    let found = false;
+    for (const key of Object.keys(paintedRef.current)) {
+      const [layer, idStr] = key.split(':');
+      if (layer !== 'mesh') continue;
+      const muni = lookup.get(Number(idStr));
+      if (!muni || muni.split('|')[0] !== prefName) continue;
+      const ring = meshCellRing(Number(idStr));
+      for (const [lng, lat] of ring) bounds.extend([lng, lat]);
+      found = true;
+    }
+    if (!found) return;
+    map.fitBounds(bounds, { padding: 80, maxZoom: 13, duration: 1200 });
+    setStatsOpen(false);
   }, []);
 
   useEffect(() => {
@@ -1290,6 +1332,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     });
 
     map.on('load', () => {
+      // 初期化時にコンテナ高さが未確定だった場合に備え、load 直後に正しいサイズへ合わせる。
+      map.resize();
       // PMTilesソースを1つ追加（全レイヤーが1ファイルに入っている）
       map.addSource('japan', {
         type: 'vector',
@@ -1812,6 +1856,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           return;
         }
         if (commitLocalPaint(id, 'manual', muniKey, region, address) === 'skip') return;
+        playPaint(); // となり塗り成功の効果音
 
         const prevPoints = pointsRef.current;
         const prevRegenAt = regenAtRef.current;
@@ -1923,6 +1968,41 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         };
       };
 
+      // 開発者デバッグ：Cmd（Mac）/Ctrl（Win）+クリックで、クリックしたセルを中心に
+      // 10×10マスの矩形を、塗れる箇所（陸地）だけまとめて無料で塗る。
+      const BULK_PAINT_SIZE = 10;
+      const doBulkDebugPaint = (centerId: number) => {
+        const [ri0, ci0] = gridFromMeshCode(centerId);
+        // 偶数サイズなのでクリックしたセルを中心寄りに：-4..+5（=10マス）の正方形。
+        const lo = -Math.floor((BULK_PAINT_SIZE - 1) / 2); // -4
+        const hi = lo + BULK_PAINT_SIZE - 1; // +5
+        let painted = 0;
+        for (let dri = lo; dri <= hi; dri++) {
+          for (let dci = lo; dci <= hi; dci++) {
+            const id = meshCodeFromGrid(ri0 + dri, ci0 + dci);
+            const existing = paintedRef.current[`mesh:${id}`];
+            if (existing) continue; // 既に塗ってある（gps/manual）はそのまま
+            // セル中心を画面座標へ投影して陸地判定＋地名解決（海上は塗らない）。
+            const lng = (ci0 + dci + 0.5) / MESH_LON_DIV;
+            const lat = (ri0 + dri + 0.5) / MESH_LAT_DIV;
+            const pt = map.project([lng, lat]);
+            const info = muniInfoAt(pt);
+            const region = stateInfoAt(pt);
+            if (!info && !region) continue; // 塗れない箇所（海上など）はスキップ
+            const muniKey = info?.key ?? null;
+            const reg = region ? { key: region.key, a3: region.a3 } : null;
+            const address = info?.address ?? region?.address ?? '';
+            if (commitLocalPaint(id, 'manual', muniKey, reg, address, true) === 'skip') continue;
+            syncPaint('POST', id, 'manual', reg?.key ?? null);
+            painted++;
+          }
+        }
+        if (painted > 0) {
+          playPaint();
+          showToast(`まとめて${painted}マス塗りました`);
+        }
+      };
+
       map.on('click', (e) => {
         // デバッグの消しモード：クリックしたセルの塗りを消す（現地・となり問わず）。
         if (eraseModeRef.current) {
@@ -1935,6 +2015,25 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           if (!paintedRef.current[`mesh:${picked.id}`]) return; // 未塗りは何もしない
           removePaint(picked.id);
           showToast('塗りを消しました');
+          return;
+        }
+        // 開発者デバッグ：Cmd/Ctrl+クリックで上下左右10マスをまとめて無料塗り。
+        const metaHeld =
+          (e.originalEvent as MouseEvent | undefined)?.metaKey ||
+          (e.originalEvent as MouseEvent | undefined)?.ctrlKey ||
+          false;
+        if (metaHeld && isDeveloperRef.current) {
+          if (map.getZoom() < MESH_MIN_ZOOM) {
+            showToast(tRef.current('zoomToPaint'));
+            return;
+          }
+          if (!userIdRef.current) {
+            showToast(tRef.current('needLoginPaint'));
+            return;
+          }
+          const picked = pickFeatureAt(e);
+          if (!picked) return;
+          doBulkDebugPaint(picked.id);
           return;
         }
         // となり塗り（マウスでの塗り）はとなり塗りモード時のみ。
@@ -2162,8 +2261,19 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     });
 
     mapRef.current = map;
+
+    // iOS（Chrome/Safari=WebKit）はアドレスバーのアニメーションで 100dvh の確定が遅れ、
+    // 地図初期化時のコンテナ高さが 0／間違った値になり地図・グリッドが描画されないことがある
+    // （手動リロードすると直る症状の原因）。コンテナのサイズ変化を監視して map.resize() を
+    // 呼び、dvh 確定後にリロード無しで自動的に正しいサイズで描き直す。
+    const resizeObserver = new ResizeObserver(() => {
+      if (!cancelled) map.resize();
+    });
+    resizeObserver.observe(containerRef.current);
+
     return () => {
       cancelled = true;
+      resizeObserver.disconnect();
       debugCleanupRef.current?.();
       debugCleanupRef.current = null;
       map.remove();
@@ -2550,8 +2660,11 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                   {t('regenIn', formatCountdown(regenAt - nowTick, t) as never)}
                 </div>
               )}
-              {/* 動画リワード：動画を見てそのレベルの満タン分を回復 */}
-              {(() => {
+              {/* 動画リワード：動画を見てそのレベルの満タン分を回復
+                  ※「動画を見て回復」は今は使えないのでボタン表示のみ無効化。
+                     処理（openVideoReward / rewardStatus 取得など）はそのまま残す。
+                     再開するときは下の IIFE のコメントを外す。 */}
+              {/* {(() => {
                 const cooldownLeft =
                   rewardStatus?.nextAvailableAt != null
                     ? rewardStatus.nextAvailableAt - nowTick
@@ -2578,7 +2691,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                         : t('rewardWatch', (rewardStatus ? rewardStatus.remainingToday : undefined) as never)}
                   </button>
                 );
-              })()}
+              })()} */}
             </div>
           )}
         </div>
@@ -3132,24 +3245,31 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                     pct > 0 && pct < 0.1 ? '<0.1%' : `${pct < 10 ? pct.toFixed(1) : Math.round(pct)}%`;
                   return (
                     <li key={p.name}>
-                      <div className="flex items-baseline justify-between text-xs mb-0.5">
-                        <span className="font-medium text-gray-800">
-                          {lang === 'en' ? prefRomaji(p.name) : p.name}
-                        </span>
-                        <span className="text-gray-500">
-                          {pctLabel}
-                          <span className="text-gray-400">（{p.painted}/{p.total}）</span>
-                        </span>
-                      </div>
-                      <div className="h-1.5 w-full rounded-full bg-gray-100 overflow-hidden">
-                        <div
-                          className="h-full rounded-full"
-                          style={{
-                            width: `${Math.min(100, Math.max(pct, pct > 0 ? 2 : 0))}%`,
-                            background: COLOR_GPS,
-                          }}
-                        />
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => flyToPref(p.name)}
+                        className="w-full text-left -mx-1 px-1 py-0.5 rounded-md hover:bg-gray-100 transition-colors cursor-pointer"
+                        title={t('flyToPref')}
+                      >
+                        <div className="flex items-baseline justify-between text-xs mb-0.5">
+                          <span className="font-medium text-gray-800">
+                            {lang === 'en' ? prefRomaji(p.name) : p.name}
+                          </span>
+                          <span className="text-gray-500">
+                            {pctLabel}
+                            <span className="text-gray-400">（{p.painted}/{p.total}）</span>
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full rounded-full bg-gray-100 overflow-hidden">
+                          <div
+                            className="h-full rounded-full"
+                            style={{
+                              width: `${Math.min(100, Math.max(pct, pct > 0 ? 2 : 0))}%`,
+                              background: COLOR_GPS,
+                            }}
+                          />
+                        </div>
+                      </button>
                     </li>
                   );
                 })}

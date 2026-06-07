@@ -38,6 +38,13 @@ const ja: Dict = {
   adminPanel: '管理画面',
   logout: 'ログアウト',
   language: '言語',
+  sound: 'サウンド',
+  soundEffects: '効果音',
+  bgm: 'BGM',
+  bgmOff: 'OFF',
+  bgmSong1: '曲1',
+  bgmSong2: '曲2',
+  bgmSong3: '曲3',
 
   // AuthModal
   googleLogin: 'Googleでログイン',
@@ -127,6 +134,7 @@ const ja: Dict = {
   japanWhole: '🗾 日本全体',
   calculating: '計算中…',
   perPrefTitle: '都道府県ごとの塗り',
+  flyToPref: 'この都道府県の塗った場所へ移動',
   noPainted: 'まだ塗った地域がありません',
   calcBreakdown: '地域内訳を計算中…',
 
@@ -173,6 +181,13 @@ const en: Dict = {
   adminPanel: 'Admin',
   logout: 'Log out',
   language: 'Language',
+  sound: 'Sound',
+  soundEffects: 'Sound effects',
+  bgm: 'BGM',
+  bgmOff: 'Off',
+  bgmSong1: 'Song 1',
+  bgmSong2: 'Song 2',
+  bgmSong3: 'Song 3',
 
   // AuthModal
   googleLogin: 'Sign in with Google',
@@ -263,6 +278,7 @@ const en: Dict = {
   japanWhole: '🗾 All Japan',
   calculating: 'Calculating…',
   perPrefTitle: 'Painted by prefecture',
+  flyToPref: 'Jump to painted areas in this prefecture',
   noPainted: 'No painted areas yet',
   calcBreakdown: 'Calculating breakdown…',
 
