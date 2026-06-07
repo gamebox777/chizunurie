@@ -34,7 +34,16 @@
       "Bash(cat /var/folders/j7/0gw1ntm53wg0mrb02hzgmh1m0000gn/T/next-panic-4f8ea17601832011f16afc0e4fcca33c.log 2>/dev/null | head -50)",
       "Read(//private/var/folders/j7/0gw1ntm53wg0mrb02hzgmh1m0000gn/T/**)",
       "Bash(cd frontend *)",
-      "Read(//Users/ryohei/github/**)"
+      "Read(//Users/ryohei/github/**)",
+      "Bash(npx next *)",
+      "Bash(npx eslint *)",
+      "Bash(node --check scripts/build-muni-stats.mjs)",
+      "Bash(node --check scripts/build-pmtiles.mjs)",
+      "Bash(pkill -f \"next dev\")",
+      "Bash(node -e \"const d=require\\('./frontend/public/data/muni-stats.json'\\); console.log\\('munis:',d.munis.length\\); console.log\\('sample:',JSON.stringify\\(d.munis.slice\\(0,3\\)\\)\\); console.log\\('has c[]?', d.munis.some\\(m=>'c' in m\\), ' has n?', d.munis.every\\(m=>typeof m.n==='number'\\)\\);\")",
+      "Bash(./pmtiles show *)",
+      "Bash(grep -iA12 \"vector_layers\\\\|layer\")",
+      "Bash(node -e \"let s='';process.stdin.on\\('data',d=>s+=d\\).on\\('end',\\(\\)=>{try{const m=JSON.parse\\(s\\);console.log\\('layers:',\\(m.vector_layers||[]\\).map\\(l=>l.id\\).join\\(', '\\)\\);}catch\\(e\\){console.log\\(s.slice\\(0,400\\)\\)}}\\)\")"
     ]
   }
 }

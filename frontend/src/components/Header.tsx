@@ -34,6 +34,7 @@ export default function Header({ hoverAddress = '' }: HeaderProps) {
               </span>
               <SettingsMenu
                 name={session.user.name}
+                role={session.user.role}
                 onEditNickname={() => setEditingNickname(true)}
                 onSignedOut={() => refetch()}
               />

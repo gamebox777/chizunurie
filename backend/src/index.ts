@@ -5,6 +5,8 @@ import { logger } from "hono/logger";
 import { auth } from "./lib/auth.js";
 import { paintedRouter } from "./routes/painted.js";
 import { pointsRouter } from "./routes/points.js";
+import { adminRouter } from "./routes/admin.js";
+import { logRouter } from "./routes/log.js";
 
 const app = new Hono();
 
@@ -28,6 +30,12 @@ app.route("/painted", paintedRouter);
 
 // 塗りポイント残高（/api/backend/points から到達）
 app.route("/points", pointsRouter);
+
+// 開発者専用の管理画面 API（/api/backend/admin から到達）
+app.route("/admin", adminRouter);
+
+// ユーザー行動ログの記録（/api/backend/log から到達）
+app.route("/log", logRouter);
 
 const port = Number(process.env.PORT) || 3001;
 

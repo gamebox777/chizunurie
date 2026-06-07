@@ -34,6 +34,32 @@ export function expToNext(level: number): number {
   return BASE_EXP_TO_NEXT + (level - 1) * EXP_TO_NEXT_STEP;
 }
 
+// 1回のハートビートで加算を許可する最大秒数。クライアントは約1分ごとに送るため、
+// 多少の遅延（タブ復帰直後など）を見込んでこの値を上限にして不正な水増しを防ぐ。
+export const MAX_HEARTBEAT_DELTA_SEC = 120;
+
+// ── 動画リワード（動画視聴で塗りポイントを回復） ──────────────────────
+// 動画を1本見ると「そのレベルの満タン分（= maxPointsForLevel(level)）」を残高に加算する。
+// 自然回復（REGEN_INTERVAL_MS で 1pt）と同等量を一気に得られる位置づけ。
+// 不正・乱用対策として「クールダウン」と「1日の上限回数」を併用する。
+export const VIDEO_REWARD_COOLDOWN_MS = 30 * 60 * 1000; // 前回視聴から30分は再視聴不可
+export const VIDEO_REWARD_MAX_PER_DAY = 5; // 1日（JST）に受け取れる上限回数
+
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// now（UTC ms epoch）が属する JST の日付文字列 "YYYY-MM-DD" を返す。
+function jstDayString(now: number): string {
+  return new Date(now + JST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+// now が属する JST の「翌日0時」を UTC ms epoch で返す（1日上限のリセット時刻）。
+function jstNextMidnight(now: number): number {
+  const shifted = new Date(now + JST_OFFSET_MS);
+  shifted.setUTCHours(0, 0, 0, 0); // JST の当日0時（シフト空間）
+  return shifted.getTime() - JST_OFFSET_MS + DAY_MS; // 実epochに戻して翌日へ
+}
+
 export type PointsState = {
   points: number;
   max: number; // 現在レベルの最大塗りポイント（回復上限）
@@ -42,6 +68,8 @@ export type PointsState = {
   level: number;
   exp: number; // 現在レベル内での経験値（次レベルまでの進捗）
   expToNext: number; // 現在レベルから次レベルへ必要な経験値
+  totalExp: number; // 累計獲得経験値（これまでの獲得総和・減らない）
+  playTimeSec: number; // 合計プレイ時間（秒）
 };
 
 // db 本体でもトランザクション(tx)でも受け取れるように、使うメソッドだけ取り出した型。
@@ -76,7 +104,9 @@ function toState(
   points: number,
   updatedAt: Date,
   level: number,
-  exp: number
+  exp: number,
+  playTimeSec: number,
+  totalExp: number
 ): PointsState {
   const max = maxPointsForLevel(level);
   return {
@@ -86,6 +116,8 @@ function toState(
     level,
     exp,
     expToNext: expToNext(level),
+    totalExp,
+    playTimeSec,
   };
 }
 
@@ -127,9 +159,16 @@ export async function ensurePoints(
     const updatedAt = new Date(now);
     await tx
       .insert(userPoints)
-      .values({ userId, points: INITIAL_POINTS, level: 1, exp: 0, updatedAt })
+      .values({
+        userId,
+        points: INITIAL_POINTS,
+        level: 1,
+        exp: 0,
+        totalExp: 0,
+        updatedAt,
+      })
       .onConflictDoNothing();
-    return toState(INITIAL_POINTS, updatedAt, 1, 0);
+    return toState(INITIAL_POINTS, updatedAt, 1, 0, 0, 0);
   }
 
   const row = rows[0];
@@ -143,7 +182,14 @@ export async function ensurePoints(
       .set({ points: r.points, updatedAt: r.updatedAt })
       .where(eq(userPoints.userId, userId));
   }
-  return toState(r.points, r.updatedAt, row.level, row.exp);
+  return toState(
+    r.points,
+    r.updatedAt,
+    row.level,
+    row.exp,
+    row.playTimeSec,
+    row.totalExp
+  );
 }
 
 // 経験値を加算する。回復を反映したうえで加算し、レベルアップを処理して永続化する。
@@ -158,6 +204,8 @@ export async function addExp(
   if (gainedExp <= 0) return state;
 
   const next = applyExp(state.points, state.level, state.exp, gainedExp);
+  // 累計獲得経験値は獲得ぶんをそのまま足す（レベルアップで目減りしない記録）。
+  const nextTotalExp = state.totalExp + gainedExp;
   const leveledUp = next.level > state.level;
   // レベルアップで上限超過の残高が生じうるので、その場合は回復時計を now に張り直す
   // （超過ぶんは時間回復で増えないため、満タン基準のアンカーにそろえる）。
@@ -173,10 +221,18 @@ export async function addExp(
       points: next.points,
       level: next.level,
       exp: next.exp,
+      totalExp: nextTotalExp,
       updatedAt,
     })
     .where(eq(userPoints.userId, userId));
-  return toState(next.points, updatedAt, next.level, next.exp);
+  return toState(
+    next.points,
+    updatedAt,
+    next.level,
+    next.exp,
+    state.playTimeSec,
+    nextTotalExp
+  );
 }
 
 // デバッグ用：残高を指定値にそのままセットする（max を超える値も許容）。
@@ -193,7 +249,14 @@ export async function setPoints(
     .update(userPoints)
     .set({ points, updatedAt })
     .where(eq(userPoints.userId, userId));
-  return toState(points, updatedAt, state.level, state.exp);
+  return toState(
+    points,
+    updatedAt,
+    state.level,
+    state.exp,
+    state.playTimeSec,
+    state.totalExp
+  );
 }
 
 // cost ぶんポイントを消費する。残高不足なら null を返す（呼び出し側でロールバック）。
@@ -218,5 +281,176 @@ export async function spendPoints(
     .update(userPoints)
     .set({ points: remaining, updatedAt })
     .where(eq(userPoints.userId, userId));
-  return toState(remaining, updatedAt, state.level, state.exp);
+  return toState(
+    remaining,
+    updatedAt,
+    state.level,
+    state.exp,
+    state.playTimeSec,
+    state.totalExp
+  );
+}
+
+// 合計プレイ時間に経過秒を加算する。1回の加算は MAX_HEARTBEAT_DELTA_SEC で頭打ちにする
+// （タブ復帰直後の大きな経過や、不正な水増しを防ぐ）。負値・0 は無視して現状を返す。
+export async function addPlayTime(
+  userId: string,
+  deltaSec: number,
+  now: number,
+  tx: DbExecutor = db
+): Promise<PointsState> {
+  const state = await ensurePoints(userId, now, tx);
+  const delta = Math.min(
+    MAX_HEARTBEAT_DELTA_SEC,
+    Math.max(0, Math.floor(Number(deltaSec) || 0))
+  );
+  if (delta <= 0) return state;
+  const nextPlayTime = state.playTimeSec + delta;
+  await tx
+    .update(userPoints)
+    .set({ playTimeSec: nextPlayTime })
+    .where(eq(userPoints.userId, userId));
+  return { ...state, playTimeSec: nextPlayTime };
+}
+
+// 動画リワードの現在の利用可否（クライアントのボタン表示・カウントダウン用）。
+export type VideoRewardStatus = {
+  maxPerDay: number; // 1日の上限回数
+  remainingToday: number; // 今日あと何回受け取れるか
+  cooldownMs: number; // クールダウンの長さ
+  // 次に視聴可能になる時刻（クールダウン中のみ。視聴可能なら null）
+  nextAvailableAt: number | null;
+  // 1日上限に達した場合のリセット時刻（翌JST0時。未達なら null）
+  resetAt: number | null;
+  // いま動画を見て受け取れるか（クールダウン・上限の両方を満たすか）
+  available: boolean;
+};
+
+export type VideoRewardResult =
+  | { ok: true; state: PointsState; granted: number; status: VideoRewardStatus }
+  | { ok: false; reason: "cooldown" | "daily_limit"; status: VideoRewardStatus };
+
+// 行の動画リワードメタ（受領時刻・当日回数）から現在の利用可否を組み立てる。
+function buildVideoRewardStatus(
+  now: number,
+  lastVideoRewardAt: Date | null,
+  videoRewardCount: number,
+  videoRewardDay: string | null
+): VideoRewardStatus {
+  const today = jstDayString(now);
+  // 当日ぶんの回数（日付が変わっていたら 0 とみなす）
+  const countToday = videoRewardDay === today ? videoRewardCount : 0;
+  const remainingToday = Math.max(0, VIDEO_REWARD_MAX_PER_DAY - countToday);
+
+  const cooldownUntil =
+    lastVideoRewardAt === null
+      ? 0
+      : lastVideoRewardAt.getTime() + VIDEO_REWARD_COOLDOWN_MS;
+  const inCooldown = now < cooldownUntil;
+  const reachedDailyLimit = remainingToday <= 0;
+
+  return {
+    maxPerDay: VIDEO_REWARD_MAX_PER_DAY,
+    remainingToday,
+    cooldownMs: VIDEO_REWARD_COOLDOWN_MS,
+    nextAvailableAt: inCooldown ? cooldownUntil : null,
+    resetAt: reachedDailyLimit ? jstNextMidnight(now) : null,
+    available: !inCooldown && !reachedDailyLimit,
+  };
+}
+
+// userPoints 行の動画リワード列だけを読む（無ければ null）。
+async function selectRewardMeta(
+  userId: string,
+  tx: DbExecutor
+): Promise<{
+  lastVideoRewardAt: Date | null;
+  videoRewardCount: number;
+  videoRewardDay: string | null;
+} | null> {
+  const rows = await tx
+    .select({
+      lastVideoRewardAt: userPoints.lastVideoRewardAt,
+      videoRewardCount: userPoints.videoRewardCount,
+      videoRewardDay: userPoints.videoRewardDay,
+    })
+    .from(userPoints)
+    .where(eq(userPoints.userId, userId));
+  return rows.length === 0 ? null : rows[0];
+}
+
+// 動画リワードの現在の利用可否を返す（付与はしない）。行が無ければ初期状態を作る。
+export async function getVideoRewardStatus(
+  userId: string,
+  now: number,
+  tx: DbExecutor = db
+): Promise<VideoRewardStatus> {
+  await ensurePoints(userId, now, tx); // 行を作成＋回復を確定
+  const meta = await selectRewardMeta(userId, tx);
+  return buildVideoRewardStatus(
+    now,
+    meta?.lastVideoRewardAt ?? null,
+    meta?.videoRewardCount ?? 0,
+    meta?.videoRewardDay ?? null
+  );
+}
+
+// 動画視聴の報酬を受け取る。「そのレベルの満タン分」を残高に加算する。
+// クールダウン中・1日上限到達なら ok:false を返して付与しない。
+// 付与後は残高が満タン以上になるため回復時計は now にそろえる（addExp の満タン時と同様）。
+export async function claimVideoReward(
+  userId: string,
+  now: number,
+  tx: DbExecutor = db
+): Promise<VideoRewardResult> {
+  const state = await ensurePoints(userId, now, tx); // 行を作成＋回復を確定
+  const meta = await selectRewardMeta(userId, tx);
+  const lastVideoRewardAt = meta?.lastVideoRewardAt ?? null;
+  const today = jstDayString(now);
+  const countToday =
+    meta?.videoRewardDay === today ? meta?.videoRewardCount ?? 0 : 0;
+
+  const status = buildVideoRewardStatus(
+    now,
+    lastVideoRewardAt,
+    meta?.videoRewardCount ?? 0,
+    meta?.videoRewardDay ?? null
+  );
+
+  // 上限・クールダウンのチェック（クールダウンを先に見て理由を明確にする）
+  if (status.nextAvailableAt !== null) {
+    return { ok: false, reason: "cooldown", status };
+  }
+  if (status.remainingToday <= 0) {
+    return { ok: false, reason: "daily_limit", status };
+  }
+
+  // 付与：そのレベルの満タン分（= 自然回復の上限と同量）を加算する。
+  const granted = maxPointsForLevel(state.level);
+  const nextPoints = state.points + granted; // 必ず max 以上になる（満タン扱い）
+  const updatedAt = new Date(now); // 満タン以上なので回復時計を now にそろえる
+
+  const nextCount = countToday + 1;
+  await tx
+    .update(userPoints)
+    .set({
+      points: nextPoints,
+      updatedAt,
+      lastVideoRewardAt: updatedAt,
+      videoRewardCount: nextCount,
+      videoRewardDay: today,
+    })
+    .where(eq(userPoints.userId, userId));
+
+  const nextState = toState(
+    nextPoints,
+    updatedAt,
+    state.level,
+    state.exp,
+    state.playTimeSec,
+    state.totalExp
+  );
+  // 付与後の利用可否を計算し直して返す（クールダウン開始・残回数を反映）
+  const nextStatus = buildVideoRewardStatus(now, updatedAt, nextCount, today);
+  return { ok: true, state: nextState, granted, status: nextStatus };
 }

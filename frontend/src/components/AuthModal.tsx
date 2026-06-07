@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { signIn, signUp } from '@/lib/auth-client';
+import { logEvent } from '@/lib/userlog';
 import { validateNickname, NICKNAME_MAX } from './NicknameModal';
 
 type Tab = 'login' | 'register';
@@ -30,12 +31,14 @@ export default function AuthModal({ initialTab, onClose }: Props) {
       if (tab === 'login') {
         const res = await signIn.email({ email, password });
         if (res.error) throw new Error(res.error.message ?? 'ログインに失敗しました');
+        logEvent('login');
       } else {
         const validationError = validateNickname(name);
         if (validationError) throw new Error(validationError);
         // name にはニックネームを保存する（本名は保存しない）
         const res = await signUp.email({ email, password, name: name.trim() });
         if (res.error) throw new Error(res.error.message ?? '登録に失敗しました');
+        logEvent('signup');
       }
       onClose();
     } catch (err) {

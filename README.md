@@ -34,12 +34,29 @@ cd frontend && npm install
 
 ## 開発サーバーの起動
 
+このプロジェクトには2つの実行モードがあり、どちらも **3000(frontend) / 3001(backend) / 5432(db)** を使うため同時には動かせません。
+モード別ランチャー（`scripts/start.sh`）が **競合する側を先に停止してから** 起動します。
+
 ```bash
-cd frontend
-npm run dev
+npm run stop        # まず全部きれいにする（任意）
+
+npm run dev:local   # ローカル dev に寄せる（frontend/backend/studio は host、db のみ Docker）
+                    #   → backend が 3001 で正常起動
+# または
+npm run dev:docker  # フル Docker に寄せる（frontend/backend/db を全部 Docker で起動）
 ```
 
+| コマンド | 何をするか |
+|---|---|
+| `npm run dev:local` | フル Docker 版の frontend/backend を停止 → host の残骸プロセス(3000/3001/3002/4983)を掃除 → `npm run dev` |
+| `npm run dev:docker` | host の dev プロセスを停止して 3000/3001 を解放 → `docker compose -f docker-compose.prod.yml up -d --build` |
+| `npm run stop` | 両モードを停止（コンテナ down ＋ host プロセス掃除） |
+
 ブラウザで http://localhost:3000 を開くと地図が表示されます。
+
+> **`EADDRINUSE: address already in use :::3001` が出たら**
+> ローカル dev とフル Docker が二重起動しています。`npm run stop` で一度止めてから、上のどちらかのモードで起動し直してください。
+> （port を掴んでいる docker-proxy は誤って kill しないよう除外しているので、`npm run stop` で Docker 全体が落ちることはありません）
 
 ## ビルド・本番起動
 

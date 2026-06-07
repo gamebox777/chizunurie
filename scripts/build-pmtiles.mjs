@@ -60,8 +60,9 @@ function toTMS(z, x, y) { return (1 << z) - 1 - y; }
 // レイヤー定義
 const LAYERS = [
   { name: 'municipalities', file: 'municipalities_poly.geojson', minZoom: 4, maxZoom: 13 },
-  // 約1kmの等面積メッシュ（塗りの単位）。低ズームはセルが多すぎるので minZoom を上げる
-  { name: 'mesh',           file: 'mesh.geojson',                minZoom: 9,  maxZoom: 13 },
+  // ※ 約1kmメッシュ（塗りの単位）は PMTiles に焼かず、Map.tsx が表示範囲のセルを
+  //    数式（meshCellRing）で実行時生成する。陸地判定・地名は municipalities レイヤー
+  //    への queryRenderedFeatures＋逆ジオコーダで賄う。
   { name: 'prefectures',    file: 'japan.geojson',               minZoom: 4, maxZoom: 8  },
   { name: 'labels',         file: 'municipalities.geojson',      minZoom: 6, maxZoom: 13 },
   // 政令指定都市の外周（区を市単位に dissolve したもの）。枠線・市名ラベル用
@@ -90,7 +91,6 @@ db.prepare('INSERT INTO metadata VALUES (?,?)').run('type', 'overlay');
 db.prepare('INSERT INTO metadata VALUES (?,?)').run('json', JSON.stringify({
   vector_layers: [
     { id: 'municipalities', fields: { N03_001:'String', N03_004:'String', N03_005:'String', N03_007:'String' } },
-    { id: 'mesh',           fields: { MESHCODE:'String', PREF_NAME:'String', CITY_NAME:'String', S_NAME:'String' } },
     { id: 'prefectures',    fields: { nam_ja:'String', id:'Number' } },
     { id: 'labels',         fields: { N03_001:'String', N03_004:'String', N03_005:'String', N03_007:'String' } },
     { id: 'cities',         fields: { N03_001:'String', N03_004:'String' } },
@@ -99,16 +99,11 @@ db.prepare('INSERT INTO metadata VALUES (?,?)').run('json', JSON.stringify({
 
 // featureId を安定した行政コードで上書き
 function assignStableIds(geojson, layer) {
-  let collisionCounter = 900000000; // degenerate features 用のフォールバックID
   for (const feature of geojson.features) {
     const p = feature.properties;
     if (layer.name === 'municipalities' || layer.name === 'labels') {
       const code = p?.N03_007;
       feature.id = code && code.length >= 5 ? parseInt(code, 10) : undefined;
-    } else if (layer.name === 'mesh') {
-      // 8桁の地域メッシュコードを安定IDに使う（リロードでも不変）
-      const code = p?.MESHCODE;
-      feature.id = code && code.length === 8 ? parseInt(code, 10) : collisionCounter++;
     }
     // prefectures は元々 id フィールドを持つので変更不要
   }

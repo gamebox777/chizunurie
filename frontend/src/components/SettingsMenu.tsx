@@ -1,19 +1,32 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { signOut } from '@/lib/auth-client';
+import { logEvent } from '@/lib/userlog';
 
 type Props = {
   // 現在のニックネーム（メニュー先頭に表示）
   name: string;
+  // 権限（session.user.role）。未設定／null なら一般ユーザー扱い。
+  role?: string | null;
   // 「ニックネーム変更」を押したとき
   onEditNickname: () => void;
   // ログアウト完了後（セッション再取得など）
   onSignedOut: () => void;
 };
 
+// role の値 → 画面に出す日本語ラベル。
+const ROLE_LABELS: Record<string, string> = {
+  user: '一般ユーザー',
+  developer: '開発者',
+};
+function roleLabel(role?: string | null): string {
+  return ROLE_LABELS[role ?? 'user'] ?? (role ?? '一般ユーザー');
+}
+
 // 右側の歯車ボタン。押すと各種設定メニュー（ニックネーム変更・ログアウト）が出る。
-export default function SettingsMenu({ name, onEditNickname, onSignedOut }: Props) {
+export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -35,6 +48,8 @@ export default function SettingsMenu({ name, onEditNickname, onSignedOut }: Prop
   }, [open]);
 
   const handleSignOut = async () => {
+    // まだ認証クッキーが有効なうちにログアウトを記録する。
+    await logEvent('logout');
     await signOut();
     setOpen(false);
     onSignedOut();
@@ -59,6 +74,7 @@ export default function SettingsMenu({ name, onEditNickname, onSignedOut }: Prop
           <div className="px-4 py-2 border-b border-gray-100">
             <p className="text-xs text-gray-400">ログイン中</p>
             <p className="text-sm font-medium text-gray-800 truncate">{name}</p>
+            <p className="text-xs text-gray-500 mt-0.5">権限：{roleLabel(role)}</p>
           </div>
           <button
             onClick={() => {
@@ -69,6 +85,16 @@ export default function SettingsMenu({ name, onEditNickname, onSignedOut }: Prop
           >
             ニックネーム変更
           </button>
+          {/* 開発者のみ：地図とは別の管理画面へ */}
+          {role === 'developer' && (
+            <Link
+              href="/admin"
+              onClick={() => setOpen(false)}
+              className="block px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              管理画面
+            </Link>
+          )}
           <button
             onClick={handleSignOut}
             className="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
-import { auth } from "../lib/auth.js";
+import { getSessionUser, isDeveloper } from "../lib/auth.js";
 import { db } from "../db/index.js";
 import { paintedRegions } from "../db/schema.js";
 import {
@@ -12,6 +12,7 @@ import {
   ensurePoints,
   spendPoints,
 } from "../lib/points.js";
+import { clientInfo } from "../lib/userlog.js";
 
 export const paintedRouter = new Hono();
 
@@ -20,8 +21,7 @@ const ALLOWED_LAYERS = new Set(["mesh", "municipalities", "chocho"]);
 const ALLOWED_MODES = new Set(["gps", "manual"]);
 
 async function requireUser(req: Request) {
-  const session = await auth.api.getSession({ headers: req.headers });
-  return session?.user ?? null;
+  return getSessionUser(req);
 }
 
 type PaintBody = {
@@ -29,7 +29,17 @@ type PaintBody = {
   keyCode?: unknown;
   mode?: unknown;
   cost?: unknown;
+  lat?: unknown;
+  lng?: unknown;
+  municipality?: unknown;
 };
+
+// 緯度経度の妥当性チェック（範囲外・非数値は null）。塗った位置の記録用。
+function toCoord(v: unknown, max: number): number | null {
+  if (typeof v !== "number" || !Number.isFinite(v)) return null;
+  if (v < -max || v > max) return null;
+  return v;
+}
 
 function parseBody(body: PaintBody | null) {
   if (!body) return null;
@@ -44,7 +54,14 @@ function parseBody(body: PaintBody | null) {
   // 省略時は隣接塗り（COST_ADJACENT）扱い。許可値以外は弾く。
   const resolvedCost =
     typeof cost === "number" && ALLOWED_COSTS.has(cost) ? cost : COST_ADJACENT;
-  return { sourceLayer, keyCode, mode: resolvedMode, cost: resolvedCost };
+  // 塗った時点の文脈（任意）。新規 insert のときだけ保存する。
+  const lat = toCoord(body.lat, 90);
+  const lng = toCoord(body.lng, 180);
+  const municipality =
+    typeof body.municipality === "string" && body.municipality.length <= 128
+      ? body.municipality
+      : null;
+  return { sourceLayer, keyCode, mode: resolvedMode, cost: resolvedCost, lat, lng, municipality };
 }
 
 paintedRouter.get("/", async (c) => {
@@ -55,6 +72,7 @@ paintedRouter.get("/", async (c) => {
       sourceLayer: paintedRegions.sourceLayer,
       keyCode: paintedRegions.keyCode,
       mode: paintedRegions.mode,
+      municipality: paintedRegions.municipality,
     })
     .from(paintedRegions)
     .where(eq(paintedRegions.userId, user.id));
@@ -67,7 +85,21 @@ paintedRouter.post("/", async (c) => {
   const parsed = parseBody(await c.req.json().catch(() => null));
   if (!parsed) return c.json({ error: "invalid body" }, 400);
 
+  // cost===0 は無料デバッグ塗り（Shift+クリック）。開発者のみ許可する。
+  if (parsed.cost === 0 && !isDeveloper(user)) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+
   const now = Date.now();
+  // 塗った時点の文脈（新規 insert のときだけ保存）。ip/ua はサーバー側で取得。
+  const { ipAddress, userAgent } = clientInfo(c);
+  const context = {
+    ipAddress,
+    userAgent,
+    lat: parsed.lat,
+    lng: parsed.lng,
+    municipality: parsed.municipality,
+  };
 
   if (parsed.mode === "gps") {
     // GPS（実際の移動）はポイント無料。最優先なので既存（manual含む）があれば gps に昇格。
@@ -81,6 +113,7 @@ paintedRouter.post("/", async (c) => {
           sourceLayer: parsed.sourceLayer,
           keyCode: parsed.keyCode,
           mode: "gps",
+          ...context,
         })
         .onConflictDoNothing()
         .returning({ id: paintedRegions.id });
@@ -133,6 +166,7 @@ paintedRouter.post("/", async (c) => {
           sourceLayer: parsed.sourceLayer,
           keyCode: parsed.keyCode,
           mode: parsed.mode,
+          ...context,
         })
         .onConflictDoNothing()
         .returning({ id: paintedRegions.id });
@@ -165,10 +199,11 @@ paintedRouter.post("/", async (c) => {
 
 class InsufficientPointsError extends Error {}
 
-// ユーザーの塗りを全消去する（デバッグ用）。ポイントは返金しない。
+// ユーザーの塗りを全消去する（デバッグ用）。ポイントは返金しない。開発者のみ。
 paintedRouter.delete("/all", async (c) => {
   const user = await requireUser(c.req.raw);
   if (!user) return c.json({ error: "unauthorized" }, 401);
+  if (!isDeveloper(user)) return c.json({ error: "forbidden" }, 403);
   await db.delete(paintedRegions).where(eq(paintedRegions.userId, user.id));
   return c.json({ ok: true });
 });

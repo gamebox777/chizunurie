@@ -6,6 +6,9 @@
   "scripts": {
     "predev": "docker compose up -d db",
     "dev": "concurrently -n frontend,backend,studio -c cyan,yellow,magenta \"npm run dev:frontend\" \"npm run dev:backend\" \"npm run dev:studio\"",
+    "dev:local": "bash scripts/start.sh local",
+    "dev:docker": "bash scripts/start.sh docker",
+    "stop": "bash scripts/start.sh stop",
     "dev:frontend": "npm run dev --prefix frontend",
     "dev:backend": "npm run dev --prefix backend",
     "dev:studio": "npm run db:studio --prefix backend",

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
 import { useSession } from '@/lib/auth-client';
+import { logEvent, setLastKnownLocation } from '@/lib/userlog';
 import { RUN_MODE, RUN_MODE_LABEL, RUN_MODE_BADGE } from '@/lib/runtime-env';
 
 const PAINT_API = '/api/backend/painted';
@@ -27,6 +28,25 @@ type ServerPoints = {
   level: number;
   exp: number;
   expToNext: number;
+  totalExp: number;
+  playTimeSec: number;
+};
+
+// 合計プレイ時間のハートビート間隔（約1分ごとに経過秒をサーバーへ送る）
+const HEARTBEAT_INTERVAL_MS = 60 * 1000;
+
+// 動画リワード：モック動画の長さ（秒）。視聴完了するとサーバーへ報酬を請求する。
+// 実広告SDK導入時は、この秒数カウントの代わりに広告の完了コールバックで請求する。
+const VIDEO_REWARD_DURATION_SEC = 10;
+
+// 動画リワードの利用可否（backend/src/lib/points.ts の VideoRewardStatus と一致）
+type VideoRewardStatus = {
+  maxPerDay: number;
+  remainingToday: number;
+  cooldownMs: number;
+  nextAvailableAt: number | null; // クールダウン中の次回視聴可能時刻 / 可能なら null
+  resetAt: number | null; // 1日上限到達時のリセット時刻（翌JST0時）/ 未達なら null
+  available: boolean;
 };
 
 // 「+1まで mm:ss」表示用
@@ -36,6 +56,22 @@ function formatCountdown(ms: number): string {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// 合計プレイ時間（秒）を「X時間Y分Z秒」などの日本語に整形する（秒単位まで表示）
+function formatPlayTime(sec: number): string {
+  if (!Number.isFinite(sec) || sec <= 0) return '0秒';
+  const totalSec = Math.floor(sec);
+  const d = Math.floor(totalSec / 86400);
+  const h = Math.floor((totalSec % 86400) / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const parts: string[] = [];
+  if (d > 0) parts.push(`${d}日`);
+  if (d > 0 || h > 0) parts.push(`${h}時間`);
+  if (d > 0 || h > 0 || m > 0) parts.push(`${m}分`);
+  parts.push(`${s}秒`);
+  return parts.join('');
 }
 
 // 塗り方モード。gps = 実際に訪問（最優先・黄）、manual = マウスで隣接塗り（茶）
@@ -61,46 +97,44 @@ const BLANK_STYLE: maplibregl.StyleSpecification = {
 // それより引いた状態では市区町村の白地図として見せる。
 const MESH_MIN_ZOOM = 10;
 
-// 塗った箇所を低ズーム（メッシュタイルが無い範囲）でも見せるための
-// オーバーレイ表示開始ズーム。MESH_MIN_ZOOM 未満はオーバーレイ、以上は mesh-fill が担当。
+// 塗った箇所を描く painted-overlay の表示開始ズーム（mesh はベイクしないので全ズーム
+// この1レイヤーが塗りの色付けを担う）。これ未満は塗りも非表示。
 const PAINTED_OVERLAY_MIN_ZOOM = 6;
 
-// 約1kmの3次地域メッシュ = 緯度 1/120°・経度 1/80° の均一グリッド
+// 約1kmの等面積グリッド = 緯度 1/120°・経度 1/80° の均一グリッド
 const MESH_LAT_DIV = 120;
 const MESH_LON_DIV = 80;
 
-// グリッド整数 (ri, ci) → 8桁地域メッシュコード（数値ID）
+// 全球で一意なセルID（CELLID）のエンコード。
+// グリッド整数 ri=floor(lat*120) ∈[-10800,10800]、ci=floor(lng*80) ∈[-14400,14400] を
+// 非負へオフセットして 1 整数に詰める。旧8桁JIS地域メッシュコードは経度100〜180・緯度2桁
+// 前提で世界版では破綻するため、全球で破綻しないこの方式に統一した。
+//   RI0 = ri + 10800 ∈[0,21600]   CI0 = ci + 14400 ∈[0,28800]
+//   CELLID = RI0 * 30000 + CI0      // 乗数30000 > CI0最大 で衝突なし・最大 648,028,800（9桁）
+const CELL_RI_OFFSET = 10800;
+const CELL_CI_OFFSET = 14400;
+const CELL_CI_SPAN = 30000;
+
+// グリッド整数 (ri, ci) → CELLID（数値ID）
 function meshCodeFromGrid(ri: number, ci: number): number {
-  const p = Math.floor(ri / 80);
-  const q = Math.floor((ri - p * 80) / 10);
-  const r = ri - p * 80 - q * 10;
-  const uu = Math.floor(ci / 80);
-  const u = uu - 100;
-  const v = Math.floor((ci - uu * 80) / 10);
-  const w = ci - uu * 80 - v * 10;
-  return Number(`${p}${u}${q}${v}${r}${w}`);
+  return (ri + CELL_RI_OFFSET) * CELL_CI_SPAN + (ci + CELL_CI_OFFSET);
 }
 
-// 経度・緯度 → メッシュコード（数値ID）
+// 経度・緯度 → CELLID（数値ID）
 function meshCodeAt(lng: number, lat: number): number {
   const ri = Math.floor(lat * MESH_LAT_DIV);
   const ci = Math.floor(lng * MESH_LON_DIV);
   return meshCodeFromGrid(ri, ci);
 }
 
-// メッシュコード（数値ID）→ グリッド整数 [ri, ci]
+// CELLID（数値ID）→ グリッド整数 [ri, ci]
 function gridFromMeshCode(code: number): [number, number] {
-  const s = String(code).padStart(8, '0');
-  const p = Number(s.slice(0, 2));
-  const u = Number(s.slice(2, 4));
-  const q = Number(s[4]);
-  const v = Number(s[5]);
-  const r = Number(s[6]);
-  const w = Number(s[7]);
-  return [p * 80 + q * 10 + r, (u + 100) * 80 + v * 10 + w];
+  const ci0 = code % CELL_CI_SPAN;
+  const ri0 = (code - ci0) / CELL_CI_SPAN;
+  return [ri0 - CELL_RI_OFFSET, ci0 - CELL_CI_OFFSET];
 }
 
-// メッシュコード（数値ID）→ セルの矩形ポリゴンの外周リング（[lng,lat] の5点）
+// CELLID（数値ID）→ セルの矩形ポリゴンの外周リング（[lng,lat] の5点）
 function meshCellRing(code: number): [number, number][] {
   const [ri, ci] = gridFromMeshCode(code);
   const lat0 = ri / MESH_LAT_DIV;
@@ -280,23 +314,61 @@ function buildPaintedOverlay(painted: PaintedState): GeoJSON.FeatureCollection {
   return { type: 'FeatureCollection', features };
 }
 
-function formatAddress(
-  sourceLayer: string,
-  properties: Record<string, unknown> | null | undefined
-): string {
-  if (!properties) return '';
-  const get = (k: string) => {
-    const v = properties[k];
-    return typeof v === 'string' ? v : '';
-  };
-  if (sourceLayer === 'municipalities') {
-    return [get('N03_001'), get('N03_004'), get('N03_005')].filter(Boolean).join('');
+const EMPTY_FC: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
+
+// 点内外判定（even-odd ray casting）。rings: [外周, 穴...]。
+function pointInRings(lng: number, lat: number, rings: number[][][]): boolean {
+  let inside = false;
+  for (const ring of rings) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const xi = ring[i][0],
+        yi = ring[i][1];
+      const xj = ring[j][0],
+        yj = ring[j][1];
+      if (yi > lat !== yj > lat && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) {
+        inside = !inside;
+      }
+    }
   }
-  if (sourceLayer === 'mesh') {
-    return [get('PREF_NAME'), get('CITY_NAME'), get('S_NAME')].filter(Boolean).join('');
-  }
-  return '';
+  return inside;
 }
+
+// GeoJSON geometry を「{rings, bbox}」の配列に正規化（Polygon / MultiPolygon）
+type PolyWithBbox = { rings: number[][][]; bbox: [number, number, number, number] };
+function polysWithBbox(geometry: GeoJSON.Geometry | null | undefined): PolyWithBbox[] {
+  if (!geometry) return [];
+  const polys =
+    geometry.type === 'Polygon'
+      ? [geometry.coordinates]
+      : geometry.type === 'MultiPolygon'
+        ? geometry.coordinates
+        : [];
+  return (polys as number[][][][]).map((rings) => {
+    let minLng = Infinity,
+      minLat = Infinity,
+      maxLng = -Infinity,
+      maxLat = -Infinity;
+    for (const [x, y] of rings[0]) {
+      if (x < minLng) minLng = x;
+      if (x > maxLng) maxLng = x;
+      if (y < minLat) minLat = y;
+      if (y > maxLat) maxLat = y;
+    }
+    return { rings, bbox: [minLng, minLat, maxLng, maxLat] };
+  });
+}
+
+// CELLID 1個ぶんの矩形 Feature（ホバー表示用）
+function cellFeature(code: number): GeoJSON.Feature {
+  return {
+    type: 'Feature',
+    properties: {},
+    geometry: { type: 'Polygon', coordinates: [meshCellRing(code)] },
+  };
+}
+
+// 格子生成・陸地判定で走査するセル数の安全上限（引きすぎ時は格子を出さない）
+const GRID_MAX_CELLS = 20000;
 
 type MapProps = {
   onHoverAddressChange?: (address: string) => void;
@@ -317,10 +389,13 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const [level, setLevel] = useState(1);
   const [exp, setExp] = useState(0); // 現在レベル内の経験値
   const [expToNext, setExpToNext] = useState(0); // 次レベルまでに必要な経験値
+  const [totalExp, setTotalExp] = useState(0); // 累計獲得経験値（減らない記録）
+  const [playTimeSec, setPlayTimeSec] = useState(0); // 合計プレイ時間（秒）
   const pointsRef = useRef(0);
   const regenAtRef = useRef<number | null>(null);
   const maxPointsRef = useRef(DEFAULT_MAX_POINTS);
   const levelRef = useRef<number | null>(null); // 直近のレベル（レベルアップ検出用・未取得は null）
+  const lastBeatRef = useRef<number>(0); // 合計プレイ時間：前回ハートビートで計上した時刻(ms)
   const [nowTick, setNowTick] = useState(() => Date.now()); // カウントダウン再描画用
   // レベルアップ演出（{ to: 到達レベル } を一時表示）
   const [levelUp, setLevelUp] = useState<{ to: number } | null>(null);
@@ -329,14 +404,26 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const [confirmPaint, setConfirmPaint] = useState<{
     id: number;
     cost: number;
-    properties: Record<string, unknown> | null;
+    muniKey: string | null;
+    address: string;
   } | null>(null);
   const doManualPaintRef = useRef<
-    (id: number, properties: Record<string, unknown> | null, cost: number) => void
+    (id: number, muniKey: string | null, address: string, cost: number) => void
   >(() => {});
+  // 動画リワード（動画視聴でそのレベルの満タン分を回復）
+  const [rewardStatus, setRewardStatus] = useState<VideoRewardStatus | null>(null);
+  const [videoOpen, setVideoOpen] = useState(false); // モック動画モーダルの表示
+  // 'watching'=再生中（カウントダウン）/ 'claiming'=報酬請求中 / 'error'=請求失敗
+  const [videoPhase, setVideoPhase] = useState<'watching' | 'claiming' | 'error'>(
+    'watching'
+  );
+  const [videoLeftSec, setVideoLeftSec] = useState(VIDEO_REWARD_DURATION_SEC);
+  const videoTimerRef = useRef<number | null>(null);
   // 市区町村ごとの塗り％表示用
   const [hoverStat, setHoverStat] = useState<string | null>(null); // ホバー中市区町村の「市名 35%（n/N）」
-  const muniByMeshRef = useRef<Map<number, string> | null>(null); // meshcode → "PREF|CITY"
+  // 塗ったセルの CELLID → "PREF|CITY"。塗り時に求めた値を保持し、復元時は backend の
+  // municipality 列から埋める。mesh をベイクしなくなったので「全セルの cell→市」表は持たない。
+  const muniByPaintedCellRef = useRef<Map<number, string>>(new Map());
   const totalByMuniRef = useRef<Map<string, number>>(new Map()); // "PREF|CITY" → 総セル数（分母）
   const paintedByMuniRef = useRef<Map<string, number>>(new Map()); // "PREF|CITY" → 塗ったセル数（分子）
   const hoverKeyRef = useRef<string | null>(null); // 現在ホバー中の市区町村キー
@@ -390,6 +477,9 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   // 開発者だけがデバッグメニューを使える。一般ユーザーには表示しない。
   const isDeveloper =
     (session?.user as { role?: string } | undefined)?.role === 'developer';
+  // クリックハンドラ（map init effect 内・同期参照）から権限を見るための ref
+  const isDeveloperRef = useRef(false);
+  isDeveloperRef.current = isDeveloper;
   // デバッグメニュー（レンチ）コントロールは権限に応じて後から付け外しする
   const debugControlRef = useRef<DebugControl | null>(null);
 
@@ -435,6 +525,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       setLevel(s.level);
       setExp(s.exp);
       setExpToNext(s.expToNext);
+      setTotalExp(s.totalExp);
+      setPlayTimeSec(s.playTimeSec);
       const prevLevel = levelRef.current;
       levelRef.current = s.level;
       if (prevLevel !== null && s.level > prevLevel) {
@@ -444,11 +536,82 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     [applyPointsState, showLevelUp]
   );
 
+  // 動画リワードの利用可否（残り回数・クールダウン）をサーバーから取得する。
+  const refreshRewardStatus = useCallback(async () => {
+    if (!userIdRef.current) return;
+    try {
+      const res = await fetch(`${POINTS_API}/reward/video`, {
+        credentials: 'include',
+      });
+      if (!res.ok) return;
+      setRewardStatus((await res.json()) as VideoRewardStatus);
+    } catch (err) {
+      console.warn('failed to load video reward status', err);
+    }
+  }, []);
+
+  // モック動画モーダルを開いて視聴カウントダウンを開始する。
+  const openVideoReward = useCallback(() => {
+    if (!userIdRef.current) {
+      showToast('ログインすると動画でポイントを回復できます');
+      return;
+    }
+    setVideoPhase('watching');
+    setVideoLeftSec(VIDEO_REWARD_DURATION_SEC);
+    setVideoOpen(true);
+  }, []);
+
+  // モーダルを閉じてカウントダウンタイマーを止める。
+  const closeVideoReward = useCallback(() => {
+    if (videoTimerRef.current !== null) {
+      window.clearInterval(videoTimerRef.current);
+      videoTimerRef.current = null;
+    }
+    setVideoOpen(false);
+  }, []);
+
+  // 視聴完了後にサーバーへ報酬を請求し、残高に反映する。
+  // クールダウン中・1日上限（429）は理由をトーストで知らせる。
+  const claimVideoReward = useCallback(async () => {
+    setVideoPhase('claiming');
+    try {
+      const res = await fetch(`${POINTS_API}/reward/video`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { points?: ServerPoints; granted?: number; status?: VideoRewardStatus }
+        | { error?: string; status?: VideoRewardStatus }
+        | null;
+      if (!res.ok) {
+        if (data?.status) setRewardStatus(data.status);
+        const reason = (data as { error?: string } | null)?.error;
+        showToast(
+          reason === 'cooldown'
+            ? 'まだ動画を見られません（クールダウン中）'
+            : reason === 'daily_limit'
+              ? '本日の視聴上限に達しました'
+              : 'ポイントの回復に失敗しました'
+        );
+        closeVideoReward();
+        return;
+      }
+      const ok = data as { points?: ServerPoints; granted?: number; status?: VideoRewardStatus };
+      if (ok.points) applyServerPoints(ok.points);
+      if (ok.status) setRewardStatus(ok.status);
+      closeVideoReward();
+      showToast(`動画視聴で塗りポイントを ${ok.granted ?? 0} 回復しました`);
+    } catch (err) {
+      console.warn('failed to claim video reward', err);
+      setVideoPhase('error');
+    }
+  }, [applyServerPoints, closeVideoReward]);
+
   // 離れた場所（10ポイント）の確認ダイアログで「塗る」を押したとき
   const confirmFarPaint = useCallback(() => {
     setConfirmPaint((pending) => {
       if (pending) {
-        doManualPaintRef.current(pending.id, pending.properties, pending.cost);
+        doManualPaintRef.current(pending.id, pending.muniKey, pending.address, pending.cost);
       }
       return null;
     });
@@ -513,6 +676,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const runSearch = useCallback(async (q: string) => {
     const query = q.trim();
     if (!query) return;
+    logEvent('search', { meta: { query } });
     setSearchLoading(true);
     setSearchError(null);
     setSearchResults([]);
@@ -593,6 +757,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       setLevel(1);
       setExp(0);
       setExpToNext(0);
+      setPlayTimeSec(0);
       levelRef.current = null;
       return;
     }
@@ -608,10 +773,41 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         console.warn('failed to load paint points', err);
       }
     })();
+    // 動画リワードの利用可否も取得（ボタンの残り回数・クールダウン表示用）
+    refreshRewardStatus();
     return () => {
       cancelled = true;
     };
-  }, [userId, applyPointsState, applyServerPoints]);
+  }, [userId, applyPointsState, applyServerPoints, refreshRewardStatus]);
+
+  // ログアウト時は動画リワードの状態もクリアする。
+  useEffect(() => {
+    if (!userId) setRewardStatus(null);
+  }, [userId]);
+
+  // モック動画の視聴カウントダウン。0 になったら自動で報酬を請求する。
+  useEffect(() => {
+    if (!videoOpen || videoPhase !== 'watching') return;
+    videoTimerRef.current = window.setInterval(() => {
+      setVideoLeftSec((s) => {
+        if (s <= 1) {
+          if (videoTimerRef.current !== null) {
+            window.clearInterval(videoTimerRef.current);
+            videoTimerRef.current = null;
+          }
+          claimVideoReward();
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+    return () => {
+      if (videoTimerRef.current !== null) {
+        window.clearInterval(videoTimerRef.current);
+        videoTimerRef.current = null;
+      }
+    };
+  }, [videoOpen, videoPhase, claimVideoReward]);
 
   // 塗りポイントの時間回復（クライアント側）。1秒ごとに回復時刻を過ぎていれば加算し、
   // カウントダウン表示用に nowTick も更新する。サーバーが権威なので塗り時に再同期される。
@@ -634,21 +830,69 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     return () => window.clearInterval(iv);
   }, [userId, applyPointsState]);
 
+  // 合計プレイ時間の計測。前回計上からの経過秒をサーバーへ送って加算する。
+  // 約1分ごと（HEARTBEAT_INTERVAL_MS）＋タブを離れる／閉じるときに送る。
+  // タブが非表示の間は計上しない（経過分は破棄してアンカーを進める）。
+  useEffect(() => {
+    if (!userId) return;
+    lastBeatRef.current = Date.now();
+
+    // 経過秒をサーバーへ送って合計プレイ時間に加算する。
+    // useBeacon=true は離脱時用（fetch だと中断されうるため sendBeacon を使う）。
+    const flush = (useBeacon = false) => {
+      const now = Date.now();
+      const deltaSec = Math.floor((now - lastBeatRef.current) / 1000);
+      lastBeatRef.current = now;
+      // 非表示中の経過は計上しない（裏で開きっぱなしの時間を除く）
+      if (document.visibilityState !== 'visible') return;
+      if (deltaSec <= 0) return;
+      const body = JSON.stringify({ deltaSec });
+      if (useBeacon && navigator.sendBeacon) {
+        navigator.sendBeacon(
+          `${POINTS_API}/heartbeat`,
+          new Blob([body], { type: 'application/json' })
+        );
+        return;
+      }
+      fetch(`${POINTS_API}/heartbeat`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: ServerPoints | null) => {
+          if (data) setPlayTimeSec(data.playTimeSec);
+        })
+        .catch((err) => console.warn('failed to send playtime heartbeat', err));
+    };
+
+    const iv = window.setInterval(() => flush(false), HEARTBEAT_INTERVAL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        flush(true); // 離脱直前の分を計上
+      } else {
+        lastBeatRef.current = Date.now(); // 復帰：ここから再計測
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      flush(true); // アンマウント時（ログアウト・ページ遷移）も計上
+      window.clearInterval(iv);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [userId]);
+
   useEffect(() => {
     onHoverAddressChangeRef.current = onHoverAddressChange;
   }, [onHoverAddressChange]);
 
   // meshcode の所属市区町村キー（"PREF|CITY"）を求める。
   // タイル由来の properties があればそれを優先し、無ければロード済みの対応表を引く。
+  // 既に塗ったセルの市区町村キー（"PREF|CITY"）。新規塗り時のキーは塗りハンドラ側が
+  // municipalities レイヤーへの問い合わせで求めて muniByPaintedCellRef に入れる。
   const muniKeyFor = useCallback(
-    (id: number, properties?: Record<string, unknown> | null): string | null => {
-      if (properties) {
-        const pref = typeof properties.PREF_NAME === 'string' ? properties.PREF_NAME : '';
-        const city = typeof properties.CITY_NAME === 'string' ? properties.CITY_NAME : '';
-        if (city) return `${pref}|${city}`;
-      }
-      return muniByMeshRef.current?.get(id) ?? null;
-    },
+    (id: number): string | null => muniByPaintedCellRef.current.get(id) ?? null,
     []
   );
 
@@ -674,15 +918,13 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   // 塗り状態から市区町村ごとの塗りセル数を作り直す（対応表ロード時・DB復元時に呼ぶ）
   const rebuildPaintedByMuni = useCallback(() => {
     const counts = new Map<string, number>();
-    const lookup = muniByMeshRef.current;
-    if (lookup) {
-      for (const key of Object.keys(paintedRef.current)) {
-        const [layer, idStr] = key.split(':');
-        if (layer !== 'mesh') continue;
-        const muni = lookup.get(Number(idStr));
-        if (!muni) continue;
-        counts.set(muni, (counts.get(muni) ?? 0) + 1);
-      }
+    const lookup = muniByPaintedCellRef.current;
+    for (const key of Object.keys(paintedRef.current)) {
+      const [layer, idStr] = key.split(':');
+      if (layer !== 'mesh') continue;
+      const muni = lookup.get(Number(idStr));
+      if (!muni) continue;
+      counts.set(muni, (counts.get(muni) ?? 0) + 1);
     }
     paintedByMuniRef.current = counts;
     refreshHoverStat();
@@ -690,20 +932,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
 
   // デバッグ用：自分の塗りを全消去する（地図・state・サーバーすべて）。ポイントは返金しない。
   const clearAllPaint = useCallback(async () => {
-    const map = mapRef.current;
-    if (map) {
-      for (const key of Object.keys(paintedRef.current)) {
-        const [sourceLayer, idStr] = key.split(':');
-        const id = Number(idStr);
-        if (!Number.isFinite(id)) continue;
-        map.setFeatureState(
-          { source: 'japan', sourceLayer, id },
-          { painted: false, mode: null }
-        );
-      }
-    }
+    // 塗りの描画は painted-overlay（painted state 駆動）なので state を空にすれば消える。
     paintedRef.current = {};
     setPainted({});
+    muniByPaintedCellRef.current = new Map();
     paintedByMuniRef.current = new Map();
     refreshHoverStat();
 
@@ -916,8 +1148,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         },
       });
 
-      // 塗りオーバーレイ（低ズーム用）。塗ったセルをクライアント生成の矩形で描く。
-      // mesh タイルが無い zoom 6〜MESH_MIN_ZOOM の範囲だけ表示し、以降は mesh-fill に任せる。
+      // 塗りオーバーレイ。塗ったセルをクライアント生成の矩形で全ズーム描画する。
+      // mesh は PMTiles に焼かず数式生成するので、塗りの色付けはこのオーバーレイが一手に担う。
       map.addSource('painted-overlay', {
         type: 'geojson',
         data: buildPaintedOverlay(paintedRef.current),
@@ -927,42 +1159,23 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         type: 'fill',
         source: 'painted-overlay',
         minzoom: PAINTED_OVERLAY_MIN_ZOOM,
-        maxzoom: MESH_MIN_ZOOM,
         paint: {
           'fill-color': ['match', ['get', 'mode'], 'gps', COLOR_GPS, 'manual', COLOR_MANUAL, '#ffffff'],
           'fill-opacity': 0.85,
         },
       });
 
-      // メッシュフィル（塗りの単位）。塗ったセルだけ色を出し、未塗りは透明。
-      map.addLayer({
-        id: 'mesh-fill',
-        type: 'fill',
-        source: 'japan',
-        'source-layer': 'mesh',
-        minzoom: MESH_MIN_ZOOM,
-        paint: {
-          'fill-color': [
-            'case',
-            ['==', ['feature-state', 'mode'], 'gps'], COLOR_GPS,
-            ['==', ['feature-state', 'mode'], 'manual'], COLOR_MANUAL,
-            '#ffffff',
-          ],
-          'fill-opacity': ['case', ['boolean', ['feature-state', 'painted'], false], 0.85, 0],
-        },
-      });
-
-      // 1kmメッシュの格子線。ズーム9から表示し、寄るほどはっきりさせる
+      // 1kmメッシュの格子線。PMTiles に焼かず、表示範囲のセルを moveend で数式生成する。
+      map.addSource('mesh-grid', { type: 'geojson', data: EMPTY_FC });
       map.addLayer({
         id: 'mesh-border',
         type: 'line',
-        source: 'japan',
-        'source-layer': 'mesh',
-        minzoom: 9,
+        source: 'mesh-grid',
+        minzoom: MESH_MIN_ZOOM,
         paint: {
           'line-color': '#7dd3fc',
-          'line-width': ['interpolate', ['linear'], ['zoom'], 9, 0.3, 13, 0.6],
-          'line-opacity': ['interpolate', ['linear'], ['zoom'], 9, 0.4, 12, 0.7],
+          'line-width': ['interpolate', ['linear'], ['zoom'], 10, 0.3, 13, 0.6],
+          'line-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0.4, 12, 0.7],
         },
       });
 
@@ -991,59 +1204,148 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       // 都道府県名・市区町村名・政令市名のラベルは、塗り％を横に差し込めるよう
       // クライアント側 GeoJSON ソースとして mapReady 後に別 effect で追加する。
 
-      // ホバーレイヤー（メッシュ）
+      // ホバーレイヤー（メッシュ）。ホバー中の1セルだけを矩形で描く（feature-state 不要）。
+      map.addSource('mesh-hover', { type: 'geojson', data: EMPTY_FC });
       map.addLayer({
         id: 'mesh-hover',
         type: 'fill',
-        source: 'japan',
-        'source-layer': 'mesh',
+        source: 'mesh-hover',
         minzoom: MESH_MIN_ZOOM,
-        paint: {
-          'fill-color': '#000000',
-          'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.12, 0],
-        },
+        paint: { 'fill-color': '#000000', 'fill-opacity': 0.12 },
       });
 
+      // 表示中の「陸」セル（CELLID）の集合。mesh をベイクしなくなったので、表示中の
+      // 市区町村ポリゴンに対しグリッドセル中心を点内外判定して陸地セルを割り出す。
+      // 格子描画（海上は出さない）と海越え隣接判定の両方でこれを使う。
+      const collectVisibleLand = () => {
+        const set = new Set<number>();
+        const munis = map.queryRenderedFeatures({ layers: ['municipalities-fill'] });
+        if (munis.length === 0) return set;
+        const b = map.getBounds();
+        const riMin = Math.floor(b.getSouth() * MESH_LAT_DIV);
+        const riMax = Math.floor(b.getNorth() * MESH_LAT_DIV);
+        const ciMin = Math.floor(b.getWest() * MESH_LON_DIV);
+        const ciMax = Math.floor(b.getEast() * MESH_LON_DIV);
+        if ((riMax - riMin + 1) * (ciMax - ciMin + 1) > GRID_MAX_CELLS) return set;
+        const polys = munis.flatMap((f) => polysWithBbox(f.geometry));
+        for (let ri = riMin; ri <= riMax; ri++) {
+          const lat = (ri + 0.5) / MESH_LAT_DIV;
+          for (let ci = ciMin; ci <= ciMax; ci++) {
+            const lng = (ci + 0.5) / MESH_LON_DIV;
+            for (const { rings, bbox } of polys) {
+              if (lng < bbox[0] || lng > bbox[2] || lat < bbox[1] || lat > bbox[3]) continue;
+              if (pointInRings(lng, lat, rings)) {
+                set.add(meshCodeFromGrid(ri, ci));
+                break;
+              }
+            }
+          }
+        }
+        return set;
+      };
+
+      // ── メッシュ格子をビューポートに合わせて数式生成（mesh をベイクしない代替）──
+      // 陸地セルだけを矩形化するので、海上（塗れない所）には格子線が出ない。
+      const refreshGrid = () => {
+        const src = map.getSource('mesh-grid') as maplibregl.GeoJSONSource | undefined;
+        if (!src) return;
+        if (map.getZoom() < MESH_MIN_ZOOM) {
+          src.setData(EMPTY_FC);
+          return;
+        }
+        const features: GeoJSON.Feature[] = [];
+        for (const code of collectVisibleLand()) features.push(cellFeature(code));
+        src.setData({ type: 'FeatureCollection', features });
+      };
+      let gridTimer: number | null = null;
+      const scheduleGrid = () => {
+        if (gridTimer !== null) return;
+        gridTimer = window.setTimeout(() => {
+          gridTimer = null;
+          refreshGrid();
+        }, 120);
+      };
+      map.on('moveend', scheduleGrid);
+      map.on('zoomend', scheduleGrid);
+      // 市区町村タイルが遅れて読み込まれた時も格子を埋め直す（自前ソースの更新では発火しない）
+      map.on('sourcedata', (e) => {
+        if (e.sourceId === 'japan' && e.isSourceLoaded && map.getZoom() >= MESH_MIN_ZOOM) {
+          scheduleGrid();
+        }
+      });
+      refreshGrid();
+
       // ── インタラクション ────────────────────────
-      let hovered: { source: string; id: string | number; sourceLayer: string } | null = null;
+      const meshHoverSrc = () =>
+        map.getSource('mesh-hover') as maplibregl.GeoJSONSource | undefined;
+
+      // 画面上の点 → その地点の市区町村情報（陸地判定も兼ねる）。海上など muni が無ければ null。
+      // キーは "N03_001 | (N03_004 + N03_005)"。build-muni-stats / 保存する municipality と同一規則。
+      const muniInfoAt = (
+        point: maplibregl.PointLike
+      ): { key: string; address: string } | null => {
+        const feats = map.queryRenderedFeatures(point, { layers: ['municipalities-fill'] });
+        const p = feats[0]?.properties;
+        if (!p) return null;
+        const pref = typeof p.N03_001 === 'string' ? p.N03_001 : '';
+        const c4 = typeof p.N03_004 === 'string' ? p.N03_004 : '';
+        const c5 = typeof p.N03_005 === 'string' ? p.N03_005 : '';
+        const city = c4 + c5;
+        if (!city) return null;
+        return { key: `${pref}|${city}`, address: pref + city };
+      };
+
+      // ホバー住所のキャッシュ（CELLID→町丁目入り住所）と逆ジオコーダのデバウンス
+      const hoverAddrCache = new Map<number, string>();
+      let hoverGeocodeTimer: number | null = null;
+      let hoverId: number | null = null;
 
       const clearHover = () => {
-        if (hovered) {
-          map.setFeatureState(
-            { source: hovered.source, sourceLayer: hovered.sourceLayer, id: hovered.id },
-            { hover: false }
-          );
-          hovered = null;
-          onHoverAddressChangeRef.current?.('');
-          hoverKeyRef.current = null;
-          refreshHoverStat();
+        if (hoverId === null) return;
+        hoverId = null;
+        meshHoverSrc()?.setData(EMPTY_FC);
+        onHoverAddressChangeRef.current?.('');
+        hoverKeyRef.current = null;
+        refreshHoverStat();
+        if (hoverGeocodeTimer !== null) {
+          clearTimeout(hoverGeocodeTimer);
+          hoverGeocodeTimer = null;
         }
       };
 
-      const setHover = (
-        source: string,
-        sourceLayer: string,
-        id: string | number,
-        properties: Record<string, unknown> | null | undefined
-      ) => {
-        if (hovered?.id === id && hovered?.sourceLayer === sourceLayer) return;
-        clearHover();
-        map.setFeatureState({ source, sourceLayer, id }, { hover: true });
-        hovered = { source, sourceLayer, id };
+      const setHover = (id: number, muniKey: string, address: string) => {
+        if (hoverId === id) return;
+        hoverId = id;
+        meshHoverSrc()?.setData({ type: 'FeatureCollection', features: [cellFeature(id)] });
         map.getCanvas().style.cursor = 'pointer';
-        onHoverAddressChangeRef.current?.(formatAddress(sourceLayer, properties));
-        // ホバー中市区町村の塗り％を更新（メッシュのみ）
-        hoverKeyRef.current =
-          sourceLayer === 'mesh' ? muniKeyFor(Number(id), properties) : null;
+        hoverKeyRef.current = muniKey;
         refreshHoverStat();
+        // まず市区町村まで即表示。続いて逆ジオコーダで町丁目まで補う（mesh はベイクしない）。
+        const cached = hoverAddrCache.get(id);
+        onHoverAddressChangeRef.current?.(cached ?? address);
+        if (hoverGeocodeTimer !== null) {
+          clearTimeout(hoverGeocodeTimer);
+          hoverGeocodeTimer = null;
+        }
+        if (cached === undefined) {
+          const [ri, ci] = gridFromMeshCode(id);
+          const lng = (ci + 0.5) / MESH_LON_DIV;
+          const lat = (ri + 0.5) / MESH_LAT_DIV;
+          hoverGeocodeTimer = window.setTimeout(() => {
+            reverseGeocode(lng, lat).then((full) => {
+              if (full) hoverAddrCache.set(id, full);
+              if (hoverId === id && full) onHoverAddressChangeRef.current?.(full);
+            });
+          }, 250);
+        }
       };
 
       map.on('mousemove', (e) => {
         if (map.getZoom() >= MESH_MIN_ZOOM) {
-          const mesh = map.queryRenderedFeatures(e.point, { layers: ['mesh-fill'] });
-          if (mesh.length > 0 && mesh[0].id !== undefined) {
-            const id = mesh[0].id as number;
-            setHover('japan', 'mesh', id, mesh[0].properties);
+          const info = muniInfoAt(e.point);
+          if (info) {
+            const id = meshCodeAt(e.lngLat.lng, e.lngLat.lat);
+            setHover(id, info.key, info.address);
             // デバッグ：マウスオーバー塗りモードはカーソルが通ったセルを無料で塗る。
             // 消しモードとは排他。gps（現地）は上書きしない。トーストは出さない（連発防止）。
             if (
@@ -1051,8 +1353,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               !eraseModeRef.current &&
               paintedRef.current[`mesh:${id}`] !== 'gps'
             ) {
-              const result = commitLocalPaint('japan', 'mesh', id, 'manual', mesh[0].properties, true);
-              if (result !== 'skip') syncPaint('POST', 'mesh', id, 'manual');
+              const result = commitLocalPaint(id, 'manual', info.key, info.address, true);
+              if (result !== 'skip') syncPaint('POST', id, 'manual');
             }
             return;
           }
@@ -1068,16 +1370,24 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
 
       const syncPaint = (
         method: 'POST' | 'DELETE',
-        sourceLayer: string,
-        id: string | number,
+        id: number,
         mode?: PaintMode
       ) => {
         if (!userIdRef.current) return;
+        // POST のときは塗った位置の文脈（セル中心の緯度経度・市区町村）を添える。
+        // ip/ua はサーバー側で取得する。DELETE には付けない。
+        const ctx: { lat?: number; lng?: number; municipality?: string | null } = {};
+        if (method === 'POST') {
+          const [ri, ci] = gridFromMeshCode(id);
+          ctx.lat = (ri + 0.5) / MESH_LAT_DIV;
+          ctx.lng = (ci + 0.5) / MESH_LON_DIV;
+          ctx.municipality = muniKeyFor(id);
+        }
         fetch(PAINT_API, {
           method,
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sourceLayer, keyCode: String(id), mode }),
+          body: JSON.stringify({ sourceLayer: 'mesh', keyCode: String(id), mode, ...ctx }),
         })
           .then(async (res) => {
             // POST（GPS塗り・なぞり塗り）はサーバーが経験値・レベルを返す。反映してレベルアップ演出も出す。
@@ -1092,79 +1402,69 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           });
       };
 
-      // 指定モードでローカル（地図 + state）にだけ塗る。サーバー同期はしない。
+      // 指定モードでローカル（state）にだけ塗る。サーバー同期はしない。塗りの描画は
+      // painted-overlay（painted state 駆動）が担うので feature-state は使わない。
       // 優先度 gps > manual（manual は gps を上書きしない）。戻り値で塗りの結果を返す。
+      // muniKey は塗ったセルの "PREF|CITY"（陸地判定済みのハンドラ側で求めて渡す）。
       const commitLocalPaint = (
-        source: string,
-        sourceLayer: string,
-        id: string | number,
+        id: number,
         mode: PaintMode,
-        properties?: Record<string, unknown> | null,
+        muniKey: string | null,
+        address?: string,
         silent = false
       ): 'new' | 'promoted' | 'skip' => {
-        const key = `${sourceLayer}:${id}`;
+        const key = `mesh:${id}`;
         const current = paintedRef.current;
         const existing = current[key];
         if (existing === mode) return 'skip'; // 変化なし
         if (existing === 'gps' && mode === 'manual') return 'skip'; // 降格は禁止
 
-        map.setFeatureState({ source, sourceLayer, id }, { painted: true, mode });
         paintedRef.current = { ...current, [key]: mode };
         setPainted(paintedRef.current);
 
         if (!existing) {
-          if (!silent) showToast(formatAddress(sourceLayer, properties));
+          if (!silent && address) showToast(address);
           // 新規セルのみ市区町村カウントを +1（gps への昇格では増やさない）
-          if (sourceLayer === 'mesh') {
-            const muni = muniKeyFor(Number(id), properties);
-            if (muni) {
-              paintedByMuniRef.current.set(muni, (paintedByMuniRef.current.get(muni) ?? 0) + 1);
-              refreshHoverStat();
-            }
+          if (muniKey) {
+            muniByPaintedCellRef.current.set(id, muniKey);
+            paintedByMuniRef.current.set(muniKey, (paintedByMuniRef.current.get(muniKey) ?? 0) + 1);
+            refreshHoverStat();
           }
         }
         return existing ? 'promoted' : 'new';
       };
 
       // GPS（実際の移動）塗り。無料なのでローカル反映＋同期のみ。
-      const applyPaint = (
-        source: string,
-        sourceLayer: string,
-        id: string | number,
-        mode: PaintMode,
-        properties?: Record<string, unknown> | null
-      ) => {
-        const result = commitLocalPaint(source, sourceLayer, id, mode, properties);
-        if (result !== 'skip') syncPaint('POST', sourceLayer, id, mode);
+      const applyPaint = (id: number, mode: PaintMode, muniKey: string | null) => {
+        const result = commitLocalPaint(id, mode, muniKey);
+        if (result !== 'skip') syncPaint('POST', id, mode);
       };
 
-      // ローカルの塗りを取り消す（地図 + state のみ。サーバー同期はしない）
-      const removeLocalPaint = (source: string, sourceLayer: string, id: string | number) => {
-        const key = `${sourceLayer}:${id}`;
+      // ローカルの塗りを取り消す（state のみ。サーバー同期はしない）
+      const removeLocalPaint = (id: number) => {
+        const key = `mesh:${id}`;
         const current = paintedRef.current;
         if (!current[key]) return false;
-        map.setFeatureState({ source, sourceLayer, id }, { painted: false, mode: null });
         const next = { ...current };
         delete next[key];
         paintedRef.current = next;
         setPainted(next);
-        if (sourceLayer === 'mesh') {
-          const muni = muniKeyFor(Number(id));
-          if (muni) {
-            const n = (paintedByMuniRef.current.get(muni) ?? 0) - 1;
-            if (n > 0) paintedByMuniRef.current.set(muni, n);
-            else paintedByMuniRef.current.delete(muni);
-            refreshHoverStat();
-          }
+        const muni = muniByPaintedCellRef.current.get(id);
+        if (muni) {
+          const n = (paintedByMuniRef.current.get(muni) ?? 0) - 1;
+          if (n > 0) paintedByMuniRef.current.set(muni, n);
+          else paintedByMuniRef.current.delete(muni);
+          muniByPaintedCellRef.current.delete(id);
+          refreshHoverStat();
         }
         return true;
       };
 
       // 塗りの取り消し（ローカル＋サーバー）。ポイントは返金しない。
       // 通常クリックでは manual のみ消すが、デバッグ消しモードでは gps も消せる。
-      const removePaint = (source: string, sourceLayer: string, id: string | number) => {
-        if (removeLocalPaint(source, sourceLayer, id)) {
-          syncPaint('DELETE', sourceLayer, id);
+      const removePaint = (id: number) => {
+        if (removeLocalPaint(id)) {
+          syncPaint('DELETE', id);
         }
       };
 
@@ -1172,14 +1472,15 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       // 残高不足（402）なら塗りとポイントを巻き戻す。cost===0 は Shift+クリックの無料デバッグ塗り。
       const doManualPaint = async (
         id: number,
-        properties: Record<string, unknown> | null | undefined,
+        muniKey: string | null,
+        address: string,
         cost: number
       ) => {
         if (!userIdRef.current) {
           showToast('ログインすると塗りポイントを使って塗れます');
           return;
         }
-        if (commitLocalPaint('japan', 'mesh', id, 'manual', properties) === 'skip') return;
+        if (commitLocalPaint(id, 'manual', muniKey, address) === 'skip') return;
 
         const prevPoints = pointsRef.current;
         const prevRegenAt = regenAtRef.current;
@@ -1193,11 +1494,21 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         }
 
         try {
+          // 塗った位置の文脈（セル中心の緯度経度・市区町村）を添える。ip/ua はサーバー側で取得。
+          const [ri, ci] = gridFromMeshCode(id);
           const res = await fetch(PAINT_API, {
             method: 'POST',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sourceLayer: 'mesh', keyCode: String(id), mode: 'manual', cost }),
+            body: JSON.stringify({
+              sourceLayer: 'mesh',
+              keyCode: String(id),
+              mode: 'manual',
+              cost,
+              lat: (ri + 0.5) / MESH_LAT_DIV,
+              lng: (ci + 0.5) / MESH_LON_DIV,
+              municipality: muniKey,
+            }),
           });
           const data = (await res.json().catch(() => null)) as {
             points?: ServerPoints;
@@ -1205,7 +1516,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
 
           if (res.status === 402) {
             // 残高不足：塗りとポイントを巻き戻す
-            removeLocalPaint('japan', 'mesh', id);
+            removeLocalPaint(id);
             if (data?.points) applyServerPoints(data.points);
             else applyPointsState(prevPoints, prevRegenAt);
             showToast('塗りポイントが足りません');
@@ -1241,13 +1552,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       // 塗っていない「陸」セルが間にあると、その方向は遮られる（陸の飛び石は不可）。
       // 陸/海の判別は「現在表示中のメッシュ（陸）」＋「塗り済み（=陸）」で行う。
       const SEA_BRIDGE_MAX = 2000; // 安全上限（事実上の無制限）
-      const collectVisibleLand = () => {
-        const set = new Set<number>();
-        for (const f of map.queryRenderedFeatures({ layers: ['mesh-fill'] })) {
-          if (typeof f.id === 'number') set.add(f.id);
-        }
-        return set;
-      };
+      // collectVisibleLand（表示中の陸地セル集合）は格子生成と共用（上で定義済み）。
       const isAdjacentAcrossSea = (id: number) => {
         const landSet = collectVisibleLand();
         const [ri, ci] = gridFromMeshCode(id);
@@ -1270,14 +1575,13 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       const isAdjacent = (id: number) =>
         isAdjacentToPainted(id) || isAdjacentAcrossSea(id);
 
-      // クリック地点のメッシュセルを取得（zoom が足りない時は null）
-      const pickFeatureAt = (point: maplibregl.PointLike) => {
+      // クリック地点のメッシュセルを取得（zoom が足りない or 海上＝陸地でない時は null）。
+      // CELLID は経緯度から数式で求め、陸地判定・市区町村は muniInfoAt で得る。
+      const pickFeatureAt = (e: maplibregl.MapMouseEvent) => {
         if (map.getZoom() < MESH_MIN_ZOOM) return null;
-        const mesh = map.queryRenderedFeatures(point, { layers: ['mesh-fill'] });
-        if (mesh.length > 0 && mesh[0].id !== undefined) {
-          return { feature: mesh[0], sourceLayer: 'mesh' as const };
-        }
-        return null;
+        const info = muniInfoAt(e.point);
+        if (!info) return null;
+        return { id: meshCodeAt(e.lngLat.lng, e.lngLat.lat), ...info };
       };
 
       map.on('click', (e) => {
@@ -1287,11 +1591,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             showToast('もっとズームすると消せます');
             return;
           }
-          const picked = pickFeatureAt(e.point);
+          const picked = pickFeatureAt(e);
           if (!picked) return;
-          const id = picked.feature.id as number;
-          if (!paintedRef.current[`mesh:${id}`]) return; // 未塗りは何もしない
-          removePaint('japan', 'mesh', id);
+          if (!paintedRef.current[`mesh:${picked.id}`]) return; // 未塗りは何もしない
+          removePaint(picked.id);
           showToast('塗りを消しました');
           return;
         }
@@ -1306,10 +1609,9 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           showToast('もっとズームすると塗れます');
           return;
         }
-        const picked = pickFeatureAt(e.point);
+        const picked = pickFeatureAt(e);
         if (!picked) return;
-        const { feature } = picked;
-        const id = feature.id as number;
+        const { id, key: muniKey, address } = picked;
         const existing = paintedRef.current[`mesh:${id}`];
 
         if (existing === 'gps') {
@@ -1317,27 +1619,28 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           return;
         }
         if (existing === 'manual') {
-          removePaint('japan', 'mesh', id);
+          removePaint(id);
           return;
         }
         // 未塗り → 塗りポイントを使って塗る（ログイン必須）。
         //   隣接（海越え可）= COST_ADJACENT / 離れた場所 = COST_FAR（確認ダイアログ）。
-        // Shift を押しながらだと隣接判定もコストも無視して無料で塗れる（デバッグ用）。
+        // Shift を押しながらだと隣接判定もコストも無視して無料で塗れる（開発者のデバッグ用）。
         if (!userIdRef.current) {
           showToast('ログインすると塗りポイントを使って塗れます');
           return;
         }
-        const cost = shiftHeld ? 0 : isAdjacent(id) ? COST_ADJACENT : COST_FAR;
+        const freeDebug = shiftHeld && isDeveloperRef.current;
+        const cost = freeDebug ? 0 : isAdjacent(id) ? COST_ADJACENT : COST_FAR;
         if (cost > 0 && pointsRef.current < cost) {
           showToast(`塗りポイントが足りません（残り ${pointsRef.current}）`);
           return;
         }
         if (cost >= COST_FAR) {
           // 離れた場所は確認ダイアログを出してから塗る
-          setConfirmPaint({ id, cost, properties: feature.properties ?? null });
+          setConfirmPaint({ id, cost, muniKey, address });
           return;
         }
-        doManualPaint(id, feature.properties, cost);
+        doManualPaint(id, muniKey, address, cost);
       });
 
       // ── 現在地の住所ラベル（青い点の真下に正確な住所を表示）──────────
@@ -1376,13 +1679,13 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       let lastGeocodedId: number | null = null; // 逆ジオコーダの連打防止（セルが変わった時だけ）
       const paintGpsAt = (lngLat: [number, number]) => {
         const id = meshCodeAt(lngLat[0], lngLat[1]);
-        // 表示用の地名は描画済みセルがあれば拾う（ズームが浅い時は省略）
-        let props: Record<string, unknown> | null = null;
+        // 市区町村キー（塗り％用）は表示中なら municipalities から拾う。ズームが浅い／
+        // 画面外なら null（GPS塗り自体は数式で成立するのでセルは塗れる）。
+        let muniKey: string | null = null;
         if (map.getZoom() >= MESH_MIN_ZOOM) {
-          const f = map.queryRenderedFeatures(map.project(lngLat), { layers: ['mesh-fill'] });
-          if (f.length > 0) props = f[0].properties;
+          muniKey = muniInfoAt(map.project(lngLat))?.key ?? null;
         }
-        applyPaint('japan', 'mesh', id, 'gps', props);
+        applyPaint(id, 'gps', muniKey);
         // 現地塗りモードでは、グリッド内の近似住所ではなく現在地の正確な住所を表示する。
         // 同じメッシュセル内では再取得しない（移動して別セルに入った時だけ問い合わせる）。
         if (paintModeRef.current === 'genchi' && id !== lastGeocodedId) {
@@ -1395,8 +1698,19 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           });
         }
       };
+      let firstGpsLogged = false;
       geolocate.on('geolocate', (pos: GeolocationPosition) => {
-        paintGpsAt([pos.coords.longitude, pos.coords.latitude]);
+        const lng = pos.coords.longitude;
+        const lat = pos.coords.latitude;
+        paintGpsAt([lng, lat]);
+        // 直近の現在地を共有（塗り以外のアクションのログ位置に best-effort で使う）。
+        const municipality = muniKeyFor(meshCodeAt(lng, lat));
+        setLastKnownLocation({ lat, lng, municipality });
+        // 現在地の最初の取得を1回だけ記録する。
+        if (!firstGpsLogged) {
+          firstGpsLogged = true;
+          logEvent('gps', { lat, lng, municipality });
+        }
       });
       geolocate.on('error', (err: GeolocationPositionError) => {
         const msg =
@@ -1448,6 +1762,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       };
 
       const onDebugKeyDown = (e: KeyboardEvent) => {
+        // 十字キーの疑似GPS移動は開発者だけのデバッグ機能。
+        if (!isDeveloperRef.current) return;
         if (e.code === 'Space') {
           if (!debugPos) return;
           e.preventDefault();
@@ -1538,17 +1854,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     if (!map) return;
 
     const clearAll = () => {
-      for (const key of Object.keys(paintedRef.current)) {
-        const [sourceLayer, idStr] = key.split(':');
-        const id = Number(idStr);
-        if (!Number.isFinite(id)) continue;
-        map.setFeatureState(
-          { source: 'japan', sourceLayer, id },
-          { painted: false, mode: null }
-        );
-      }
+      // 描画は painted-overlay（painted state 駆動）なので state を空にすれば消える。
       paintedRef.current = {};
       setPainted({});
+      muniByPaintedCellRef.current = new Map();
       paintedByMuniRef.current = new Map();
       refreshHoverStat();
     };
@@ -1564,21 +1873,25 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         const res = await fetch(PAINT_API, { credentials: 'include' });
         if (!res.ok) return;
         const data = (await res.json()) as {
-          painted: { sourceLayer: string; keyCode: string; mode?: string }[];
+          painted: {
+            sourceLayer: string;
+            keyCode: string;
+            mode?: string;
+            municipality?: string | null;
+          }[];
         };
         if (cancelled) return;
 
         clearAll();
         const next: PaintedState = {};
         for (const row of data.painted) {
+          if (row.sourceLayer !== 'mesh') continue;
           const id = Number(row.keyCode);
           if (!Number.isFinite(id)) continue;
           const mode: PaintMode = row.mode === 'gps' ? 'gps' : 'manual';
-          map.setFeatureState(
-            { source: 'japan', sourceLayer: row.sourceLayer, id },
-            { painted: true, mode }
-          );
-          next[`${row.sourceLayer}:${id}`] = mode;
+          next[`mesh:${id}`] = mode;
+          // 塗り％集計用に cell→市区町村 を保存時の値から復元する
+          if (row.municipality) muniByPaintedCellRef.current.set(id, row.municipality);
         }
         paintedRef.current = next;
         setPainted(next);
@@ -1712,23 +2025,19 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     };
   }, [mapReady, applyLabelStats]);
 
-  // 市区町村ごとの塗り％の元データ（総セル数・meshcode→市区町村）を遅延ロード
+  // 市区町村ごとの塗り％の分母（総セル数）を遅延ロード。mesh はベイクしないので
+  // cell→市区町村の対応は持たず、分母（"PREF|CITY"→n）だけを読む（数KB）。
   useEffect(() => {
-    if (!mapReady || muniByMeshRef.current) return;
+    if (!mapReady || totalByMuniRef.current.size > 0) return;
     let cancelled = false;
     (async () => {
       try {
         const res = await fetch(MUNI_STATS_URL);
         if (!res.ok) return;
-        const data = (await res.json()) as { munis: { k: string; c: number[] }[] };
+        const data = (await res.json()) as { munis: { k: string; n: number }[] };
         if (cancelled) return;
-        const byMesh = new Map<number, string>();
         const totals = new Map<string, number>();
-        for (const { k, c } of data.munis) {
-          totals.set(k, c.length);
-          for (const code of c) byMesh.set(code, k);
-        }
-        muniByMeshRef.current = byMesh;
+        for (const { k, n } of data.munis) totals.set(k, n);
         totalByMuniRef.current = totals;
         rebuildPaintedByMuni(); // 既に復元済みの塗りを集計
         applyLabelStats(); // 統計が揃ったのでラベルに％を反映
@@ -1752,19 +2061,17 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const TOTAL_PREFS = 47;
   const stats = statsOpen
     ? (() => {
-        const lookup = muniByMeshRef.current;
+        const lookup = muniByPaintedCellRef.current;
         const paintedByPref = new Map<string, number>();
         const visitedMuni = new Set<string>();
-        if (lookup) {
-          for (const key of Object.keys(painted)) {
-            const [layer, idStr] = key.split(':');
-            if (layer !== 'mesh') continue;
-            const muni = lookup.get(Number(idStr));
-            if (!muni) continue;
-            visitedMuni.add(muni);
-            const pref = muni.split('|')[0];
-            paintedByPref.set(pref, (paintedByPref.get(pref) ?? 0) + 1);
-          }
+        for (const key of Object.keys(painted)) {
+          const [layer, idStr] = key.split(':');
+          if (layer !== 'mesh') continue;
+          const muni = lookup.get(Number(idStr));
+          if (!muni) continue;
+          visitedMuni.add(muni);
+          const pref = muni.split('|')[0];
+          paintedByPref.set(pref, (paintedByPref.get(pref) ?? 0) + 1);
         }
         const totalByPref = new Map<string, number>();
         let nationTotal = 0; // 日本全体のメッシュ総数（塗り％の分母）
@@ -1842,7 +2149,14 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               <div className="text-[10px] text-gray-500">
                 経験値 {exp} / {expToNext}
               </div>
-              <div className="text-gray-900 font-semibold">
+              <div className="text-[10px] text-gray-500">
+                累計獲得経験値 {totalExp.toLocaleString()}
+              </div>
+              <div
+                className={`font-semibold ${
+                  points > maxPoints ? 'text-red-600' : 'text-gray-900'
+                }`}
+              >
                 塗りポイント: {points} / {maxPoints}
               </div>
               {regenAt !== null && points < maxPoints && (
@@ -1850,6 +2164,39 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                   +1まで {formatCountdown(regenAt - nowTick)}
                 </div>
               )}
+              {/* 動画リワード：動画を見てそのレベルの満タン分を回復 */}
+              {(() => {
+                const cooldownLeft =
+                  rewardStatus?.nextAvailableAt != null
+                    ? rewardStatus.nextAvailableAt - nowTick
+                    : 0;
+                const onCooldown = cooldownLeft > 0;
+                const dailyLimit =
+                  rewardStatus != null && rewardStatus.remainingToday <= 0;
+                const disabled = onCooldown || dailyLimit;
+                return (
+                  <button
+                    type="button"
+                    onClick={openVideoReward}
+                    disabled={disabled}
+                    className={`mt-1 w-full rounded-md px-2 py-1.5 text-xs font-bold text-white transition-colors ${
+                      disabled
+                        ? 'cursor-not-allowed bg-gray-300'
+                        : 'bg-emerald-500 hover:bg-emerald-600'
+                    }`}
+                  >
+                    {onCooldown
+                      ? `回復まで ${formatCountdown(cooldownLeft)}`
+                      : dailyLimit
+                        ? '本日の視聴上限に達しました'
+                        : `▶ 動画を見て回復${
+                            rewardStatus
+                              ? `（残り${rewardStatus.remainingToday}回）`
+                              : ''
+                          }`}
+                  </button>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -1909,6 +2256,86 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             <span className="text-xs font-semibold text-amber-900">
               塗りポイント上限 +1
             </span>
+          </div>
+        </div>
+      )}
+      {videoOpen && (
+        <div
+          className="absolute inset-0 z-20 flex items-center justify-center bg-black/50"
+          // 視聴中は背景クリックで閉じさせない（最後まで見せる）。請求中も閉じない。
+        >
+          <div
+            className="w-[90%] max-w-md rounded-xl bg-white p-5 shadow-xl"
+            role="dialog"
+            aria-label="動画を見てポイント回復"
+          >
+            <h2 className="mb-3 text-sm font-semibold text-gray-800">
+              動画を見て塗りポイントを回復
+            </h2>
+            {/* モック動画プレースホルダ（実広告SDK導入時はここを差し替える） */}
+            <div className="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-lg bg-gray-900">
+              <span className="text-5xl text-white/80">▶</span>
+              <span className="absolute bottom-2 right-3 rounded bg-black/60 px-2 py-0.5 text-xs font-mono text-white">
+                {videoPhase === 'watching'
+                  ? `00:${String(videoLeftSec).padStart(2, '0')}`
+                  : '00:00'}
+              </span>
+              <span className="absolute left-3 top-2 rounded bg-white/20 px-2 py-0.5 text-[10px] font-bold text-white">
+                広告（サンプル）
+              </span>
+            </div>
+            {/* 進捗バー */}
+            <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-gray-200">
+              <div
+                className="h-full rounded-full bg-emerald-500 transition-[width] duration-500"
+                style={{
+                  width: `${
+                    ((VIDEO_REWARD_DURATION_SEC - videoLeftSec) /
+                      VIDEO_REWARD_DURATION_SEC) *
+                    100
+                  }%`,
+                }}
+              />
+            </div>
+            <div className="mt-3 text-center text-sm text-gray-600">
+              {videoPhase === 'watching' &&
+                `あと ${videoLeftSec} 秒で「そのレベルの満タン分」を回復します`}
+              {videoPhase === 'claiming' && 'ポイントを回復しています…'}
+              {videoPhase === 'error' && (
+                <span className="text-red-600">
+                  回復に失敗しました。もう一度お試しください。
+                </span>
+              )}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              {videoPhase === 'error' ? (
+                <>
+                  <button
+                    type="button"
+                    className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100"
+                    onClick={closeVideoReward}
+                  >
+                    閉じる
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600"
+                    onClick={claimVideoReward}
+                  >
+                    もう一度受け取る
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="rounded-lg px-4 py-2 text-sm font-medium text-gray-500 hover:bg-gray-100 disabled:opacity-40"
+                  onClick={closeVideoReward}
+                  disabled={videoPhase === 'claiming'}
+                >
+                  {videoPhase === 'watching' ? 'やめる' : '閉じる'}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -2052,12 +2479,27 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               </div>
             </div>
             <div className="space-y-2">
+              <a
+                href="/admin"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block w-full px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"
+              >
+                管理画面を開く（別タブ）
+              </a>
               <button
                 type="button"
                 className="w-full text-left px-3 py-2 text-sm font-medium text-gray-800 border border-gray-200 rounded-lg hover:bg-gray-50"
                 onClick={() => setDebugPoints(100)}
               >
                 塗りポイントを100にする
+              </button>
+              <button
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm font-medium text-gray-800 border border-gray-200 rounded-lg hover:bg-gray-50"
+                onClick={() => setDebugPoints(1)}
+              >
+                塗りポイントを1にする
               </button>
               <button
                 type="button"
@@ -2185,6 +2627,12 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                     {exp} / {expToNext}
                   </span>
                 </div>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-[11px] text-gray-500">累計獲得経験値</span>
+                  <span className="text-sm font-semibold text-gray-900 tabular-nums">
+                    {totalExp.toLocaleString()}
+                  </span>
+                </div>
                 <div className="text-sm font-semibold text-gray-900">
                   塗りポイント: {points} / {maxPoints}
                 </div>
@@ -2193,6 +2641,21 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                     +1まで {formatCountdown(regenAt - nowTick)}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* 合計プレイ時間（パネル表示中は前回計上からの経過秒を足して秒単位でリアルタイム更新） */}
+            {userId && (
+              <div className="mb-4 flex items-baseline justify-between rounded-lg bg-gray-50 px-3 py-2">
+                <span className="text-[11px] text-gray-500">⏱ 合計プレイ時間</span>
+                <span className="text-sm font-semibold text-gray-900 tabular-nums">
+                  {formatPlayTime(
+                    playTimeSec +
+                      (lastBeatRef.current > 0
+                        ? Math.max(0, Math.floor((nowTick - lastBeatRef.current) / 1000))
+                        : 0)
+                  )}
+                </span>
               </div>
             )}
 
