@@ -22,11 +22,14 @@ services:
         # Coolify は同一 compose のサービスを内部DNSで解決できるので backend:3001 で届く。
         BACKEND_URL: http://backend:3001
     restart: unless-stopped
+    # 注意: environment は必ず「マップ形式（KEY: value）」で書く。リスト形式（- KEY=value）だと
+    #       Coolify が 0:/1: の数値キーに変換してしまい `non-string key ... environment: 0` で
+    #       ビルドが落ちる（coolify#5064）。
     environment:
       # ↓ これを書くと Coolify が frontend に公開ドメイン＋TLS を割り当て、:3000 へルーティングする。
       #   割り当て後、Coolify の UI でこの FQDN を自分の独自ドメインに変更できる。
-      - SERVICE_FQDN_FRONTEND_3000
-      - NODE_ENV=production
+      SERVICE_FQDN_FRONTEND_3000: ""
+      NODE_ENV: production
     expose:
       - "3000"
     depends_on:
@@ -37,19 +40,20 @@ services:
     build:
       context: ./backend
     restart: unless-stopped
+    # environment はマップ形式で書く（理由は frontend のコメント参照・coolify#5064）。
     environment:
-      - NODE_ENV=production
-      - PORT=3001
+      NODE_ENV: production
+      PORT: "3001"
       # DB は同じ compose 内の db サービス。パスワードは Coolify が自動生成（下の db と同じ変数）。
-      - DATABASE_URL=postgres://postgres:${SERVICE_PASSWORD_POSTGRES}@db:5432/chizunurie
+      DATABASE_URL: postgres://postgres:${SERVICE_PASSWORD_POSTGRES}@db:5432/chizunurie
       # better-auth のセッション署名鍵。Coolify が64文字の値を自動生成する。
-      - BETTER_AUTH_SECRET=${SERVICE_PASSWORD_64_AUTH}
+      BETTER_AUTH_SECRET: ${SERVICE_PASSWORD_64_AUTH}
       # 公開URL（フロントの公開ドメイン）。https:// 付きなので Secure Cookie が有効になる。
-      - BETTER_AUTH_URL=${SERVICE_URL_FRONTEND}
-      - FRONTEND_URL=${SERVICE_URL_FRONTEND}
+      BETTER_AUTH_URL: ${SERVICE_URL_FRONTEND}
+      FRONTEND_URL: ${SERVICE_URL_FRONTEND}
       # Google OAuth（開発と同じ値）。Coolify の UI で手動設定する。使わないなら空でよい。
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
     expose:
       - "3001"
     depends_on:
