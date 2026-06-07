@@ -1548,7 +1548,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         type: 'line',
         source: 'prefectures-geojson',
         layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: { 'line-color': '#e03131', 'line-width': 2.5 },
+        paint: { 'line-color': '#e03131', 'line-width': 1.2 },
       });
 
       // 都道府県名・市区町村名・政令市名のラベルは、塗り％を横に差し込めるよう
