@@ -31,11 +31,34 @@ devDependencies を入れない等で安定せず、`tsc`/`next build` が `exit
 ```
 main へ push
   └─ GitHub Actions（.github/workflows/build-images.yml・標準 Docker でビルド）
-       └─ ghcr.io へ push:
-            ghcr.io/gamebox777/chizunurie-frontend:main
-            ghcr.io/gamebox777/chizunurie-backend:main
-  └─ Coolify は docker-compose.coolify.yml の image: を pull するだけ（build しない）
+       └─ ghcr.io へ push（2タグ）:
+            ghcr.io/gamebox777/chizunurie-frontend:main        ← 可変（既定で使う）
+            ghcr.io/gamebox777/chizunurie-frontend:<commit-sha> ← イミュータブル（固定/ロールバック用）
+            （backend も同様）
+  └─ Coolify（Tailscale 経由・非公開）で手動 Redeploy → image: ...:${IMAGE_TAG} を pull
 ```
+
+### 古いまま問題への恒久対応（pull_policy: always ＋ SHA タグ）
+
+以前は compose が可変タグ `:main` を指していたため、**Coolify サーバーに古い `:main` が
+キャッシュされていると再 pull されず、ビルド成功・デプロイ成功でも本番が古いまま**になる
+事象があった。これを根本的に直すため compose を次のようにした：
+
+```yaml
+image: ghcr.io/gamebox777/chizunurie-frontend:${IMAGE_TAG:-main}
+pull_policy: always
+```
+
+- `pull_policy: always`：Coolify で Redeploy すると**毎回必ず最新を pull** する。可変タグ
+  `:main` のままでも「キャッシュした古いイメージで起動」が起きなくなる（＝主因の解消）。
+- `${IMAGE_TAG:-main}`：未設定なら `:main`。**特定コミットに固定したい / ロールバックしたい**
+  時は Coolify の Environment Variables で `IMAGE_TAG=<commit-sha>` にして Redeploy するだけ
+  （ghcr に全コミット分の `:<sha>` が残っている）。
+
+> **デプロイは Coolify 上で手動**（Tailscale で接続して Redeploy）。Coolify は外部公開して
+> いないので、GitHub クラウドのランナーからは API も webhook も到達できない＝CI からの自動
+> デプロイはしない。CI はビルドして ghcr に push するところまで（`build-images.yml`）。
+> push のたび Actions のログ最後に「IMAGE_TAG に使う commit-sha」が表示される。
 
 ### 初回だけ必要な設定
 
@@ -48,9 +71,13 @@ main へ push
      （PAT: `read:packages`）を登録する。
 2. **Coolify の Auto Deploy を OFF** にする。
    - push 直後に走ると、まだ新イメージが ghcr に無い（Actions ビルド中）ため旧イメージを掴む。
-3. **（任意）push 後の自動デプロイ**：Coolify の Deploy Webhook URL を GitHub の
-   Secrets `COOLIFY_DEPLOY_WEBHOOK`（必要なら `COOLIFY_API_TOKEN`）に登録すると、Actions の
-   ビルド完了後に自動で Coolify をデプロイする。未設定なら手動 Deploy でよい。
+   - Actions のビルド完了を確認してから、下記 3 の手動 Redeploy をする（順序が正しい）。
+3. **デプロイは手動**（Coolify は Tailscale 内・非公開なので CI からは到達不可）。
+   - Tailscale で接続 → Coolify の該当リソースで **Redeploy** を押す。
+   - `pull_policy: always` なので最新の `:main` が必ず pull される。特定コミットに固定/
+     ロールバックしたい時だけ env `IMAGE_TAG=<commit-sha>` にして Redeploy。
+   - もし将来 CI から自動デプロイしたくなったら、`tailscale/github-action` でランナーを
+     一時的に Tailnet 参加させ Coolify API を叩く方式にできる（要 Tailscale OAuth＋ACL）。
 
 > Coolify リソースは従来どおり「Docker Compose」で **docker-compose.coolify.yml** を指す。
 > 変わるのは「Coolify がビルドする」→「ghcr のイメージを pull する」だけ。

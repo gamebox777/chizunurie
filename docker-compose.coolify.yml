@@ -5,6 +5,14 @@
 #   → Coolify のビルド環境（npm ci が devDeps を入れない等）の問題を完全に回避する。
 #   ビルドは .github/workflows/build-images.yml が main への push で自動実行する。
 #
+# 【重要・イメージタグは SHA で固定する（恒久対応）】
+#   image: のタグは可変タグ :main ではなく ${IMAGE_TAG} を使う。CI が build 後に
+#   Coolify の env IMAGE_TAG を <commit-sha> に更新してから force デプロイするので、
+#   毎回タグが変わり Docker は必ず最新を pull する（:main をキャッシュして古いまま
+#   起動する問題が原理的に起きない）。IMAGE_TAG 未設定なら :main にフォールバック
+#   するので手動デプロイも動く。ロールバックは Coolify の IMAGE_TAG を過去の sha に
+#   戻して再デプロイするだけ（ghcr に :<sha> が全コミット分残る）。
+#
 # 【初回セットアップ / 手順】docs/Coolifyデプロイ-compose.md 参照。
 #
 # ポイント：
@@ -16,8 +24,10 @@
 
 services:
   frontend:
-    # ghcr.io の公開イメージを pull する。tag main は main への push 毎に更新される。
-    image: ghcr.io/gamebox777/chizunurie-frontend:main
+    # ghcr.io の公開イメージを pull する。CI が IMAGE_TAG を <commit-sha> に設定するので
+    # 毎回タグが変わり確実に最新が pull される（未設定なら :main にフォールバック）。
+    image: ghcr.io/gamebox777/chizunurie-frontend:${IMAGE_TAG:-main}
+    pull_policy: always
     restart: unless-stopped
     environment:
       # ↓ これを書くと Coolify が frontend に公開ドメイン＋TLS を割り当て、:3000 へルーティングする。
@@ -31,7 +41,8 @@ services:
         condition: service_healthy
 
   backend:
-    image: ghcr.io/gamebox777/chizunurie-backend:main
+    image: ghcr.io/gamebox777/chizunurie-backend:${IMAGE_TAG:-main}
+    pull_policy: always
     restart: unless-stopped
     environment:
       NODE_ENV: production

@@ -61,24 +61,26 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ビルド完了後に Coolify の Deploy を自動起動する（任意）。
-  # COOLIFY_DEPLOY_WEBHOOK（必要なら COOLIFY_API_TOKEN）を Secrets に入れれば有効化。
-  # 未設定なら Coolify で手動 Deploy するだけ。
-  trigger-deploy:
+  # ビルド完了の通知だけ（デプロイは Coolify で手動）。
+  #
+  # Coolify は Tailscale 経由でしか到達できない（非公開）ため、GitHub クラウドの
+  # ランナーからは API も webhook も叩けない。よって自動デプロイはせず、ここでは
+  # 「このビルドをデプロイする手順」を表示するだけにする。
+  #
+  # 手動デプロイ手順（Coolify 上・Tailscale 接続して）:
+  #   1. 最新で良ければ Redeploy を押すだけ（compose は pull_policy: always なので
+  #      可変タグ :main でも必ず最新を pull する＝古いまま問題は起きない）。
+  #   2. コミットを固定したい時は、Coolify の Environment Variables で
+  #      IMAGE_TAG = <下に表示される commit-sha> にしてから Redeploy。
+  #      （ghcr に :<sha> が全コミット分あるのでロールバックも同じ手順で可能）
+  notify-build-done:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Coolify deploy (optional)
+      - name: Build done — deploy manually in Coolify
         env:
-          WEBHOOK: ${{ secrets.COOLIFY_DEPLOY_WEBHOOK }}
-          TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          SHA: ${{ github.sha }}
         run: |
-          if [ -z "$WEBHOOK" ]; then
-            echo "COOLIFY_DEPLOY_WEBHOOK 未設定。Coolify で手動 Deploy してください。"
-            exit 0
-          fi
-          if [ -n "$TOKEN" ]; then
-            curl -fsSL -H "Authorization: Bearer $TOKEN" "$WEBHOOK" && echo "Coolify deploy を起動しました"
-          else
-            curl -fsSL "$WEBHOOK" && echo "Coolify deploy を起動しました"
-          fi
+          echo "ghcr への push 完了。Coolify(Tailscale) で手動デプロイしてください。"
+          echo "  - 最新で良い:           Coolify で Redeploy（pull_policy: always で最新を pull）"
+          echo "  - コミット固定したい:   Coolify の env IMAGE_TAG=$SHA → Redeploy"
