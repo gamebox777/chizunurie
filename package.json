@@ -14,6 +14,7 @@
     "dev:studio": "npm run db:studio --prefix backend",
     "build": "npm run build --prefix frontend",
     "start": "npm run start --prefix frontend",
+    "deploy": "bash scripts/deploy-main.sh",
     "fetch-chocho": "node scripts/fetch-chocho.mjs",
     "build-mesh": "node --max-old-space-size=8192 scripts/build-mesh.mjs",
     "build-muni-stats": "node --max-old-space-size=8192 scripts/build-muni-stats.mjs",
