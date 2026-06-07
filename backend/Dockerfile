@@ -1,16 +1,19 @@
-FROM node:20-alpine AS deps
-WORKDIR /app
-COPY package*.json ./
-# ビルドには tsc(typescript) など devDependencies が必要。Coolify のビルド環境では
-# NODE_ENV=production が効いて npm ci が devDeps を省く（→ `tsc: not found` / exit 127）ため、
-# --include=dev で必ず devDeps も入れる。
-RUN npm ci --include=dev
-
+# build と deps を1ステージにまとめる。
+# 以前は deps ステージで npm ci → builder ステージへ COPY node_modules していたが、
+# Coolify 環境でのみ `npm run build`(tsc) が exit 127 で落ちていた（ローカルでは再現せず）。
+# クロスステージ COPY を排除し、同一ステージで install→検証→build する。
 FROM node:20-alpine AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+# devDependencies(tsc など)も必ず入れる（NODE_ENV/omit 設定に左右されないよう --include=dev）。
+RUN npm ci --include=dev
+# 診断＆ガード：ここで tsc が無ければ install 段階の問題と分かる（build まで進まず明示的に失敗）。
+RUN node --version && npm --version && echo "PATH=$PATH" \
+ && ls -la node_modules/.bin/ | grep -iE 'tsc|tsx' || true
+RUN ./node_modules/.bin/tsc --version
 COPY . .
-RUN npm run build
+# npm run build ではなく直接 tsc を叩く（PATH 解決に依存しない）。
+RUN ./node_modules/.bin/tsc
 
 FROM node:20-alpine AS runner
 WORKDIR /app
