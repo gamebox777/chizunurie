@@ -1,12 +1,16 @@
-# フル Docker 版: フロント/バック/DB を全部 Docker で起動する（単一ホスト or ローカル検証用）
+# フル Docker 版: フロント/バック/DB を全部 Docker で起動する（ローカル検証 or 単一ホスト公開）
 #
 #   docker compose -f docker-compose.prod.yml up -d --build
 #
+# 使い方の詳細は docs/Docker起動.md を参照。
+#
+# - これ1ファイルで完結する。バックエンドは起動時に DB マイグレーションを自動適用するので
+#   空のDBでもそのまま動く（backend/docker-entrypoint.sh）。
 # - dev 版（npm run dev）とは独立。DB ボリューム(postgres_data)は dev 版と共有されるので
 #   データは引き継がれる（POSTGRES_PASSWORD の既定 devpassword も dev と一致）。
-# - これはローカル/単一ホストでの「全部 Docker」検証用。Coolify 本番は各サービスを個別に
-#   ビルドする（docs/デプロイ手順.md 参照）。このファイルは使わない。
-# - 既定値は http://localhost 前提。Google ログインも試す場合は既存の開発用リダイレクト
+# - 既定値は http://localhost 前提。公開ドメインで動かす場合は .env を本番値にする
+#   （BETTER_AUTH_URL / FRONTEND_URL を https の公開ドメインに）。docs/Docker起動.md 参照。
+# - Google ログインも試す場合は既存の開発用リダイレクト
 #   URI（http://localhost:3001/api/auth/callback/google）がそのまま使える。
 
 services:

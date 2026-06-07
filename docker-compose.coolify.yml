@@ -1,0 +1,81 @@
+# Coolify 用: フロント/バック/DB を Docker Compose 1ファイルでデプロイする。
+#
+# Coolify の「New Resource → Docker Compose」でこのファイルを指定する。
+# 手順は docs/Coolifyデプロイ-compose.md を参照。
+#
+# ポイント：
+# - `SERVICE_FQDN_*` / `SERVICE_URL_*` / `SERVICE_PASSWORD_*` は Coolify のマジック変数。
+#   Coolify がデプロイ時に「公開ドメイン＋TLS の自動設定」「強いパスワードの自動生成」に
+#   置き換える。GOOGLE_* だけは Coolify の UI で手動設定する。
+# - 公開するのは frontend だけ（単一ドメイン構成）。backend / db はドメインを持たず、
+#   Docker 内部ネットワークでサービス名（backend / db）で繋がる。
+# - ホスト公開ポート（ports:）は書かない。Coolify のプロキシ(Traefik)が frontend の
+#   コンテナポート(3000)へルーティングする。
+# - backend は起動時に DB マイグレーションを自動適用する（backend/docker-entrypoint.sh）。
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # rewrites() の中継先はビルド時に焼き込まれるため build args で渡す（実行時 env では効かない）。
+        # Coolify は同一 compose のサービスを内部DNSで解決できるので backend:3001 で届く。
+        BACKEND_URL: http://backend:3001
+    restart: unless-stopped
+    environment:
+      # ↓ これを書くと Coolify が frontend に公開ドメイン＋TLS を割り当て、:3000 へルーティングする。
+      #   割り当て後、Coolify の UI でこの FQDN を自分の独自ドメインに変更できる。
+      - SERVICE_FQDN_FRONTEND_3000
+      - NODE_ENV=production
+    expose:
+      - "3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      # DB は同じ compose 内の db サービス。パスワードは Coolify が自動生成（下の db と同じ変数）。
+      - DATABASE_URL=postgres://postgres:${SERVICE_PASSWORD_POSTGRES}@db:5432/chizunurie
+      # better-auth のセッション署名鍵。Coolify が64文字の値を自動生成する。
+      - BETTER_AUTH_SECRET=${SERVICE_PASSWORD_64_AUTH}
+      # 公開URL（フロントの公開ドメイン）。https:// 付きなので Secure Cookie が有効になる。
+      - BETTER_AUTH_URL=${SERVICE_URL_FRONTEND}
+      - FRONTEND_URL=${SERVICE_URL_FRONTEND}
+      # Google OAuth（開発と同じ値）。Coolify の UI で手動設定する。使わないなら空でよい。
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+    expose:
+      - "3001"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      # frontend/backend の DATABASE_URL と同じマジック変数を使うので値が一致する。
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
+      POSTGRES_DB: chizunurie
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
