@@ -173,6 +173,50 @@ const GSI_OVERLAY_REGIONS: { id: string; bounds: [number, number, number, number
   { id: 'nansei', bounds: [122.8, 24.0, 131.1, 29.0] }, // 奄美〜沖縄〜宮古〜石垣〜与那国
 ];
 
+// 地理院オーバーレイのレイヤー＋ソースを追加する（=この時だけタイル取得が始まる）。
+// world-basemap（CARTO）の上・world-states-border（境界線）の下に差し込み、地図画像どうしの
+// 重ね順を保つ。既に追加済みなら何もしない（多重 addLayer を防ぐ）。
+function addGsiOverlay(map: maplibregl.Map): void {
+  const beforeId = map.getLayer('world-states-border') ? 'world-states-border' : undefined;
+  for (const region of GSI_OVERLAY_REGIONS) {
+    const srcId = `gsi-std-${region.id}`;
+    const layerId = `gsi-std-overlay-${region.id}`;
+    if (map.getLayer(layerId)) continue;
+    if (!map.getSource(srcId)) {
+      map.addSource(srcId, {
+        type: 'raster',
+        tiles: ['https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png'],
+        tileSize: 256,
+        maxzoom: 18,
+        bounds: region.bounds,
+        attribution:
+          '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noreferrer">地理院タイル</a>',
+      });
+    }
+    map.addLayer(
+      {
+        id: layerId,
+        type: 'raster',
+        source: srcId,
+        // 日本へズームインした時だけ地形画像を出す（低ズームでは矩形が世界地図の上に出るのを防ぐ）。
+        minzoom: GSI_OVERLAY_MIN_ZOOM,
+        paint: { 'raster-opacity': getBasemapOpacity() },
+      },
+      beforeId,
+    );
+  }
+}
+
+// 地理院オーバーレイのレイヤー＋ソースを削除する（OFF 時はタイルを一切取得しなくなる）。
+function removeGsiOverlay(map: maplibregl.Map): void {
+  for (const region of GSI_OVERLAY_REGIONS) {
+    const layerId = `gsi-std-overlay-${region.id}`;
+    const srcId = `gsi-std-${region.id}`;
+    if (map.getLayer(layerId)) map.removeLayer(layerId);
+    if (map.getSource(srcId)) map.removeSource(srcId);
+  }
+}
+
 // 約1kmの等面積グリッド = 緯度 1/120°・経度 1/80° の均一グリッド
 const MESH_LAT_DIV = 120;
 const MESH_LON_DIV = 80;
@@ -1316,26 +1360,22 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     hoverPaintModeRef.current = hoverPaintMode;
   }, [hoverPaintMode]);
 
-  // 地理院オーバーレイ ON/OFF を設定メニューから受け取り、レイヤーの表示を切り替える。
+  // 地理院オーバーレイ ON/OFF を設定メニューから受け取る。ON で初めてレイヤー＋ソースを足し
+  // （=その時だけタイルを取得し始める）、OFF で消す（OFF 時はデータを一切読み込まない）。
   useEffect(() => {
     return onBasemapChange((on) => {
       const map = mapRef.current;
       if (!map) return;
-      for (const region of GSI_OVERLAY_REGIONS) {
-        const id = `gsi-std-overlay-${region.id}`;
-        if (map.getLayer(id)) {
-          map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
-        }
-      }
+      if (on) addGsiOverlay(map);
+      else removeGsiOverlay(map);
     });
   }, []);
 
-  // 絵付きの地図（world-basemap / 地理院ラスター）の不透明度を設定スライダーから受け取る。
+  // 地理院オーバーレイの不透明度を設定スライダーから受け取る（CARTO 世界地図は常に不透明で固定）。
   useEffect(() => {
     return onBasemapOpacityChange((v) => {
       const map = mapRef.current;
       if (!map) return;
-      if (map.getLayer('world-basemap')) map.setPaintProperty('world-basemap', 'raster-opacity', v);
       for (const region of GSI_OVERLAY_REGIONS) {
         const id = `gsi-std-overlay-${region.id}`;
         if (map.getLayer(id)) map.setPaintProperty(id, 'raster-opacity', v);
@@ -2047,8 +2087,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         id: 'world-basemap',
         type: 'raster',
         source: 'world-basemap',
-        // 絵付きの地図の不透明度（設定スライダーで調整・既定 0.5）。塗ったセルを目立たせる。
-        paint: { 'raster-opacity': getBasemapOpacity() },
+        // CARTO 世界地図は常に不透明で表示（スライダー非対象）。塗ったセルは上のオーバーレイで描く。
+        paint: { 'raster-opacity': 1 },
       });
       // 州・県境（細線・z4 以上で薄く）。
       map.addLayer({
@@ -2063,13 +2103,19 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           'line-opacity': 0.8,
         },
       });
-      // 国境（国どうしの境界線・州境より濃く太く）。
+      // 国境（国どうしの境界線・赤く太く・国名ラベルの赤に揃える）。
+      // 日本は別途 prefectures-border（国土数値情報の細かい海岸線）で描くので、
+      // ここでは日本を除外して二重の輪郭線（粗い NE 海岸線）が出ないようにする。
       map.addLayer({
         id: 'world-countries-outline',
         type: 'line',
         source: 'world',
         'source-layer': 'countries',
-        paint: { 'line-color': '#a8a89f', 'line-width': ['interpolate', ['linear'], ['zoom'], 1, 0.5, 6, 1.2] },
+        filter: ['!=', ['get', 'ADM0_A3'], 'JPN'],
+        paint: {
+          'line-color': '#dc2626',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 1, 1.5, 6, 3],
+        },
       });
       // 国名ラベル（日本語名・無ければ英名）。
       map.addLayer({
@@ -2078,7 +2124,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         source: 'world',
         'source-layer': 'countries',
         layout: {
-          'text-field': ['coalesce', ['get', 'NAME_JA'], ['get', 'NAME']],
+          'text-field':
+            langRef.current === 'en'
+              ? ['coalesce', ['get', 'NAME'], ['get', 'NAME_JA']]
+              : ['coalesce', ['get', 'NAME_JA'], ['get', 'NAME']],
           'text-size': ['interpolate', ['linear'], ['zoom'], 2, 10, 6, 14],
           'text-font': ['Open Sans Regular'],
           'text-max-width': 6,
@@ -2099,7 +2148,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         'source-layer': 'states',
         minzoom: 5,
         layout: {
-          'text-field': ['coalesce', ['get', 'name_ja'], ['get', 'name']],
+          'text-field':
+            langRef.current === 'en'
+              ? ['coalesce', ['get', 'name'], ['get', 'name_ja']]
+              : ['coalesce', ['get', 'name_ja'], ['get', 'name']],
           'text-size': ['interpolate', ['linear'], ['zoom'], 5, 9, 9, 12],
           'text-font': ['Open Sans Regular'],
           'text-max-width': 6,
@@ -2134,48 +2186,17 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         },
       });
 
-      // 地理院「標準地図」をうっすら重ねるオーバーレイ（位置の手がかり用）。
-      // 自前データは持たず、表示範囲のラスタータイルだけ地理院サーバーから都度取得する。
-      // 白地図（municipalities-fill）の上・塗り（painted-overlay-fill）の下に置くので、
-      // 塗っていない所だけ地図が薄く透け、塗ったセルははっきり残る。
-      // ON/OFF は設定メニュー（SettingsMenu）から。出典表記は attribution で表示。
-      // 海外をズームインした時に GSI の空タイル（不透明）が CARTO 世界地図を覆って
-      // 「世界が消える」のを防ぐため、日本全体を覆う1個の bounds ではなく、主要な陸地
-      // クラスタごとに tight な bounds を分けて張る（GSI_OVERLAY_REGIONS）。矩形の外
-      // （外洋・国外）では world-basemap がそのまま見える。
-      for (const region of GSI_OVERLAY_REGIONS) {
-        map.addSource(`gsi-std-${region.id}`, {
-          type: 'raster',
-          tiles: ['https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png'],
-          tileSize: 256,
-          maxzoom: 18,
-          bounds: region.bounds,
-          attribution:
-            '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noreferrer">地理院タイル</a>',
-        });
-        map.addLayer({
-          id: `gsi-std-overlay-${region.id}`,
-          type: 'raster',
-          source: `gsi-std-${region.id}`,
-          // 日本へズームインした時だけ地形画像を出す。低ズーム（世界全体表示）では出さず、
-          // 世界地図（白地図＋国境＋ラベル）を全面で見せる。こうしないと bounds の矩形が
-          // 世界地図の上に四角く乗って「世界地図が表示されていない箇所」に見えてしまう。
-          minzoom: GSI_OVERLAY_MIN_ZOOM,
-          layout: { visibility: isBasemapEnabled() ? 'visible' : 'none' },
-          // 絵付きの地図の不透明度（設定スライダーで調整・既定 0.5）。
-          paint: { 'raster-opacity': getBasemapOpacity() },
-        });
-      }
       // レイヤーの重ね順を整える。下→上で：
       //   白地図フィル（world-countries-fill / world-states-fill / municipalities-fill）
-      //   → 世界の地図画像（world-basemap・全ズーム全世界）
-      //   → 地理院タイル（gsi-std-overlay-*・日本ズーム時のみ上乗せ）
+      //   → 世界の地図画像（world-basemap・全ズーム全世界・常に不透明）
+      //   → 地理院タイル（gsi-std-overlay-*・ON 時かつ日本ズーム時のみ addGsiOverlay で上乗せ）
       //   → 国境/州境/ラベル/市区町村境界（地図画像の上に出して隠れないように）
       //   → （この後 addLayer される 塗り/メッシュ/政令市枠/県境/日本のラベル）
       map.moveLayer('municipalities-fill', 'world-basemap'); // 日本の白塗りを世界画像の下へ
-      for (const region of GSI_OVERLAY_REGIONS) {
-        map.moveLayer(`gsi-std-overlay-${region.id}`, 'world-states-border'); // GSI を境界線の下・世界画像の上へ
-      }
+      // 地理院「標準地図」オーバーレイは既定 OFF。CARTO 世界地図（world-basemap）と二重に
+      // 見えるのを避けるため、設定で ON のときだけ addGsiOverlay でレイヤー＋ソースを足す
+      // （=その時だけタイルを取得する）。OFF のときはデータを一切読み込まない。
+      if (isBasemapEnabled()) addGsiOverlay(map);
 
       // 塗りオーバーレイ。塗ったセルをクライアント生成の矩形で全ズーム描画する。
       // mesh は PMTiles に焼かず数式生成するので、塗りの色付けはこのオーバーレイが一手に担う。
@@ -3610,6 +3631,29 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   // 言語を切り替えたらラベル（地名のローマ字／日本語）とホバー％を作り直す。
   useEffect(() => {
     if (!mapReady) return;
+    const map = mapRef.current;
+    // 世界の国名・州名ラベル（PMTiles の属性）を言語に合わせて切り替える。
+    if (map) {
+      const en = lang === 'en';
+      if (map.getLayer('world-countries-label')) {
+        map.setLayoutProperty(
+          'world-countries-label',
+          'text-field',
+          en
+            ? ['coalesce', ['get', 'NAME'], ['get', 'NAME_JA']]
+            : ['coalesce', ['get', 'NAME_JA'], ['get', 'NAME']],
+        );
+      }
+      if (map.getLayer('world-states-label')) {
+        map.setLayoutProperty(
+          'world-states-label',
+          'text-field',
+          en
+            ? ['coalesce', ['get', 'name'], ['get', 'name_ja']]
+            : ['coalesce', ['get', 'name_ja'], ['get', 'name']],
+        );
+      }
+    }
     applyLabelStats();
     refreshHoverStat();
   }, [lang, mapReady, applyLabelStats, refreshHoverStat]);

@@ -46,9 +46,10 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
   // バイブ（触覚フィードバック）。対応端末でのみ項目を出す。
   const [hapticsOn, setHapticsOn] = useState(true);
   const [hapticsSupported, setHapticsSupported] = useState(false);
-  // 地理院「標準地図」を薄く重ねるオーバーレイ（既定 ON）。
-  const [basemapOn, setBasemapOn] = useState(true);
-  // 絵付きの地図（ラスター）の不透明度（0〜1・既定 0.5）。スライダーで調整。
+  // 地理院「標準地図」を薄く重ねるオーバーレイ（既定 OFF）。
+  const [basemapOn, setBasemapOn] = useState(false);
+  // 地理院オーバーレイ（ラスター）の不透明度（0〜1・既定 0.5）。スライダーで調整。
+  // CARTO 世界地図は常に不透明で表示するため、このスライダーは地理院オーバーレイ専用。
   const [basemapOpacity, setBasemapOpacityState] = useState(DEFAULT_BASEMAP_OPACITY);
   // 現在地の住所ラベル表示（既定 ON）。
   const [gpsAddressOn, setGpsAddressOn] = useState(true);
@@ -219,8 +220,13 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
                   />
                 </span>
               </button>
-              {/* 絵付きの地図（ラスター）の濃さ（不透明度）スライダー */}
-              <div className="flex items-center gap-2 text-sm text-gray-700">
+              {/* 地理院オーバーレイ（ラスター）の濃さ（不透明度）スライダー。
+                  オーバーレイ OFF のときは非活性（CARTO は常に不透明で固定のため）。 */}
+              <div
+                className={`flex items-center gap-2 text-sm ${
+                  basemapOn ? 'text-gray-700' : 'text-gray-300'
+                }`}
+              >
                 <span className="whitespace-nowrap">{t('baseMapOpacity')}</span>
                 <input
                   type="range"
@@ -230,9 +236,10 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
                   value={Math.round(basemapOpacity * 100)}
                   onChange={(e) => changeBasemapOpacity(Number(e.target.value) / 100)}
                   aria-label={t('baseMapOpacity')}
-                  className="flex-1 accent-blue-500"
+                  disabled={!basemapOn}
+                  className="flex-1 accent-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
                 />
-                <span className="w-9 text-right tabular-nums text-gray-500">
+                <span className="w-9 text-right tabular-nums text-gray-400">
                   {Math.round(basemapOpacity * 100)}%
                 </span>
               </div>

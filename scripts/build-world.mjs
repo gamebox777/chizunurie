@@ -80,9 +80,11 @@ async function fetchAndSimplify(url, outFile, fields, simplify) {
         'mapshaper',
         srcFile,
         '-filter-fields', fields,
-        '-filter-islands', 'min-area=20km2', 'remove-empty',
+        // 小島の除去をゆるめ（20km2→3km2）細かい海岸線・島を残す。
+        '-filter-islands', 'min-area=3km2', 'remove-empty',
+        // 簡略化をゆるめて頂点を多く残し、日本の海岸線（prefectures）並みに滑らかにする。
         '-simplify', simplify, 'keep-shapes',
-        '-o', 'format=geojson', 'precision=0.001', outFile,
+        '-o', 'format=geojson', 'precision=0.0003', outFile,
       ],
       { stdio: 'inherit' }
     );
@@ -116,9 +118,9 @@ function assignIds(geojson, layer) {
 }
 
 async function main() {
-  // 1) 取得・簡略化（国は軽め、州は 10m を 12% に間引く）
-  await fetchAndSimplify(COUNTRIES_URL, COUNTRIES_OUT, 'NAME,NAME_JA,ADM0_A3', '8%');
-  await fetchAndSimplify(STATES_URL, STATES_OUT, 'name,name_ja,admin,adm0_a3,adm1_code', '12%');
+  // 1) 取得・簡略化（海外の輪郭を日本（prefectures）並みに細かくするため頂点を多めに残す）
+  await fetchAndSimplify(COUNTRIES_URL, COUNTRIES_OUT, 'NAME,NAME_JA,ADM0_A3', '50%');
+  await fetchAndSimplify(STATES_URL, STATES_OUT, 'name,name_ja,admin,adm0_a3,adm1_code', '40%');
 
   // 2) MBTiles 初期化
   if (existsSync(mbtilesPath)) unlinkSync(mbtilesPath);
@@ -153,7 +155,7 @@ async function main() {
     const geojson = assignIds(JSON.parse(readFileSync(file, 'utf8')), layer);
     return {
       ...layer,
-      index: geojsonvt(geojson, { maxZoom: layer.maxZoom, tolerance: 3, extent: 4096, buffer: 64 }),
+      index: geojsonvt(geojson, { maxZoom: layer.maxZoom, tolerance: 1.5, extent: 4096, buffer: 64 }),
     };
   });
 
