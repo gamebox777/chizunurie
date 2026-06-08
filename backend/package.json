@@ -10,7 +10,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "db:studio": "node --env-file=.env ./node_modules/.bin/drizzle-kit studio"
+    "db:studio": "node --env-file=.env ./node_modules/.bin/drizzle-kit studio",
+    "seed:rankings": "tsx --env-file=.env scripts/seed-rankings.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

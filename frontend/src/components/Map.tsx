@@ -17,6 +17,7 @@ import { showRewardedAd } from '@/lib/rewardedAd';
 
 const PAINT_API = '/api/backend/painted';
 const POINTS_API = '/api/backend/points';
+const RANKINGS_API = '/api/backend/rankings';
 // 動画リワードの GPT 広告ユニットパス（/ネットワークコード/広告ユニットコード）。
 // 本番：GAM で作成済み（ネットワーク 23356418393・ユニット chizunurie_rewarded_video）。
 const REWARDED_AD_UNIT_PROD = '/23356418393/chizunurie_rewarded_video';
@@ -511,7 +512,42 @@ class StatsControl implements maplibregl.IControl {
   }
 }
 
+// データ詳細アイコンの下に「ランキング」を開くトロフィーアイコンを積むカスタムコントロール
+class RankingsControl implements maplibregl.IControl {
+  private onClick: () => void;
+  private container?: HTMLDivElement;
+  constructor(onClick: () => void) {
+    this.onClick = onClick;
+  }
+  onAdd(): HTMLElement {
+    this.container = document.createElement('div');
+    this.container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.title = 'ランキング';
+    btn.setAttribute('aria-label', 'ランキングを開く');
+    btn.style.color = '#1a1a1a';
+    btn.innerHTML =
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:auto"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>';
+    btn.addEventListener('click', () => this.onClick());
+    this.container.appendChild(btn);
+    return this.container;
+  }
+  onRemove(): void {
+    this.container?.parentNode?.removeChild(this.container);
+    this.container = undefined;
+  }
+}
+
 type PaintedState = Record<string, PaintMode>;
+
+// ランキングの種類（塗ったマス数・GPS訪問・市区町村数・レベル）
+type RankingMetric = 'painted' | 'gps' | 'muni' | 'level';
+// 集計期間（全期間・月間・週間）。塗り由来のランキングにだけ効く。
+type RankingPeriod = 'all' | 'month' | 'week';
+type RankingEntry = { rank: number; userId: string; name: string; value: number };
+type RankingBoard = { top: RankingEntry[]; me: RankingEntry | null };
+type RankingsResponse = { boards: Record<RankingMetric, RankingBoard> };
 
 // 塗った日時（ISO 文字列）を「YYYY/M/D HH:mm」に整形。不正値は空文字。
 function formatPaintedAt(iso: string | undefined | null): string {
@@ -860,6 +896,13 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   // home は自国が日本なら都道府県、日本以外ならその国の州・県（admin_1）内訳を出す。
   const [statsView, setStatsView] = useState<'home' | 'world'>('home');
   const openStatsRef = useRef<() => void>(() => {});
+  // ランキング（右からスライドするパネル）。開発者を除いた各種ランキングをバックエンドから取得して見せる。
+  const [rankingsOpen, setRankingsOpen] = useState(false);
+  const [rankingsTab, setRankingsTab] = useState<RankingMetric>('painted');
+  const [rankingsPeriod, setRankingsPeriod] = useState<RankingPeriod>('all');
+  const [rankingsData, setRankingsData] = useState<RankingsResponse | null>(null);
+  const [rankingsLoading, setRankingsLoading] = useState(false);
+  const openRankingsRef = useRef<() => void>(() => {});
   const { data: session, isPending } = useSession();
   // 言語（ゲーム画面の用語・地名のローマ字表示）。effect 内の同期参照用に ref も持つ。
   const { t, lang } = useLocale();
@@ -1119,6 +1162,37 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   useEffect(() => {
     openStatsRef.current = openStats;
   }, [openStats]);
+
+  // ランキングパネルを開く（カスタムコントロールから呼ばれる）
+  const openRankings = useCallback(() => {
+    setRankingsOpen(true);
+  }, []);
+  useEffect(() => {
+    openRankingsRef.current = openRankings;
+  }, [openRankings]);
+
+  // パネルを開いている間、期間を変えるたびにランキングをバックエンドから取得する。
+  useEffect(() => {
+    if (!rankingsOpen) return;
+    let cancelled = false;
+    setRankingsLoading(true);
+    (async () => {
+      try {
+        const url = `${RANKINGS_API}?period=${rankingsPeriod}`;
+        const res = await fetch(url, { credentials: 'include' });
+        if (!res.ok) throw new Error(`rankings ${res.status}`);
+        const data = (await res.json()) as RankingsResponse;
+        if (!cancelled) setRankingsData(data);
+      } catch {
+        if (!cancelled) setRankingsData(null);
+      } finally {
+        if (!cancelled) setRankingsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rankingsOpen, rankingsPeriod]);
 
   // デバッグ用：塗りポイント残高を指定値にセットする（MAX を超える値も可）。
   const setDebugPoints = useCallback(
@@ -1893,6 +1967,12 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
 
     // 検索ボタンの下にデータ詳細（棒グラフ）ボタンを積む
     map.addControl(new StatsControl(() => openStatsRef.current()), 'top-right');
+
+    // データ詳細ボタンの下にランキング（トロフィー）ボタンを積む
+    map.addControl(
+      new RankingsControl(() => openRankingsRef.current()),
+      'top-right'
+    );
 
     // デバッグメニュー（レンチ）は開発者のみ表示。下の useEffect で権限に応じて付け外しする。
 
@@ -4611,6 +4691,149 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                 )}
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ランキング（開発者を除く各種ランキング。右からスライドするパネル） */}
+      {rankingsOpen && (
+        <div
+          className="absolute inset-0 z-10 flex justify-end bg-black/30"
+          onClick={() => setRankingsOpen(false)}
+        >
+          <div
+            className="w-80 max-w-[85%] h-full bg-white shadow-xl p-4 overflow-y-auto"
+            role="dialog"
+            aria-label={t('rankingsTitle')}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-bold text-gray-800">{t('rankingsTitle')}</h2>
+              <button
+                type="button"
+                aria-label={t('close')}
+                className="text-gray-400 hover:text-gray-600 text-lg leading-none"
+                onClick={() => setRankingsOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* 集計期間（全期間／月間／週間）。塗り由来のランキングにだけ効く。 */}
+            <div className="flex rounded-lg bg-gray-100 p-0.5 mb-2 text-xs font-medium select-none">
+              {(
+                [
+                  ['all', t('rankPeriodAll')],
+                  ['month', t('rankPeriodMonth')],
+                  ['week', t('rankPeriodWeek')],
+                ] as [RankingPeriod, string][]
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  aria-pressed={rankingsPeriod === key}
+                  onClick={() => setRankingsPeriod(key)}
+                  className={`flex-1 rounded-md px-2 py-1.5 transition-colors ${
+                    rankingsPeriod === key
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* ランキングの種類タブ */}
+            <div className="flex rounded-lg bg-gray-100 p-0.5 mb-4 text-xs font-medium select-none">
+              {(
+                [
+                  ['painted', t('rankPainted')],
+                  ['gps', t('rankGps')],
+                  ['muni', t('rankMuni')],
+                  ['level', t('rankLevel')],
+                ] as [RankingMetric, string][]
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  aria-pressed={rankingsTab === key}
+                  onClick={() => setRankingsTab(key)}
+                  className={`flex-1 rounded-md px-2 py-1.5 transition-colors ${
+                    rankingsTab === key
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {rankingsLoading ? (
+              <p className="text-xs text-gray-400">{t('rankLoading')}</p>
+            ) : (() => {
+              const board = rankingsData?.boards?.[rankingsTab];
+              const unit =
+                rankingsTab === 'muni'
+                  ? t('rankUnitMuni')
+                  : rankingsTab === 'level'
+                    ? ''
+                    : t('rankUnitCells');
+              const fmt = (v: number) =>
+                rankingsTab === 'level'
+                  ? `${t('rankUnitLevel')}.${v}`
+                  : `${v.toLocaleString()} ${unit}`;
+              if (!board || board.top.length === 0) {
+                return <p className="text-xs text-gray-400">{t('rankEmpty')}</p>;
+              }
+              const meInTop = board.me
+                ? board.top.some((e) => e.userId === board.me!.userId)
+                : false;
+              const medal = (rank: number) =>
+                rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : '';
+              const row = (e: RankingEntry) => {
+                const isMe = userId != null && e.userId === userId;
+                return (
+                  <li
+                    key={e.userId}
+                    className={`flex items-center gap-2 rounded-md px-2 py-1.5 ${
+                      isMe ? 'bg-yellow-50 ring-1 ring-yellow-300' : ''
+                    }`}
+                  >
+                    <span className="w-7 shrink-0 text-center text-sm font-bold text-gray-700 tabular-nums">
+                      {medal(e.rank) || e.rank}
+                    </span>
+                    <span className="flex-1 truncate text-sm text-gray-800">
+                      {e.name}
+                      {isMe && (
+                        <span className="ml-1 text-[10px] text-yellow-600">
+                          （{t('rankYou')}）
+                        </span>
+                      )}
+                    </span>
+                    <span className="shrink-0 text-sm font-semibold text-gray-900 tabular-nums">
+                      {fmt(e.value)}
+                    </span>
+                  </li>
+                );
+              };
+              return (
+                <>
+                  {rankingsTab === 'level' && rankingsPeriod !== 'all' && (
+                    <p className="mb-2 text-[11px] text-gray-400">
+                      {t('rankLevelAllOnly')}
+                    </p>
+                  )}
+                  <ul className="space-y-0.5">{board.top.map(row)}</ul>
+                  {board.me && !meInTop && (
+                    <div className="mt-3 border-t border-gray-100 pt-2">
+                      <ul className="space-y-0.5">{row(board.me)}</ul>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
         </div>
       )}

@@ -156,6 +156,24 @@ const ja: Dict = {
   viewWorld: '世界',
   perCountryTitle: '国ごとの塗り',
 
+  // Map: ランキング
+  rankingsTitle: 'ランキング',
+  rankPainted: '塗ったマス',
+  rankGps: 'GPS訪問',
+  rankMuni: '市区町村',
+  rankLevel: 'レベル',
+  rankLoading: 'ランキングを読み込み中…',
+  rankEmpty: 'まだランキングがありません',
+  rankYou: 'あなた',
+  rankMeOutside: (rank: number) => `あなたの順位：${rank}位`,
+  rankUnitCells: 'マス',
+  rankUnitMuni: '市区町村',
+  rankUnitLevel: 'Lv',
+  rankPeriodAll: '全期間',
+  rankPeriodMonth: '月間',
+  rankPeriodWeek: '週間',
+  rankLevelAllOnly: 'レベルは全期間のみの集計です',
+
   // Map: トースト（ゲーム向け）
   needLoginVideo: 'ログインすると動画でポイントを回復できます',
   videoNotYet: 'まだ動画を見られません（クールダウン中）',
@@ -330,6 +348,24 @@ const en: Dict = {
   viewJapan: 'Japan',
   viewWorld: 'World',
   perCountryTitle: 'Painted by country',
+
+  // Map: rankings
+  rankingsTitle: 'Rankings',
+  rankPainted: 'Cells',
+  rankGps: 'GPS',
+  rankMuni: 'Cities',
+  rankLevel: 'Level',
+  rankLoading: 'Loading rankings…',
+  rankEmpty: 'No rankings yet',
+  rankYou: 'You',
+  rankMeOutside: (rank: number) => `Your rank: #${rank}`,
+  rankUnitCells: 'cells',
+  rankUnitMuni: 'cities',
+  rankUnitLevel: 'Lv',
+  rankPeriodAll: 'All time',
+  rankPeriodMonth: 'Monthly',
+  rankPeriodWeek: 'Weekly',
+  rankLevelAllOnly: 'Level is all-time only',
 
   // Map: toasts (game)
   needLoginVideo: 'Sign in to recover points by watching videos',

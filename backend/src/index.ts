@@ -9,6 +9,7 @@ import { adminRouter } from "./routes/admin.js";
 import { logRouter } from "./routes/log.js";
 import { userRouter } from "./routes/user.js";
 import { accessRouter } from "./routes/access.js";
+import { rankingsRouter } from "./routes/rankings.js";
 
 const app = new Hono();
 
@@ -44,6 +45,9 @@ app.route("/user", userRouter);
 
 // サイトへのアクセス数カウント（未ログインも数える。/api/backend/access から到達）
 app.route("/access", accessRouter);
+
+// 各種ランキング（開発者を除く。/api/backend/rankings から到達）
+app.route("/rankings", rankingsRouter);
 
 const port = Number(process.env.PORT) || 3001;
 
