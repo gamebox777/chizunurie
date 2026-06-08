@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
 import { LocaleProvider } from "@/lib/i18n";
+import ServiceWorkerRegister from "./ServiceWorkerRegister";
 
 const GA_MEASUREMENT_ID = "G-CLKCJXR6CN";
 
@@ -25,8 +26,10 @@ export const metadata: Metadata = {
   title: "地図ぬりえ",
   description: SITE_DESC,
   icons: {
+    // ファビコン（タブ等の極小表示）は文字なしの方が潰れず視認しやすい
     icon: "/promo/icon.png",
-    apple: "/promo/icon.png",
+    // iOS のホーム画面アイコンは文字入り版（180px相当で表示され文字も読める）
+    apple: "/icons/icon-512.png",
   },
   openGraph: {
     type: "website",
@@ -43,6 +46,12 @@ export const metadata: Metadata = {
     description: SITE_DESC,
     images: ["/promo/promo-ogp.png"],
   },
+  // iOS Safari で「ホーム画面に追加」したとき全画面の Web アプリとして起動させる
+  appleWebApp: {
+    capable: true,
+    title: SITE_NAME,
+    statusBarStyle: "default",
+  },
   // AdSense サイト所有権の確認用メタタグ
   other: {
     "google-adsense-account": "ca-pub-3466778617044617",
@@ -54,6 +63,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  themeColor: "#ffffff",
 };
 
 export default function RootLayout({
@@ -81,6 +91,7 @@ export default function RootLayout({
             gtag('config', '${GA_MEASUREMENT_ID}');
           `}
         </Script>
+        <ServiceWorkerRegister />
         <LocaleProvider>{children}</LocaleProvider>
       </body>
     </html>
