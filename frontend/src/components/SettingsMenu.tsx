@@ -13,6 +13,8 @@ import {
   type BgmTrack,
 } from '@/lib/sound';
 import { isHapticsEnabled, setHapticsEnabled, isHapticsSupported } from '@/lib/haptics';
+import { isBasemapEnabled, setBasemapEnabled } from '@/lib/basemap';
+import { isGpsAddressEnabled, setGpsAddressEnabled } from '@/lib/gpsAddress';
 
 type Props = {
   // 現在のニックネーム（メニュー先頭に表示）
@@ -37,11 +39,17 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
   // バイブ（触覚フィードバック）。対応端末でのみ項目を出す。
   const [hapticsOn, setHapticsOn] = useState(true);
   const [hapticsSupported, setHapticsSupported] = useState(false);
+  // 地理院「標準地図」を薄く重ねるオーバーレイ（既定 ON）。
+  const [basemapOn, setBasemapOn] = useState(true);
+  // 現在地の住所ラベル表示（既定 ON）。
+  const [gpsAddressOn, setGpsAddressOn] = useState(true);
   useEffect(() => {
     setSeOn(isSeEnabled());
     setTrack(getBgmTrack());
     setHapticsSupported(isHapticsSupported());
     setHapticsOn(isHapticsEnabled());
+    setBasemapOn(isBasemapEnabled());
+    setGpsAddressOn(isGpsAddressEnabled());
   }, []);
   const toggleSe = () => {
     const next = !seOn;
@@ -53,6 +61,16 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
     setHapticsOn(next);
     setHapticsEnabled(next);
     if (next && typeof navigator !== 'undefined') navigator.vibrate?.(20); // ON にした瞬間に確認のビビッ
+  };
+  const toggleBasemap = () => {
+    const next = !basemapOn;
+    setBasemapOn(next);
+    setBasemapEnabled(next); // Map.tsx が即座にレイヤー表示を切り替える
+  };
+  const toggleGpsAddress = () => {
+    const next = !gpsAddressOn;
+    setGpsAddressOn(next);
+    setGpsAddressEnabled(next); // Map.tsx が即座に住所ラベルの表示/非表示を切り替える
   };
   const selectBgm = (track: BgmTrack) => {
     setTrack(track);
@@ -143,6 +161,50 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
                 }`}
               >
                 English
+              </button>
+            </div>
+          </div>
+          {/* 地図表示（地理院オーバーレイ・現在地の住所） */}
+          <div className="px-4 py-2 border-b border-gray-100">
+            <p className="text-xs text-gray-400 mb-1.5">{t('mapDisplay')}</p>
+            <div className="flex flex-col gap-1.5">
+              <button
+                type="button"
+                onClick={toggleBasemap}
+                aria-pressed={basemapOn}
+                className="flex w-full items-center justify-between text-sm text-gray-700"
+              >
+                <span>{t('baseMapOverlay')}</span>
+                <span
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                    basemapOn ? 'bg-blue-500' : 'bg-gray-300'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      basemapOn ? 'translate-x-4' : 'translate-x-0.5'
+                    }`}
+                  />
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={toggleGpsAddress}
+                aria-pressed={gpsAddressOn}
+                className="flex w-full items-center justify-between text-sm text-gray-700"
+              >
+                <span>{t('gpsAddressLabel')}</span>
+                <span
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                    gpsAddressOn ? 'bg-blue-500' : 'bg-gray-300'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      gpsAddressOn ? 'translate-x-4' : 'translate-x-0.5'
+                    }`}
+                  />
+                </span>
               </button>
             </div>
           </div>

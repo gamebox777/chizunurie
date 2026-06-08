@@ -10,6 +10,8 @@ import { useLocale, type Lang, type TFunc } from '@/lib/i18n';
 import { kanaToRomaji, prefRomaji } from '@/lib/romaji';
 import { playPaint, playLevelUp, playConquer, unlockAudio } from '@/lib/sound';
 import { vibratePaint } from '@/lib/haptics';
+import { isBasemapEnabled, onBasemapChange } from '@/lib/basemap';
+import { isGpsAddressEnabled, onGpsAddressChange } from '@/lib/gpsAddress';
 import { showRewardedAd } from '@/lib/rewardedAd';
 
 const PAINT_API = '/api/backend/painted';
@@ -42,6 +44,10 @@ const COST_FAR = 10; // 離れた場所（確認ダイアログ付き）
 // 1ブロック固定コスト・隣接条件なし・離れていても COST_FAR は課さない。
 const FOREIGN_BLOCK_SIZE = 10; // 外国のまとめ塗りブロックの一辺（セル数）
 const COST_FOREIGN_BLOCK = 1; // 外国 1 ブロック（最大100マス）の固定コスト＝1マス分のポイント
+// 新規セルを塗った瞬間にふわっと出す経験値（backend/src/lib/points.ts と一致）。
+// gps＝現地塗り（訪問）、それ以外（となり塗り・離れた場所・外国ブロック）＝EXP_PAINT。
+const EXP_VISIT = 100; // 現地塗り（GPS で実際に訪れる）
+const EXP_PAINT = 50; // となり塗り・離れた場所塗り（manual）
 
 // サーバーの塗りポイント状態（backend/src/lib/points.ts の PointsState と一致）
 type ServerPoints = {
@@ -145,6 +151,11 @@ const MESH_MIN_ZOOM = 9;
 // 塗った箇所を描く painted-overlay の表示開始ズーム（mesh はベイクしないので全ズーム
 // この1レイヤーが塗りの色付けを担う）。これ未満は塗りも非表示。
 const PAINTED_OVERLAY_MIN_ZOOM = 6;
+
+// 地理院「標準地図」オーバーレイの表示開始ズーム。これ未満（世界全体を見る低ズーム）では
+// 出さず、世界地図（白地図＋国境＋ラベル）を全面表示する。ズームインすると日本（bounds 内）
+// だけ地形画像が乗る。低ズームで bounds の矩形が世界地図の上に出るのを防ぐため。
+const GSI_OVERLAY_MIN_ZOOM = 6;
 
 // 約1kmの等面積グリッド = 緯度 1/120°・経度 1/80° の均一グリッド
 const MESH_LAT_DIV = 120;
@@ -293,18 +304,32 @@ function isInJapanBounds(lng: number, lat: number): boolean {
 }
 
 // 国土地理院（日本・細かい）で検索。失敗時は空配列。
+// 国土地理院 API は先頭1文字だけの一致でも大量に返し（例「東京」で「東」を含む北海道の地名が
+// 上位に来る）、クエリ全体を含む地名が埋もれる。そこで「クエリ全体を文字部分一致で含む」結果を
+// 優先して並べ替える（完全一致 > 前方一致 > 部分一致 > その他。各バケット内は API の順序を維持）。
 async function searchJapan(query: string): Promise<SearchHit[]> {
   try {
     const res = await fetch(`${GEOCODE_URL}?q=${encodeURIComponent(query)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = (await res.json()) as GeocodeResult[];
     if (!Array.isArray(data)) return [];
-    return data.map((r) => ({
+    const hits = data.map((r) => ({
       title: r.properties.title,
       lng: r.geometry.coordinates[0],
       lat: r.geometry.coordinates[1],
       scope: 'jp' as const,
     }));
+    const rank = (title: string): number => {
+      if (title === query) return 0;
+      if (title.startsWith(query)) return 1;
+      if (title.includes(query)) return 2;
+      return 3;
+    };
+    // 安定ソート（同ランクは元の順序を保つ）でクエリ全体を含む地名を上位に出す
+    return hits
+      .map((h, i) => ({ h, i, r: rank(h.title) }))
+      .sort((a, b) => a.r - b.r || a.i - b.i)
+      .map((x) => x.h);
   } catch (err) {
     console.warn('gsi geocode failed', err);
     return [];
@@ -473,6 +498,15 @@ class StatsControl implements maplibregl.IControl {
 
 type PaintedState = Record<string, PaintMode>;
 
+// 塗った日時（ISO 文字列）を「YYYY/M/D HH:mm」に整形。不正値は空文字。
+function formatPaintedAt(iso: string | undefined | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 // 塗った全セルを矩形ポリゴンの FeatureCollection に変換（低ズーム用オーバーレイ）。
 // メッシュコードから数式でセル範囲を復元するので PMTiles 側にメッシュが無い
 // 低ズームでも塗りを描画できる。
@@ -632,6 +666,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   // 塗ったセルの CELLID → "PREF|CITY"。塗り時に求めた値を保持し、復元時は backend の
   // municipality 列から埋める。mesh をベイクしなくなったので「全セルの cell→市」表は持たない。
   const muniByPaintedCellRef = useRef<Map<number, string>>(new Map());
+  const paintedAtRef = useRef<Map<number, string>>(new Map()); // CELLID → 塗った日時（ISO・DB復元値／その場塗りは now で上書き）
   const totalByMuniRef = useRef<Map<string, number>>(new Map()); // "PREF|CITY" → 総セル数（分母）
   const paintedByMuniRef = useRef<Map<string, number>>(new Map()); // "PREF|CITY" → 塗ったセル数（分子）
   const muniPolysRef = useRef<MuniPoly[]>([]); // 帰属判定用ポリゴン（muni-classify.geojson・遅延ロード）
@@ -731,6 +766,31 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const spawnRippleRef = useRef(spawnRipple);
   spawnRippleRef.current = spawnRipple;
 
+  // 逆ジオコーダ（経緯度→町丁目まで）の結果キャッシュ（CELLID→住所）。ホバーと塗りのふわっと
+  // 表示で共有し、同じセルへの再問い合わせを防ぐ。map 初期化 effect 内のホバー処理も同じ Map を使う。
+  const revGeoCacheRef = useRef<Map<number, string>>(new Map());
+  // ── 塗った瞬間に地名＋経験値を画面 UI としてふわっと上に出す（float-text）。──
+  // 地図に貼り付けるのではなく、画面に重ねる UI として表示し、上昇しながら薄れて消える。
+  // 連続でとなり塗りすると複数が同時に出る（古いものから順に消える）。
+  const floatKeyRef = useRef(0);
+  const [floats, setFloats] = useState<Array<{ key: number; name: string; exp: number; dx: number }>>(
+    []
+  );
+  const spawnFloatText = useCallback((name: string, exp: number): number => {
+    const key = (floatKeyRef.current += 1);
+    // 同時に複数出たとき重ならないよう、キーから決まる小さな横ずれを付ける（±50px）。
+    const dx = ((key * 47) % 100) - 50;
+    setFloats((prev) => [...prev, { key, name, exp, dx }]);
+    window.setTimeout(() => {
+      setFloats((prev) => prev.filter((f) => f.key !== key));
+    }, 2000);
+    return key;
+  }, []);
+  // ふわっと表示の地名を後から差し替える（逆ジオコーダが町丁目を返したとき）。
+  const updateFloatName = useCallback((key: number, name: string) => {
+    setFloats((prev) => prev.map((f) => (f.key === key ? { ...f, name } : f)));
+  }, []);
+
   // アンマウント時に rAF と残った波紋を片付ける
   useEffect(() => {
     return () => {
@@ -742,9 +802,9 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
 
   // 新規セルが塗られた瞬間に呼ぶハンドラ（波紋・コンボ・制覇判定）。
   // map 初期化 effect 内の commitLocalPaint から最新クロージャを呼べるよう ref 経由にする。
-  const onCellPaintedRef = useRef<(id: number, muniKey: string | null, mode: PaintMode) => void>(
-    () => {}
-  );
+  const onCellPaintedRef = useRef<
+    (id: number, muniKey: string | null, mode: PaintMode, name?: string) => void
+  >(() => {});
 
   const [debugMoving, setDebugMoving] = useState(false);
   // デバッグ用：マウスで塗った場所を消すモード。ON の間はクリックで塗らずに消す
@@ -757,6 +817,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const hoverPaintModeRef = useRef(false);
   const debugCleanupRef = useRef<(() => void) | null>(null);
   const addressMarkerRef = useRef<maplibregl.Marker | null>(null); // 現在地の住所ラベル
+  const gpsAddressEnabledRef = useRef(true); // 現在地の住所ラベル表示 ON/OFF（設定・既定 ON）
   // 塗り方の操作モード。genchi=現地塗り（GPSの現在地のみ自動で塗る）/
   // tonari=となり塗り（マウスで隣接セルを塗れる）。GPS自動塗りは両モード共通。
   // map init effect 内のクリックハンドラから同期参照するため ref も持つ。
@@ -1163,6 +1224,28 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     hoverPaintModeRef.current = hoverPaintMode;
   }, [hoverPaintMode]);
 
+  // 地理院オーバーレイ ON/OFF を設定メニューから受け取り、レイヤーの表示を切り替える。
+  useEffect(() => {
+    return onBasemapChange((on) => {
+      const map = mapRef.current;
+      if (!map || !map.getLayer('gsi-std-overlay')) return;
+      map.setLayoutProperty('gsi-std-overlay', 'visibility', on ? 'visible' : 'none');
+    });
+  }, []);
+
+  // 現在地の住所ラベル ON/OFF を設定メニューから受け取る。初期値を同期し、
+  // OFF にしたら表示中のラベルを消す。
+  useEffect(() => {
+    gpsAddressEnabledRef.current = isGpsAddressEnabled();
+    return onGpsAddressChange((on) => {
+      gpsAddressEnabledRef.current = on;
+      if (!on) {
+        addressMarkerRef.current?.remove();
+        addressMarkerRef.current = null;
+      }
+    });
+  }, []);
+
   useEffect(() => {
     paintModeRef.current = paintMode;
     // 現在地の住所ラベルは現地塗りモード専用。となり塗りに切り替えたら消す。
@@ -1422,16 +1505,33 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     }, 2600);
   }, []);
 
-  // 新規セルが塗られた瞬間の演出：波紋（paint-ripple）・コンボ・制覇判定。
+  // 新規セルが塗られた瞬間の演出：波紋（paint-ripple）・地名＋経験値のふわっと表示・コンボ・制覇判定。
   const handleCellPainted = useCallback(
-    (id: number, muniKey: string | null, _mode: PaintMode) => {
-      // 波紋：塗ったセル中心（地理座標）に地図追従の波紋を出す
+    (id: number, muniKey: string | null, mode: PaintMode, name?: string) => {
+      const [ri, ci] = gridFromMeshCode(id);
+      const lng = (ci + 0.5) / MESH_LON_DIV;
+      const lat = (ri + 0.5) / MESH_LAT_DIV;
+      // 波紋：塗ったセル中心（地理座標）に地図追従の波紋を出す（黄色半透明・派手に大きく広げる）
+      spawnRipple(lng, lat, 'rgba(250, 204, 21, 0.55)');
+      // 地名＋経験値を画面 UI としてふわっと上に出す。まず手元の市区町村名で即出し、日本では
+      // 逆ジオコーダ（町丁目まで）で詳しい住所に差し替える（キャッシュ済みなら最初から詳しく出す）。
       {
-        const [ri, ci] = gridFromMeshCode(id);
-        const lng = (ci + 0.5) / MESH_LON_DIV;
-        const lat = (ri + 0.5) / MESH_LAT_DIV;
-        // 波紋は塗り方に依らず黄色半透明（派手に大きく広げる）
-        spawnRipple(lng, lat, 'rgba(250, 204, 21, 0.55)');
+        const cached = muniKey ? revGeoCacheRef.current.get(id) : undefined;
+        const fallback = name?.trim() || (muniKey ? muniKey.split('|')[1] || muniKey : '');
+        const label = cached || fallback;
+        if (label) {
+          const exp = mode === 'gps' ? EXP_VISIT : EXP_PAINT;
+          const key = spawnFloatText(label, exp);
+          // 日本（muniKey あり）でキャッシュが無ければ町丁目まで取りに行って差し替える。
+          if (muniKey && !cached) {
+            reverseGeocode(lng, lat).then((full) => {
+              if (full) {
+                revGeoCacheRef.current.set(id, full);
+                updateFloatName(key, full);
+              }
+            });
+          }
+        }
       }
       // コンボ：一定間隔内に塗り続けると連鎖数が伸びる
       const now = Date.now();
@@ -1469,7 +1569,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         }
       }
     },
-    [recomputeCompleted, showConquer, spawnRipple]
+    [recomputeCompleted, showConquer, spawnRipple, spawnFloatText, updateFloatName]
   );
 
   // commitLocalPaint（map 初期化 effect 内・mount 時クロージャ）から最新版を呼べるよう ref に保持
@@ -1535,6 +1635,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     // 塗りの描画は painted-overlay（painted state 駆動）なので state を空にすれば消える。
     paintedRef.current = {};
     setPainted({});
+    paintedAtRef.current = new Map();
     muniByPaintedCellRef.current = new Map();
     paintedByMuniRef.current = new Map();
     regionByPaintedCellRef.current = new Map();
@@ -1806,6 +1907,25 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         'source-layer': 'states',
         paint: { 'fill-color': '#000000', 'fill-opacity': 0 },
       });
+      // 全世界の地図画像（下地）。どのズーム・どの地域でも常に本物の地図を表示する。
+      // CARTO Voyager（ラベルなし）を使い、文字は自前の赤ラベル（国名/州名）と競合させない。
+      // この上に国境線・ラベル・塗り・（日本ズーム時の）地理院タイルを重ねる。
+      // 白地図フィル（world-countries-fill / municipalities-fill）はこのラスターの下に潜らせ、
+      // 陸地判定の queryRenderedFeatures 用としてのみ残す（見た目はこのラスターが担う）。
+      map.addSource('world-basemap', {
+        type: 'raster',
+        tiles: ['https://basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}.png'],
+        tileSize: 256,
+        maxzoom: 19,
+        attribution:
+          '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap</a> contributors, <a href="https://carto.com/attributions" target="_blank" rel="noreferrer">© CARTO</a>',
+      });
+      map.addLayer({
+        id: 'world-basemap',
+        type: 'raster',
+        source: 'world-basemap',
+        paint: { 'raster-opacity': 1 },
+      });
       // 州・県境（細線・z4 以上で薄く）。
       map.addLayer({
         id: 'world-states-border',
@@ -1841,9 +1961,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           'symbol-placement': 'point',
         },
         paint: {
-          'text-color': '#6b6b63',
+          // 画像地図（GSI）の上でも読めるよう赤文字＋白フチ。
+          'text-color': '#dc2626',
           'text-halo-color': '#ffffff',
-          'text-halo-width': 1.2,
+          'text-halo-width': 1.6,
         },
       });
       // 州・県名ラベル（z5 以上・日本語名優先）。国名より小さく薄く。
@@ -1861,9 +1982,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           'symbol-placement': 'point',
         },
         paint: {
-          'text-color': '#8a8a80',
+          // 画像地図（GSI）の上でも読めるよう赤文字＋白フチ（国名より少し薄い赤）。
+          'text-color': '#e05656',
           'text-halo-color': '#ffffff',
-          'text-halo-width': 1,
+          'text-halo-width': 1.4,
         },
       });
 
@@ -1888,6 +2010,45 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         },
       });
 
+      // 地理院「標準地図」をうっすら重ねるオーバーレイ（位置の手がかり用）。
+      // 自前データは持たず、表示範囲のラスタータイルだけ地理院サーバーから都度取得する。
+      // 白地図（municipalities-fill）の上・塗り（painted-overlay-fill）の下に置くので、
+      // 塗っていない所だけ地図が薄く透け、塗ったセルははっきり残る。
+      // ON/OFF は設定メニュー（SettingsMenu）から。出典表記は attribution で表示。
+      map.addSource('gsi-std', {
+        type: 'raster',
+        tiles: ['https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png'],
+        tileSize: 256,
+        maxzoom: 18,
+        // 地理院タイルは日本にしか中身が無く、海外の高ズームでは空タイル（不透明）を
+        // 返す。このオーバーレイは world.pmtiles レイヤーの上に乗るので、bounds で
+        // 日本の範囲に限定しないと、海外をズームインした時に空タイルが世界地図を
+        // 覆って「海外の地図が消える」状態になる。日本国内（北方領土〜南鳥島〜沖ノ鳥島）を
+        // 含む bbox に絞り、範囲外では world.pmtiles がそのまま見えるようにする。
+        bounds: [122.0, 20.0, 154.0, 46.5],
+        attribution:
+          '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noreferrer">地理院タイル</a>',
+      });
+      map.addLayer({
+        id: 'gsi-std-overlay',
+        type: 'raster',
+        source: 'gsi-std',
+        // 日本へズームインした時だけ地形画像を出す。低ズーム（世界全体表示）では出さず、
+        // 世界地図（白地図＋国境＋ラベル）を全面で見せる。こうしないと bounds の矩形が
+        // 世界地図の上に四角く乗って「世界地図が表示されていない箇所」に見えてしまう。
+        minzoom: GSI_OVERLAY_MIN_ZOOM,
+        layout: { visibility: isBasemapEnabled() ? 'visible' : 'none' },
+        paint: { 'raster-opacity': 1 },
+      });
+      // レイヤーの重ね順を整える。下→上で：
+      //   白地図フィル（world-countries-fill / world-states-fill / municipalities-fill）
+      //   → 世界の地図画像（world-basemap・全ズーム全世界）
+      //   → 地理院タイル（gsi-std-overlay・日本ズーム時のみ上乗せ）
+      //   → 国境/州境/ラベル/市区町村境界（地図画像の上に出して隠れないように）
+      //   → （この後 addLayer される 塗り/メッシュ/政令市枠/県境/日本のラベル）
+      map.moveLayer('municipalities-fill', 'world-basemap'); // 日本の白塗りを世界画像の下へ
+      map.moveLayer('gsi-std-overlay', 'world-states-border'); // GSI を境界線の下・世界画像の上へ
+
       // 塗りオーバーレイ。塗ったセルをクライアント生成の矩形で全ズーム描画する。
       // mesh は PMTiles に焼かず数式生成するので、塗りの色付けはこのオーバーレイが一手に担う。
       map.addSource('painted-overlay', {
@@ -1901,7 +2062,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         minzoom: PAINTED_OVERLAY_MIN_ZOOM,
         paint: {
           'fill-color': ['match', ['get', 'mode'], 'gps', COLOR_GPS, 'manual', COLOR_MANUAL, '#ffffff'],
-          'fill-opacity': 0.85,
+          'fill-opacity': 0.55,
         },
       });
 
@@ -1913,7 +2074,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         source: 'mesh-grid',
         minzoom: MESH_MIN_ZOOM,
         paint: {
-          'line-color': '#7dd3fc',
+          'line-color': '#f87171',
           'line-width': ['interpolate', ['linear'], ['zoom'], 10, 0.3, 13, 0.6],
           'line-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0.4, 12, 0.7],
         },
@@ -2109,7 +2270,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         !!homeCountryRef.current && !!a3 && a3 !== homeCountryRef.current;
 
       // ホバー住所のキャッシュ（CELLID→町丁目入り住所）と逆ジオコーダのデバウンス
-      const hoverAddrCache = new Map<number, string>();
+      // ホバーの逆ジオコーダ結果は塗りのふわっと表示と同じキャッシュを共有する（再問い合わせ防止）。
+      const hoverAddrCache = revGeoCacheRef.current;
       let hoverGeocodeTimer: number | null = null;
       let hoverId: number | null = null;
 
@@ -2148,8 +2310,14 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         hoverKeyRef.current = muniKey;
         hoverRegionRef.current = region?.key ?? null;
         refreshHoverStat();
+        // 自分が塗ったセルなら地名の後ろに塗った日時を添える（その場塗りは now で上書き済み）。
+        const withPaintedAt = (text: string): string => {
+          if (!paintedRef.current[`mesh:${id}`]) return text;
+          const stamp = formatPaintedAt(paintedAtRef.current.get(id));
+          return stamp ? `${text}（${stamp}）` : text;
+        };
         const cached = hoverAddrCache.get(id);
-        onHoverAddressChangeRef.current?.(cached ?? address);
+        onHoverAddressChangeRef.current?.(withPaintedAt(cached ?? address));
         if (hoverGeocodeTimer !== null) {
           clearTimeout(hoverGeocodeTimer);
           hoverGeocodeTimer = null;
@@ -2162,7 +2330,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           hoverGeocodeTimer = window.setTimeout(() => {
             reverseGeocode(lng, lat).then((full) => {
               if (full) hoverAddrCache.set(id, full);
-              if (hoverId === id && full) onHoverAddressChangeRef.current?.(full);
+              if (hoverId === id && full) onHoverAddressChangeRef.current?.(withPaintedAt(full));
             });
           }, 250);
         }
@@ -2246,24 +2414,17 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               gainedExp?: number;
             } | null;
             if (data?.points) applyServerPoints(data.points);
-            // 経験値が入ったらトースト表示。再訪（既訪セルへ入り直し）は専用メッセージにする。
-            if (data?.gainedExp && data.gainedExp > 0) {
-              showToast(
-                tRef.current(
-                  revisit ? 'expRevisit' : 'expGained',
-                  data.gainedExp as never
-                )
+            // 新規塗りの経験値は塗ったセルのふわっと表示（spawnFloatText）で見せる。ここで出すのは
+            // 再訪（既訪セルへ入り直して時間経過ボーナスが入った）ときだけ。再訪は新規塗りではないので
+            // ふわっと表示が出ず、トーストと波紋で知らせる。
+            if (revisit && data?.gainedExp && data.gainedExp > 0) {
+              showToast(tRef.current('expRevisit', data.gainedExp as never));
+              const [ri, ci] = gridFromMeshCode(id);
+              spawnRippleRef.current(
+                (ci + 0.5) / MESH_LON_DIV,
+                (ri + 0.5) / MESH_LAT_DIV,
+                'rgba(250, 204, 21, 0.55)'
               );
-              // 再訪（時間経過で再び経験値が入った）瞬間にも波紋を出す。新規塗りは commitLocalPaint
-              // 側で波紋が出るので、ここではサーバーが経験値を返した再訪のときだけ出す。
-              if (revisit) {
-                const [ri, ci] = gridFromMeshCode(id);
-                spawnRippleRef.current(
-                  (ci + 0.5) / MESH_LON_DIV,
-                  (ri + 0.5) / MESH_LAT_DIV,
-                  'rgba(250, 204, 21, 0.55)'
-                );
-              }
             }
           })
           .catch((err) => {
@@ -2295,6 +2456,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         setPainted(paintedRef.current);
 
         if (!existing) {
+          // その場で塗った日時を記録（DB 復元値より優先＝実際に塗った日時を表示する）。
+          paintedAtRef.current.set(id, new Date().toISOString());
           if (!silent && address) showToast(address);
           // 新規セルのみカウントを +1（gps への昇格では増やさない）
           let changed = false;
@@ -2311,8 +2474,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             changed = true;
           }
           if (changed) refreshHoverStat();
-          // 新規セルの演出（波紋・コンボ・制覇判定・塗り音）。silent はまとめ塗り等で抑止。
-          if (!silent) onCellPaintedRef.current?.(id, muniKey, mode);
+          // 新規セルの演出（波紋・地名＋経験値・コンボ・制覇判定・塗り音）。silent はまとめ塗り等で抑止。
+          if (!silent) onCellPaintedRef.current?.(id, muniKey, mode, address);
         }
         return existing ? 'promoted' : 'new';
       };
@@ -2337,6 +2500,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         delete next[key];
         paintedRef.current = next;
         setPainted(next);
+        paintedAtRef.current.delete(id);
         let changed = false;
         const muni = muniByPaintedCellRef.current.get(id);
         if (muni) {
@@ -2436,10 +2600,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           }
           // サーバーの確定値（残高・レベル・経験値）で同期。経験値が貯まればレベルアップ演出も出る。
           if (data?.points) applyServerPoints(data.points);
-          // 経験値が入ったらトースト表示（となり塗り＝+50 など）。
-          if (data?.gainedExp && data.gainedExp > 0) {
-            showToast(tRef.current('expGained', data.gainedExp as never));
-          }
+          // 経験値の獲得は塗ったセルのふわっと表示（spawnFloatText）で見せるのでトーストは出さない。
         } catch (err) {
           console.warn('failed to sync painted region', err);
         }
@@ -2731,7 +2892,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         }
         // 現地塗りモードでは、グリッド内の近似住所ではなく現在地の正確な住所を表示する。
         // 同じメッシュセル内では再取得しない（移動して別セルに入った時だけ問い合わせる）。
-        if (paintModeRef.current === 'genchi' && id !== lastGeocodedId) {
+        if (paintModeRef.current === 'genchi' && gpsAddressEnabledRef.current && id !== lastGeocodedId) {
           lastGeocodedId = id;
           reverseGeocode(lngLat[0], lngLat[1]).then((address) => {
             // 取得待ちの間に別セルへ移動していたら反映しない（古い結果の上書き防止）
@@ -2929,6 +3090,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       // 描画は painted-overlay（painted state 駆動）なので state を空にすれば消える。
       paintedRef.current = {};
       setPainted({});
+      paintedAtRef.current = new Map();
       muniByPaintedCellRef.current = new Map();
       paintedByMuniRef.current = new Map();
       regionByPaintedCellRef.current = new Map();
@@ -2954,6 +3116,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             mode?: string;
             municipality?: string | null;
             region?: string | null;
+            paintedAt?: string | null;
           }[];
         };
         if (cancelled) return;
@@ -2969,6 +3132,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           // 塗り％集計用に cell→市区町村 / cell→州県 を保存時の値から復元する
           if (row.municipality) muniByPaintedCellRef.current.set(id, row.municipality);
           if (row.region) regionByPaintedCellRef.current.set(id, row.region);
+          if (row.paintedAt) paintedAtRef.current.set(id, row.paintedAt);
         }
         paintedRef.current = next;
         setPainted(next);
@@ -3361,6 +3525,23 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
 
       {/* 塗りの瞬間の波紋（paint-ripple）は MapLibre の Marker として地図に直接貼り付ける（spawnRipple が生成）。 */}
+
+      {/* 塗った地名のふわっと表示。各要素を絶対配置で独立して上昇させる（積み替えで起きる
+          ガタつきを避ける）。画面中央あたりから一番上まですーっと上がりながら薄れて消える。 */}
+      {floats.length > 0 && (
+        <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden" aria-hidden>
+          {floats.map((f) => (
+            <div
+              key={f.key}
+              className="paint-float-item flex items-baseline gap-2 rounded-full bg-black/55 px-3.5 py-1.5 backdrop-blur-sm"
+              style={{ ['--dx' as string]: `${f.dx}px` }}
+            >
+              <span className="paint-float-name">{f.name}</span>
+              {f.exp > 0 && <span className="paint-float-exp">{t('expFloat', f.exp as never)}</span>}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* コンボ（連鎖塗り）表示。2連鎖以上で中央上に大きく出す。 */}
       {combo >= 2 && (

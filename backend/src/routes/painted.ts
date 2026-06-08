@@ -91,6 +91,7 @@ paintedRouter.get("/", async (c) => {
       mode: paintedRegions.mode,
       municipality: paintedRegions.municipality,
       region: paintedRegions.region,
+      paintedAt: paintedRegions.paintedAt,
     })
     .from(paintedRegions)
     .where(eq(paintedRegions.userId, user.id));

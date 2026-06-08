@@ -46,6 +46,9 @@ const ja: Dict = {
   bgmSong2: '曲2',
   bgmSong3: '曲3',
   vibration: 'バイブ',
+  mapDisplay: '地図表示',
+  baseMapOverlay: '地図を薄く表示',
+  gpsAddressLabel: '現在地の住所を表示',
 
   // AuthModal
   googleLogin: 'Googleでログイン',
@@ -160,6 +163,7 @@ const ja: Dict = {
   foreignPainted: (n: number) => `外国を${n}マスまとめ塗り！`,
   expGained: (n: number) => `経験値 +${n} 🎉`,
   expRevisit: (n: number) => `再訪ボーナス 経験値 +${n} 🎉`,
+  expFloat: (n: number) => `経験値+${n}`,
   // 制覇・コンボ・フォグ
   muniConquered: (name: string) => `🎉 ${name} 制覇！`,
   prefConquered: (name: string) => `👑 ${name} 完全制覇！`,
@@ -208,6 +212,9 @@ const en: Dict = {
   bgmSong2: 'Song 2',
   bgmSong3: 'Song 3',
   vibration: 'Vibration',
+  mapDisplay: 'Map display',
+  baseMapOverlay: 'Show map faintly',
+  gpsAddressLabel: 'Show current address',
 
   // AuthModal
   googleLogin: 'Sign in with Google',
@@ -323,6 +330,7 @@ const en: Dict = {
   foreignPainted: (n: number) => `Painted ${n} cells abroad at once!`,
   expGained: (n: number) => `EXP +${n} 🎉`,
   expRevisit: (n: number) => `Revisit bonus  EXP +${n} 🎉`,
+  expFloat: (n: number) => `+${n} EXP`,
   // conquest / combo
   muniConquered: (name: string) => `🎉 ${name} conquered!`,
   prefConquered: (name: string) => `👑 ${name} fully conquered!`,
