@@ -8,12 +8,12 @@
  * 取得元: Natural Earth Vector 10m（50m より海岸線・島・州境がだいぶ細かい）
  *   - ne_10m_admin_0_countries          … 国別ポリゴン（NAME / NAME_JA / ADM0_A3）
  *   - ne_10m_admin_1_states_provinces   … 州・県ポリゴン（name / name_ja / admin / adm0_a3 / adm1_code）
- * 出力: frontend/public/data/world.pmtiles（layers: countries, states・zoom 0–8）
+ * 出力: frontend/public/data/world.pmtiles（layers: countries, states・zoom 0–9）
  *       中間: frontend/public/data/world-countries.geojson, world-states.geojson
  *             （build-world-stats.mjs が world-states.geojson を読んで分母を作る）
  *
- * なぜ z8 まで？ 塗りは z10 以上だが、states 層は MapLibre が z8 タイルを
- * オーバーズームして z10+ でも表示・queryRenderedFeatures できる。z8 までに
+ * なぜ z9 まで？ 塗りは z10 以上だが、states 層は MapLibre が z9 タイルを
+ * オーバーズームして z10+ でも表示・queryRenderedFeatures できる。z9 までに
  * 抑えることで世界全域でもタイル数・ファイルサイズが現実的に収まる
  * （素の 80MB GeoJSON を一括ロードする必要がなくなる ＝ 表示範囲ぶんだけ range 取得）。
  *
@@ -44,11 +44,11 @@ const STATES_OUT = join(publicData, 'world-states.geojson');
 // 世界全域（Web メルカトルの緯度上限 ±85.0511）
 const BOUNDS = { minLon: -180, maxLon: 180, minLat: -85.0511, maxLat: 85.0511 };
 const GLOBAL_MIN_ZOOM = 0;
-const GLOBAL_MAX_ZOOM = 8;
+const GLOBAL_MAX_ZOOM = 9;
 
 const LAYERS = [
-  { name: 'countries', file: 'world-countries.geojson', minZoom: 0, maxZoom: 8 },
-  { name: 'states',    file: 'world-states.geojson',    minZoom: 3, maxZoom: 8 },
+  { name: 'countries', file: 'world-countries.geojson', minZoom: 0, maxZoom: 9 },
+  { name: 'states',    file: 'world-states.geojson',    minZoom: 3, maxZoom: 9 },
 ];
 
 function resolvePmtilesBin() {
