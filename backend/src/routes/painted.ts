@@ -35,6 +35,7 @@ type PaintBody = {
   lng?: unknown;
   municipality?: unknown;
   region?: unknown;
+  country?: unknown;
 };
 
 // 緯度経度の妥当性チェック（範囲外・非数値は null）。塗った位置の記録用。
@@ -72,7 +73,12 @@ function parseBody(body: PaintBody | null) {
     typeof body.region === "string" && body.region.length <= 32
       ? body.region
       : null;
-  return { sourceLayer, keyCode, mode: resolvedMode, cost: resolvedCost, bulk, lat, lng, municipality, region };
+  // 塗った国（adm0_a3。日本は "JPN"）。管理画面の塗りログ表示用。
+  const country =
+    typeof body.country === "string" && body.country.length <= 8
+      ? body.country
+      : null;
+  return { sourceLayer, keyCode, mode: resolvedMode, cost: resolvedCost, bulk, lat, lng, municipality, region, country };
 }
 
 paintedRouter.get("/", async (c) => {
@@ -112,6 +118,7 @@ paintedRouter.post("/", async (c) => {
     lng: parsed.lng,
     municipality: parsed.municipality,
     region: parsed.region,
+    country: parsed.country,
   };
 
   if (parsed.mode === "gps") {

@@ -96,6 +96,7 @@ export type PaintedLog = {
   lat: number | null;
   lng: number | null;
   municipality: string | null;
+  country: string | null;
   paintedAt: string | null;
 };
 
@@ -115,7 +116,7 @@ export function fetchLogs(params: {
   beforeId?: number;
   limit?: number;
 }) {
-  return request<{ logs: UserLog[] }>(`/logs${toQuery(params)}`);
+  return request<{ logs: UserLog[]; total: number }>(`/logs${toQuery(params)}`);
 }
 
 export function fetchPaintedLog(params: {
@@ -123,5 +124,28 @@ export function fetchPaintedLog(params: {
   beforeId?: number;
   limit?: number;
 }) {
-  return request<{ painted: PaintedLog[] }>(`/painted${toQuery(params)}`);
+  return request<{ painted: PaintedLog[]; total: number }>(`/painted${toQuery(params)}`);
+}
+
+// ── 動画リワード広告の集計 ───────────────────────────────────
+
+export type VideoStats = {
+  days: number | null;
+  byEvent: Record<string, { count: number; users: number }>;
+  funnel: {
+    start: number;
+    granted: number;
+    dismissed: number;
+    unavailable: number;
+    error: number;
+    cooldown: number;
+    dailyLimit: number;
+    nonceError: number;
+    claimFailed: number;
+    completionRate: number | null;
+  };
+};
+
+export function fetchVideoStats(params: { days?: number }) {
+  return request<VideoStats>(`/video-stats${toQuery(params)}`);
 }

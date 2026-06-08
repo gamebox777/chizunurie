@@ -12,11 +12,31 @@ const GPT_SRC = 'https://securepubads.g.doubleclick.net/tag/js/gpt.js';
 // 広告が ready にならない（在庫なし・ブロッカー等）まま待ち続けないための上限。
 const READY_TIMEOUT_MS = 8000;
 
+// 開発時のみ、リワード表示フローの各段階を console に出して失敗モードを切り分ける。
+// （gpt.js ロード失敗＝ブロッカー / slot null＝非対応 / timeout＝fill なし を見分ける）
+const DEBUG_REWARDED = process.env.NODE_ENV !== 'production';
+function dbg(...args: unknown[]) {
+  if (DEBUG_REWARDED) console.log('[rewardedAd]', ...args);
+}
+
 export type RewardedAdOutcome =
   | 'granted' // 報酬条件を満たした（rewardedSlotGranted）
   | 'dismissed' // 表示されたが報酬前に閉じられた
   | 'unavailable' // 広告を出せなかった（在庫なし・非対応・タイムアウト）
   | 'error'; // gpt.js のロード失敗など想定外
+
+// 失敗（granted 以外）の具体的な原因。操作ログ（video_reward の meta.detail）に残す。
+export type RewardedAdDetail =
+  | 'gpt_load_failed' // gpt.js を読めなかった（広告ブロッカー等）
+  | 'define_threw' // defineOutOfPageSlot が例外
+  | 'slot_null' // リワード非対応・スロット重複で slot が null
+  | 'ready_timeout'; // 一定時間 ready にならず在庫なし扱い
+
+// 表示結果。granted 以外のとき detail に具体的な失敗理由を添える。
+export type RewardedAdResult = {
+  outcome: RewardedAdOutcome;
+  detail?: RewardedAdDetail;
+};
 
 // 使う範囲だけの最小 googletag 型（@types/google-publisher-tag を追加せずに済ませる）。
 type GptSlot = { addService: (service: GptPubAds) => GptSlot };
@@ -70,15 +90,18 @@ function loadGpt(): Promise<void> {
 // リワード広告を 1 本表示し、結果を返す。広告 UI（全画面オーバーレイ）は GPT 自身が生成する。
 export async function showRewardedAd(
   adUnitPath: string
-): Promise<RewardedAdOutcome> {
+): Promise<RewardedAdResult> {
+  dbg('showRewardedAd start', { adUnitPath });
   try {
     await loadGpt();
-  } catch {
-    return 'error';
+    dbg('gpt.js loaded');
+  } catch (e) {
+    dbg('gpt.js load FAILED (ad blocker?)', e);
+    return { outcome: 'error', detail: 'gpt_load_failed' };
   }
   const googletag = getGoogletag();
 
-  return new Promise<RewardedAdOutcome>((resolve) => {
+  return new Promise<RewardedAdResult>((resolve) => {
     googletag.cmd.push(() => {
       let slot: GptSlot | null;
       try {
@@ -86,13 +109,15 @@ export async function showRewardedAd(
           adUnitPath,
           googletag.enums.OutOfPageFormat.REWARDED
         );
-      } catch {
-        resolve('error');
+      } catch (e) {
+        dbg('defineOutOfPageSlot threw', e);
+        resolve({ outcome: 'error', detail: 'define_threw' });
         return;
       }
       // ブラウザ／環境がリワードに非対応のとき null が返る。
       if (!slot) {
-        resolve('unavailable');
+        dbg('defineOutOfPageSlot returned null (rewarded unsupported / already active)');
+        resolve({ outcome: 'unavailable', detail: 'slot_null' });
         return;
       }
       const activeSlot = slot;
@@ -112,7 +137,7 @@ export async function showRewardedAd(
         pubads.removeEventListener('rewardedSlotGranted', onGranted);
         pubads.removeEventListener('rewardedSlotClosed', onClosed);
       };
-      const settle = (outcome: RewardedAdOutcome) => {
+      const settle = (outcome: RewardedAdOutcome, detail?: RewardedAdDetail) => {
         if (settled) return;
         settled = true;
         cleanup();
@@ -121,11 +146,12 @@ export async function showRewardedAd(
         } catch {
           /* 破棄失敗は無視（次回 define で作り直す） */
         }
-        resolve(outcome);
+        resolve({ outcome, detail });
       };
 
       const onReady = (e: GptEvent) => {
         if (e.slot !== activeSlot) return;
+        dbg('rewardedSlotReady → makeRewardedVisible');
         if (readyTimer !== null) {
           window.clearTimeout(readyTimer);
           readyTimer = null;
@@ -134,10 +160,12 @@ export async function showRewardedAd(
       };
       const onGranted = (e: GptEvent) => {
         if (e.slot !== activeSlot) return;
+        dbg('rewardedSlotGranted');
         granted = true;
       };
       const onClosed = (e: GptEvent) => {
         if (e.slot !== activeSlot) return;
+        dbg('rewardedSlotClosed', { granted });
         settle(granted ? 'granted' : 'dismissed');
       };
 
@@ -147,9 +175,13 @@ export async function showRewardedAd(
 
       googletag.enableServices();
       googletag.display(activeSlot);
+      dbg('display() called, waiting for rewardedSlotReady…');
 
       // 一定時間内に ready にならなければ在庫なし扱いで終える。
-      readyTimer = window.setTimeout(() => settle('unavailable'), READY_TIMEOUT_MS);
+      readyTimer = window.setTimeout(() => {
+        dbg(`READY timeout (${READY_TIMEOUT_MS}ms) → unavailable (no fill?)`);
+        settle('unavailable', 'ready_timeout');
+      }, READY_TIMEOUT_MS);
     });
   });
 }

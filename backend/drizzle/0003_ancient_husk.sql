@@ -1,0 +1,1 @@
+ALTER TABLE "painted_regions" ADD COLUMN "country" text;

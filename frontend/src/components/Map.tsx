@@ -727,6 +727,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     [tickRipples]
   );
 
+  // map 初期化 effect 内（mount 時クロージャ）の syncPaint から最新の spawnRipple を呼べるよう ref に保持
+  const spawnRippleRef = useRef(spawnRipple);
+  spawnRippleRef.current = spawnRipple;
+
   // アンマウント時に rAF と残った波紋を片付ける
   useEffect(() => {
     return () => {
@@ -902,6 +906,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     if (videoBusyRef.current) return; // 二重起動防止
     videoBusyRef.current = true;
     setVideoPhase('loading');
+    // ボタン押下（視聴フロー開始）を記録。以降の各段階も video_reward で残す。
+    logEvent('video_reward', { meta: { event: 'start' } });
     try {
       // 1) nonce 発行（視聴前のクールダウン・上限チェックを兼ねる）
       const nonceRes = await fetch(`${POINTS_API}/reward/video/nonce`, {
@@ -914,6 +920,15 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       if (!nonceRes.ok || !nonceData?.nonce) {
         if (nonceData?.status) setRewardStatus(nonceData.status);
         const reason = nonceData?.error;
+        // クールダウン/1日上限/その他で nonce 発行に失敗（広告は表示していない）。
+        logEvent('video_reward', {
+          meta: {
+            event:
+              reason === 'cooldown' || reason === 'daily_limit'
+                ? reason
+                : 'nonce_error',
+          },
+        });
         showToast(
           reason === 'cooldown'
             ? tRef.current('videoNotYet')
@@ -925,8 +940,13 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       }
 
       // 2) 広告表示（広告 UI は GPT が全画面で描画する）
-      const outcome = await showRewardedAd(REWARDED_AD_UNIT_PATH);
+      const { outcome, detail } = await showRewardedAd(REWARDED_AD_UNIT_PATH);
       if (outcome !== 'granted') {
+        // 途中キャンセル（dismissed）・在庫なし/非対応（unavailable）・エラー（error）。
+        // detail に具体的な失敗理由（gpt_load_failed / ready_timeout 等）を残す。
+        logEvent('video_reward', {
+          meta: { event: outcome, ...(detail ? { detail } : {}) },
+        });
         showToast(
           outcome === 'dismissed'
             ? tRef.current('videoDismissed')
@@ -950,6 +970,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       if (!res.ok) {
         if (data?.status) setRewardStatus(data.status);
         const reason = (data as { error?: string } | null)?.error;
+        // 視聴は完了したが報酬請求が失敗した（nonce 不正・クールダウン・上限など）。
+        logEvent('video_reward', {
+          meta: { event: 'claim_failed', reason: reason ?? null },
+        });
         showToast(
           reason === 'cooldown'
             ? tRef.current('videoNotYet')
@@ -966,9 +990,14 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       };
       if (ok.points) applyServerPoints(ok.points);
       if (ok.status) setRewardStatus(ok.status);
+      // 視聴完了＋報酬付与まで成功。回復量を meta に残す。
+      logEvent('video_reward', {
+        meta: { event: 'granted', granted: ok.granted ?? 0 },
+      });
       showToast(tRef.current('recovered', (ok.granted ?? 0) as never));
     } catch (err) {
       console.warn('video reward failed', err);
+      logEvent('video_reward', { meta: { event: 'error' } });
       showToast(tRef.current('recoverFailed'));
     } finally {
       setVideoPhase(null);
@@ -1704,10 +1733,14 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     // Shift+ドラッグの矩形ズームを無効化（Shift+クリックのデバッグ塗りと競合するため）
     map.boxZoom.disable();
 
+    // ダブルクリック／スマホのダブルタップでのズームインを無効化（塗り操作と競合するため）
+    map.doubleClickZoom.disable();
+
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
     const geolocate = new maplibregl.GeolocateControl({
       positionOptions: { enableHighAccuracy: true },
       trackUserLocation: true,
+      fitBoundsOptions: { maxZoom: 11 },
     });
     map.addControl(geolocate, 'top-right');
 
@@ -2181,13 +2214,23 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         // POST のときは塗った位置の文脈（セル中心の緯度経度・市区町村・州県コード）を添える。
         // ip/ua はサーバー側で取得する。DELETE には付けない。
         // bulk=true は外国まとめ塗りの残りセル（代表1セルが課金＆経験値を得て、残りは無料・経験値なし）。
-        const ctx: { lat?: number; lng?: number; municipality?: string | null; region?: string | null } = {};
+        const ctx: {
+          lat?: number;
+          lng?: number;
+          municipality?: string | null;
+          region?: string | null;
+          country?: string | null;
+        } = {};
         if (method === 'POST') {
           const [ri, ci] = gridFromMeshCode(id);
           ctx.lat = (ri + 0.5) / MESH_LAT_DIV;
           ctx.lng = (ci + 0.5) / MESH_LON_DIV;
           ctx.municipality = muniKeyFor(id);
           ctx.region = regionKey ?? regionByPaintedCellRef.current.get(id) ?? null;
+          // 国コード（adm0_a3）。日本の外は州・県コードから導出、日本（市区町村あり）は "JPN"。
+          ctx.country =
+            (ctx.region ? stateMetaRef.current.get(ctx.region)?.adm0_a3 : null) ??
+            (ctx.municipality ? 'JPN' : null);
         }
         fetch(PAINT_API, {
           method,
@@ -2211,6 +2254,16 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                   data.gainedExp as never
                 )
               );
+              // 再訪（時間経過で再び経験値が入った）瞬間にも波紋を出す。新規塗りは commitLocalPaint
+              // 側で波紋が出るので、ここではサーバーが経験値を返した再訪のときだけ出す。
+              if (revisit) {
+                const [ri, ci] = gridFromMeshCode(id);
+                spawnRippleRef.current(
+                  (ci + 0.5) / MESH_LON_DIV,
+                  (ri + 0.5) / MESH_LAT_DIV,
+                  'rgba(250, 204, 21, 0.55)'
+                );
+              }
             }
           })
           .catch((err) => {

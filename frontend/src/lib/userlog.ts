@@ -4,13 +4,15 @@
 const LOG_API = '/api/backend/log';
 
 // クライアントから送る主要アクション（塗りは含めない＝painted 側で記録）。
+// video_reward は動画リワード広告の各段階（meta.event で start/granted/dismissed/…を区別）。
 export type LogAction =
   | 'login'
   | 'signup'
   | 'logout'
   | 'session_start'
   | 'search'
-  | 'gps';
+  | 'gps'
+  | 'video_reward';
 
 type LngLatMuni = { lat: number; lng: number; municipality: string | null };
 

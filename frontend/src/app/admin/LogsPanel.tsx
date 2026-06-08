@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchLogs, type UserLog } from './api';
+import Pager from './Pager';
 
 const PAGE_SIZE = 100;
 
@@ -13,6 +14,28 @@ const ACTION_LABEL: Record<string, string> = {
   session_start: 'セッション開始',
   search: '検索',
   gps: '現在地取得',
+  video_reward: '動画広告',
+};
+
+// 動画リワード（video_reward）の meta.event の日本語ラベル。
+const VIDEO_EVENT_LABEL: Record<string, string> = {
+  start: 'ボタン押下',
+  granted: '視聴完了・付与',
+  dismissed: '途中キャンセル',
+  unavailable: '在庫なし・非対応',
+  error: 'エラー',
+  cooldown: 'クールダウンで弾く',
+  daily_limit: '1日上限で弾く',
+  nonce_error: 'nonce発行失敗',
+  claim_failed: '報酬請求失敗',
+};
+
+// 動画リワード失敗時の具体的な原因（meta.detail）の日本語ラベル。
+const VIDEO_DETAIL_LABEL: Record<string, string> = {
+  gpt_load_failed: 'gpt.js読込失敗（広告ブロッカー等）',
+  define_threw: 'スロット定義で例外',
+  slot_null: 'リワード非対応・スロット重複',
+  ready_timeout: '在庫なし（タイムアウト）',
 };
 
 // 絞り込み用の選択肢
@@ -40,6 +63,28 @@ function formatMeta(meta: unknown): string {
     const q = (meta as { query?: unknown }).query;
     if (typeof q === 'string') return `「${q}」`;
   }
+  // 動画リワードの段階（event）を日本語で出す。granted は回復量、失敗は detail を添える。
+  if (typeof meta === 'object' && meta !== null && 'event' in meta) {
+    const ev = (meta as { event?: unknown }).event;
+    if (typeof ev === 'string') {
+      const label = VIDEO_EVENT_LABEL[ev] ?? ev;
+      const granted = (meta as { granted?: unknown }).granted;
+      if (typeof granted === 'number' && granted > 0) {
+        return `${label}（+${granted}）`;
+      }
+      // 失敗の具体的な原因（detail）があれば「ラベル：原因」で出す。
+      const detail = (meta as { detail?: unknown }).detail;
+      if (typeof detail === 'string') {
+        return `${label}：${VIDEO_DETAIL_LABEL[detail] ?? detail}`;
+      }
+      // 報酬請求失敗（claim_failed）は reason（cooldown 等）を添える。
+      const reason = (meta as { reason?: unknown }).reason;
+      if (typeof reason === 'string') {
+        return `${label}：${reason}`;
+      }
+      return label;
+    }
+  }
   try {
     return JSON.stringify(meta);
   } catch {
@@ -51,35 +96,40 @@ export default function LogsPanel() {
   const [logs, setLogs] = useState<UserLog[] | null>(null);
   const [error, setError] = useState('');
   const [action, setAction] = useState('');
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [reachedEnd, setReachedEnd] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(0);
+  const [hasNext, setHasNext] = useState(false);
+  const [total, setTotal] = useState(0);
+  // cursorsRef[i] = ページ i を取得するための beforeId（先頭ページは undefined）。
+  // 次へ進むたびに「今ページの末尾 id」を次ページのカーソルとして覚える。
+  const cursorsRef = useRef<(number | undefined)[]>([undefined]);
 
-  const load = useCallback(() => {
-    setLogs(null);
-    setError('');
-    setReachedEnd(false);
-    fetchLogs({ action: action || undefined, limit: PAGE_SIZE })
-      .then((r) => {
-        setLogs(r.logs);
-        setReachedEnd(r.logs.length < PAGE_SIZE);
-      })
-      .catch((e: Error) => setError(e.message));
-  }, [action]);
+  const loadPage = useCallback(
+    (p: number) => {
+      setLoading(true);
+      setError('');
+      const beforeId = cursorsRef.current[p];
+      fetchLogs({ action: action || undefined, beforeId, limit: PAGE_SIZE })
+        .then((r) => {
+          setLogs(r.logs);
+          setTotal(r.total);
+          setHasNext(r.logs.length === PAGE_SIZE);
+          if (r.logs.length > 0) {
+            cursorsRef.current[p + 1] = r.logs[r.logs.length - 1].id;
+          }
+          setPage(p);
+        })
+        .catch((e: Error) => setError(e.message))
+        .finally(() => setLoading(false));
+    },
+    [action]
+  );
 
-  useEffect(load, [load]);
-
-  const loadMore = () => {
-    if (!logs || logs.length === 0) return;
-    setLoadingMore(true);
-    const beforeId = logs[logs.length - 1].id;
-    fetchLogs({ action: action || undefined, beforeId, limit: PAGE_SIZE })
-      .then((r) => {
-        setLogs((prev) => [...(prev ?? []), ...r.logs]);
-        if (r.logs.length < PAGE_SIZE) setReachedEnd(true);
-      })
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoadingMore(false));
-  };
+  // 絞り込み（action）が変わったらカーソルを捨てて先頭ページから読み直す。
+  useEffect(() => {
+    cursorsRef.current = [undefined];
+    loadPage(0);
+  }, [loadPage]);
 
   return (
     <div className="space-y-3">
@@ -103,6 +153,19 @@ export default function LogsPanel() {
       {!logs && !error && <p className="text-sm text-gray-500">読み込み中…</p>}
 
       {logs && (
+        <Pager
+          page={page}
+          hasNext={hasNext}
+          loading={loading}
+          total={total}
+          pageSize={PAGE_SIZE}
+          count={logs.length}
+          onPrev={() => loadPage(page - 1)}
+          onNext={() => loadPage(page + 1)}
+        />
+      )}
+
+      {logs && (
         <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
           <table className="w-full text-sm">
             <thead>
@@ -110,10 +173,10 @@ export default function LogsPanel() {
                 <th className="px-3 py-2 font-medium whitespace-nowrap">日時</th>
                 <th className="px-3 py-2 font-medium">ユーザー</th>
                 <th className="px-3 py-2 font-medium">アクション</th>
+                <th className="px-3 py-2 font-medium">詳細</th>
                 <th className="px-3 py-2 font-medium">市区町村</th>
                 <th className="px-3 py-2 font-medium">IP</th>
                 <th className="px-3 py-2 font-medium">UserAgent</th>
-                <th className="px-3 py-2 font-medium">詳細</th>
               </tr>
             </thead>
             <tbody>
@@ -127,19 +190,16 @@ export default function LogsPanel() {
                     <div className="text-xs text-gray-400">{l.userEmail}</div>
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">{actionBadge(l.action)}</td>
+                  <td className="px-3 py-2 text-xs text-gray-600">{formatMeta(l.meta)}</td>
                   <td className="px-3 py-2 text-xs text-gray-600">
                     {l.municipality ?? '-'}
                   </td>
                   <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">
                     {l.ipAddress ?? '-'}
                   </td>
-                  <td
-                    className="px-3 py-2 text-xs text-gray-400 max-w-[240px] truncate"
-                    title={l.userAgent ?? ''}
-                  >
+                  <td className="px-3 py-2 text-xs text-gray-400 break-all">
                     {l.userAgent ?? '-'}
                   </td>
-                  <td className="px-3 py-2 text-xs text-gray-600">{formatMeta(l.meta)}</td>
                 </tr>
               ))}
               {logs.length === 0 && (
@@ -154,16 +214,17 @@ export default function LogsPanel() {
         </div>
       )}
 
-      {logs && logs.length > 0 && !reachedEnd && (
-        <div className="text-center">
-          <button
-            disabled={loadingMore}
-            onClick={loadMore}
-            className="rounded-lg border border-gray-300 bg-white px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            {loadingMore ? '読み込み中…' : 'もっと見る'}
-          </button>
-        </div>
+      {logs && (
+        <Pager
+          page={page}
+          hasNext={hasNext}
+          loading={loading}
+          total={total}
+          pageSize={PAGE_SIZE}
+          count={logs.length}
+          onPrev={() => loadPage(page - 1)}
+          onNext={() => loadPage(page + 1)}
+        />
       )}
     </div>
   );

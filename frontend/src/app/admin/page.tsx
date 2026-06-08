@@ -7,8 +7,9 @@ import StatsPanel from './StatsPanel';
 import UsersPanel from './UsersPanel';
 import LogsPanel from './LogsPanel';
 import PaintedLogPanel from './PaintedLogPanel';
+import VideoStatsPanel from './VideoStatsPanel';
 
-type Tab = 'stats' | 'users' | 'logs' | 'painted';
+type Tab = 'stats' | 'users' | 'logs' | 'painted' | 'video';
 
 // 中央寄せのメッセージ画面（読み込み中・権限なし用）。
 function Centered({ children }: { children: React.ReactNode }) {
@@ -70,6 +71,7 @@ export default function AdminPage() {
             ['users', 'ユーザー管理'],
             ['logs', 'ユーザーログ'],
             ['painted', '塗りログ'],
+            ['video', '動画広告'],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -86,11 +88,12 @@ export default function AdminPage() {
         ))}
       </nav>
 
-      <main className="mx-auto max-w-6xl px-6 py-6">
+      <main className="mx-auto max-w-[1900px] px-6 py-6">
         {tab === 'stats' && <StatsPanel />}
         {tab === 'users' && <UsersPanel />}
         {tab === 'logs' && <LogsPanel />}
         {tab === 'painted' && <PaintedLogPanel />}
+        {tab === 'video' && <VideoStatsPanel />}
       </main>
     </div>
   );

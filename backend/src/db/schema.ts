@@ -94,6 +94,9 @@ export const paintedRegions = pgTable(
     // 州・県コード（Natural Earth の adm1_code）。国は world-stats.json の
     // stateMeta[adm1_code].adm0_a3 から導出する。日本の外を塗った時だけ入る。
     region: text("region"),
+    // 塗った国（Natural Earth の adm0_a3 コード。日本は "JPN"）。塗った時点で
+    // クライアントが解決して送る。管理画面の塗りログ表示用。
+    country: text("country"),
     paintedAt: timestamp("painted_at", { withTimezone: true }).defaultNow(),
     // 直近に GPS で実際に訪れた時刻。再訪（既に gps 済みのセルへ GPS で入り直す）で
     // 経験値を再付与する際のクールダウン判定に使う。訪問のたびに同じ行を上書き更新する
