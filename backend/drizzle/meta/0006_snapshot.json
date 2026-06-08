@@ -1,5 +1,5 @@
 {
-  "id": "f72fa760-947f-4b17-b0f5-d2eb666474d1",
+  "id": "3c2e3f4a-c502-4ea0-98ac-ed36a3a2a21c",
   "prevId": "04a6d58c-3d2d-4162-98e2-f2e4d9a57beb",
   "version": "7",
   "dialect": "postgresql",
@@ -310,7 +310,13 @@
         "date": {
           "name": "date",
           "type": "text",
-          "primaryKey": true,
+          "primaryKey": false,
+          "notNull": true
+        },
+        "visitor": {
+          "name": "visitor",
+          "type": "text",
+          "primaryKey": false,
           "notNull": true
         },
         "count": {
@@ -323,7 +329,15 @@
       },
       "indexes": {},
       "foreignKeys": {},
-      "compositePrimaryKeys": {},
+      "compositePrimaryKeys": {
+        "site_visits_date_visitor_pk": {
+          "name": "site_visits_date_visitor_pk",
+          "columns": [
+            "date",
+            "visitor"
+          ]
+        }
+      },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},

@@ -153,14 +153,12 @@ export function fetchVideoStats(params: { days?: number }) {
 // ── サイトアクセス数の集計 ───────────────────────────────────
 
 export type AccessStats = {
-  // 全期間の累計アクセス数。
-  total: number;
-  // 今日（JST）のアクセス数。
-  today: number;
-  // 直近7日（今日を含む）の合計。
-  last7: number;
-  // 日別件数（新しい順・最大30件）。"YYYY-MM-DD"（JST）→ 件数。
-  daily: { date: string; count: number }[];
+  // アクセス数（ページ表示・延べ）の累計／今日／直近7日。
+  views: { total: number; today: number; last7: number };
+  // ユニークユーザー数の累計／今日／直近7日。
+  uniques: { total: number; today: number; last7: number };
+  // 日別（新しい順・最大30件）。views=表示回数、uniques=ユニーク訪問者数。
+  daily: { date: string; views: number; uniques: number }[];
 };
 
 export function fetchAccessStats() {

@@ -113,39 +113,59 @@ adminRouter.get("/stats", async (c) => {
   });
 });
 
-// サイトへのアクセス数（site_visits）の集計。累計・今日・直近の日別件数を返す。
+// サイトへのアクセス数（site_visits）の集計。アクセス数（ページ表示・延べ）と
+// ユニークユーザー数の両方について、累計・今日・直近7日・日別を返す。
 adminRouter.get("/access-stats", async (c) => {
   const guard = await requireDeveloper(c);
   if (guard) return guard;
 
-  // 直近30日ぶんの日別件数（新しい順）。
+  // 直近30日ぶんの日別（新しい順）。views=その日の表示回数合計、
+  // uniques=その日のユニーク訪問者数（(date,visitor) が一意なので行数）。
   const daily = await db
-    .select({ date: siteVisits.date, count: siteVisits.count })
+    .select({
+      date: siteVisits.date,
+      views: sql<number>`sum(${siteVisits.count})::int`,
+      uniques: sql<number>`count(*)::int`,
+    })
     .from(siteVisits)
+    .groupBy(siteVisits.date)
     .orderBy(desc(siteVisits.date))
     .limit(30);
 
-  // 全期間の累計。
-  const [agg] = await db
+  // 全期間の累計（ユニークは訪問者の distinct 数）。
+  const [allTime] = await db
     .select({
-      total: sql<number>`coalesce(sum(${siteVisits.count}), 0)::int`,
+      views: sql<number>`coalesce(sum(${siteVisits.count}), 0)::int`,
+      uniques: sql<number>`count(distinct ${siteVisits.visitor})::int`,
     })
     .from(siteVisits);
 
-  const today = jstDateKey();
-  const todayCount = daily.find((d) => d.date === today)?.count ?? 0;
-  // 直近7日（今日を含む）の合計。日付文字列 "YYYY-MM-DD" の辞書順比較で絞る
-  // （アクセスが無い日は行が無いので件数では数えられないため日付で判定する）。
+  // 直近7日（今日を含む）の累計。ユニークは7日間にまたがる distinct なので
+  // 日別の単純合計では出せない（別クエリで distinct を取る）。
   const since7 = jstDateKey(Date.now() - 6 * 86400000);
-  const last7 = daily
-    .filter((d) => d.date >= since7)
-    .reduce((s, d) => s + d.count, 0);
+  const [week] = await db
+    .select({
+      views: sql<number>`coalesce(sum(${siteVisits.count}), 0)::int`,
+      uniques: sql<number>`count(distinct ${siteVisits.visitor})::int`,
+    })
+    .from(siteVisits)
+    .where(sql`${siteVisits.date} >= ${since7}`);
+
+  const today = jstDateKey();
+  const todayRow = daily.find((d) => d.date === today);
 
   return c.json({
-    total: agg?.total ?? 0,
-    today: todayCount,
-    last7,
-    daily, // 新しい順・最大30件
+    views: {
+      total: allTime?.views ?? 0,
+      today: todayRow?.views ?? 0,
+      last7: week?.views ?? 0,
+    },
+    uniques: {
+      total: allTime?.uniques ?? 0,
+      today: todayRow?.uniques ?? 0,
+      last7: week?.uniques ?? 0,
+    },
+    daily, // 新しい順・最大30件（date, views, uniques）
   });
 });
 

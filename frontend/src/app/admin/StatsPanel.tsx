@@ -41,21 +41,36 @@ export default function StatsPanel() {
   if (!stats) return <p className="text-sm text-gray-500">読み込み中…</p>;
 
   const { users, painted } = stats;
-  // 日別の最大件数（バーの正規化用）。
-  const maxDaily = access?.daily.reduce((m, d) => Math.max(m, d.count), 0) ?? 0;
+  // 日別バーの正規化用に、表示回数の最大値を取る。
+  const maxViews = access?.daily.reduce((m, d) => Math.max(m, d.views), 0) ?? 0;
 
   return (
     <div className="space-y-6">
       <section>
         <h2 className="mb-3 text-sm font-semibold text-gray-600">サイトアクセス</h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <Card title="累計アクセス数" value={(access?.total ?? 0).toLocaleString()} />
-          <Card title="今日" value={(access?.today ?? 0).toLocaleString()} />
-          <Card title="直近7日" value={(access?.last7 ?? 0).toLocaleString()} />
+          <Card
+            title="累計アクセス数"
+            value={(access?.views.total ?? 0).toLocaleString()}
+            sub={`ユニーク ${(access?.uniques.total ?? 0).toLocaleString()} 人`}
+          />
+          <Card
+            title="今日"
+            value={(access?.views.today ?? 0).toLocaleString()}
+            sub={`ユニーク ${(access?.uniques.today ?? 0).toLocaleString()} 人`}
+          />
+          <Card
+            title="直近7日"
+            value={(access?.views.last7 ?? 0).toLocaleString()}
+            sub={`ユニーク ${(access?.uniques.last7 ?? 0).toLocaleString()} 人`}
+          />
         </div>
         {access && access.daily.length > 0 && (
           <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-            <p className="mb-2 text-xs text-gray-500">日別（新しい順・最大30日）</p>
+            <div className="mb-2 flex items-center justify-between text-xs text-gray-500">
+              <span>日別（新しい順・最大30日）</span>
+              <span>アクセス / ユニーク</span>
+            </div>
             <ul className="space-y-1">
               {access.daily.map((d) => (
                 <li key={d.date} className="flex items-center gap-2 text-xs">
@@ -63,11 +78,14 @@ export default function StatsPanel() {
                   <span className="h-3 flex-1 overflow-hidden rounded bg-gray-100">
                     <span
                       className="block h-full rounded bg-blue-400"
-                      style={{ width: maxDaily ? `${(d.count / maxDaily) * 100}%` : '0%' }}
+                      style={{ width: maxViews ? `${(d.views / maxViews) * 100}%` : '0%' }}
                     />
                   </span>
-                  <span className="w-16 shrink-0 text-right tabular-nums font-medium text-gray-700">
-                    {d.count.toLocaleString()}
+                  <span className="w-24 shrink-0 text-right tabular-nums font-medium text-gray-700">
+                    {d.views.toLocaleString()}
+                    <span className="ml-1 font-normal text-gray-400">
+                      / {d.uniques.toLocaleString()}
+                    </span>
                   </span>
                 </li>
               ))}

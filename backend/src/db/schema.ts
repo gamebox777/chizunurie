@@ -5,6 +5,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   serial,
   text,
   timestamp,
@@ -138,14 +139,25 @@ export const userLogs = pgTable(
   (t) => [index("user_logs_user_created_idx").on(t.userId, t.createdAt)]
 );
 
-// サイトへのアクセス数（ページ表示回数）を日別に数える集計テーブル。
-// 1日1行・アクセスのたびに count を +1（upsert で増分）するので行が増えず軽量。
-// 「誰が」ではなく「何回」を見る用途なので未ログインの訪問も数え、userId は持たない。
+// サイトへのアクセス（ページ表示）を「日 × 訪問者」単位で数える集計テーブル。
+// 1行 = ある訪問者がある日に出した表示回数。この1テーブルだけで
+//   ・総アクセス数      = count の合計
+//   ・日別アクセス数    = 日ごとの count 合計
+//   ・ユニークユーザー数 = visitor の distinct 数（日別はその日の行数）
+// がすべて出せる。行は「ユニーク訪問者数 × 日数」しか増えないので軽量。
+// visitor は訪問者の識別子：ログイン中は "u:<userId>"、未ログインは IP+UA の
+// ハッシュ "h:<hash>"。生の IP / UA は保存しない（ハッシュのみ）ので、
+// データ肥大と個人情報の保存の両方を避けつつユニーク判定だけできる。
 // date は JST の "YYYY-MM-DD"（jstDateKey で生成）。
-export const siteVisits = pgTable("site_visits", {
-  date: text("date").primaryKey(),
-  count: integer("count").notNull().default(0),
-});
+export const siteVisits = pgTable(
+  "site_visits",
+  {
+    date: text("date").notNull(),
+    visitor: text("visitor").notNull(),
+    count: integer("count").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.date, t.visitor] })]
+);
 
 // 塗りポイント残高＋ユーザーレベル。GPS（実際の移動）は無料だが、それ以外の隣接塗り／
 // 離れた場所の塗りは塗りポイントを消費する。ポイントは時間経過で回復する（points.ts 参照）。
