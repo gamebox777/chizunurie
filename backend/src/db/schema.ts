@@ -24,6 +24,13 @@ export const user = pgTable("user", {
   // 権限。'user'=一般ユーザー（既定）/ 'developer'=開発者（デバッグメニュー表示）。
   // 新規登録時は必ず 'user'。開発者にするには DB で手動で 'developer' に変更する。
   role: text("role").notNull().default("user"),
+  // GPS で取得した現在地から判定した所在国（Natural Earth の adm0_a3 コード。日本は "JPN"）。
+  // ＝「国籍」的な所在国。初回 GPS 取得時に解決して入れ、別の国へ移動して値が変わったら更新する。
+  // 未取得（GPS 前・位置情報不許可）の間は null。管理画面の一覧で表示する。
+  country: text("country"),
+  // ユーザー設定（効果音・BGM・バイブ・地図オーバーレイ・言語など）を1つの JSON にまとめて保存する。
+  // 設定項目は今後増減するため、項目ごとにカラム＝マイグレーションを増やすのを避け jsonb に全部入れる。
+  settings: jsonb("settings").notNull().default({}),
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
 });

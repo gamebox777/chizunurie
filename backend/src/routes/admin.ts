@@ -31,6 +31,7 @@ adminRouter.get("/users", async (c) => {
       realName: user.realName,
       email: user.email,
       role: user.role,
+      country: user.country,
       createdAt: user.createdAt,
     })
     .from(user);
@@ -61,6 +62,7 @@ adminRouter.get("/users", async (c) => {
       realName: u.realName,
       email: u.email,
       role: u.role,
+      country: u.country,
       createdAt: u.createdAt,
       painted: { total, gps, manual: total - gps },
       points: pt

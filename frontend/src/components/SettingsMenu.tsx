@@ -15,6 +15,7 @@ import {
 import { isHapticsEnabled, setHapticsEnabled, isHapticsSupported } from '@/lib/haptics';
 import { isBasemapEnabled, setBasemapEnabled } from '@/lib/basemap';
 import { isGpsAddressEnabled, setGpsAddressEnabled } from '@/lib/gpsAddress';
+import { hydrateSettings, pushSettings } from '@/lib/userSettings';
 
 type Props = {
   // 現在のニックネーム（メニュー先頭に表示）
@@ -43,38 +44,55 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
   const [basemapOn, setBasemapOn] = useState(true);
   // 現在地の住所ラベル表示（既定 ON）。
   const [gpsAddressOn, setGpsAddressOn] = useState(true);
-  useEffect(() => {
+  // localStorage 由来の現在値をローカル state に反映する（即描画用）。
+  const syncFromLocal = () => {
     setSeOn(isSeEnabled());
     setTrack(getBgmTrack());
-    setHapticsSupported(isHapticsSupported());
     setHapticsOn(isHapticsEnabled());
     setBasemapOn(isBasemapEnabled());
     setGpsAddressOn(isGpsAddressEnabled());
+  };
+  useEffect(() => {
+    setHapticsSupported(isHapticsSupported());
+    syncFromLocal(); // まず手元の値で即描画
+    // サーバー保存ぶん（別端末での変更など）を取り込んで反映し直す。
+    hydrateSettings(setLang).then(syncFromLocal);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const toggleSe = () => {
     const next = !seOn;
     setSeOn(next);
     setSeEnabled(next);
+    pushSettings(lang);
   };
   const toggleHaptics = () => {
     const next = !hapticsOn;
     setHapticsOn(next);
     setHapticsEnabled(next);
     if (next && typeof navigator !== 'undefined') navigator.vibrate?.(20); // ON にした瞬間に確認のビビッ
+    pushSettings(lang);
   };
   const toggleBasemap = () => {
     const next = !basemapOn;
     setBasemapOn(next);
     setBasemapEnabled(next); // Map.tsx が即座にレイヤー表示を切り替える
+    pushSettings(lang);
   };
   const toggleGpsAddress = () => {
     const next = !gpsAddressOn;
     setGpsAddressOn(next);
     setGpsAddressEnabled(next); // Map.tsx が即座に住所ラベルの表示/非表示を切り替える
+    pushSettings(lang);
   };
   const selectBgm = (track: BgmTrack) => {
     setTrack(track);
     setBgmTrack(track); // クリック=ユーザー操作なので、曲選択で即再生開始
+    pushSettings(lang);
+  };
+  // 言語切替。切替直後は lang state がまだ古いので、新しい値を明示的に渡して保存する。
+  const changeLang = (l: typeof lang) => {
+    setLang(l);
+    pushSettings(l);
   };
   // BGM 選択肢（OFF＋曲3つ）。
   const bgmOptions: { value: BgmTrack; label: string }[] = [
@@ -140,7 +158,7 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
             <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
               <button
                 type="button"
-                onClick={() => setLang('ja')}
+                onClick={() => changeLang('ja')}
                 aria-pressed={lang === 'ja'}
                 className={`flex-1 py-1.5 transition-colors ${
                   lang === 'ja'
@@ -152,7 +170,7 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
               </button>
               <button
                 type="button"
-                onClick={() => setLang('en')}
+                onClick={() => changeLang('en')}
                 aria-pressed={lang === 'en'}
                 className={`flex-1 py-1.5 transition-colors ${
                   lang === 'en'

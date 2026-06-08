@@ -7,6 +7,7 @@ import { paintedRouter } from "./routes/painted.js";
 import { pointsRouter } from "./routes/points.js";
 import { adminRouter } from "./routes/admin.js";
 import { logRouter } from "./routes/log.js";
+import { userRouter } from "./routes/user.js";
 
 const app = new Hono();
 
@@ -36,6 +37,9 @@ app.route("/admin", adminRouter);
 
 // ユーザー行動ログの記録（/api/backend/log から到達）
 app.route("/log", logRouter);
+
+// ログイン中ユーザー自身のプロフィール更新（所在国・設定。/api/backend/user から到達）
+app.route("/user", userRouter);
 
 const port = Number(process.env.PORT) || 3001;
 

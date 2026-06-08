@@ -5,6 +5,7 @@ import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
 import { useSession } from '@/lib/auth-client';
 import { logEvent, setLastKnownLocation } from '@/lib/userlog';
+import { updateMyCountry } from '@/lib/userApi';
 import { RUN_MODE, RUN_MODE_LABEL, RUN_MODE_BADGE } from '@/lib/runtime-env';
 import { useLocale, type Lang, type TFunc } from '@/lib/i18n';
 import { kanaToRomaji, prefRomaji } from '@/lib/romaji';
@@ -858,6 +859,9 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   // 自国は1マスずつ、それ以外（外国）は 10×10 ブロックでまとめ塗りにする。未判定（GPS 前・
   // 不許可）の間は外国扱いにせず従来どおり1マス塗りで動かす。
   const homeCountryRef = useRef<string | null>(null);
+  // 直近に DB へ反映した所在国（adm0_a3）。GPS で判定した国がこれと変われば user.country を更新する。
+  // homeCountry（=塗り方の自国判定・1セッション固定）とは別管理で、移動して国が変わるたび追従する。
+  const reportedCountryRef = useRef<string | null>(null);
   // 自国コードを UI（データ詳細パネルの自国タブのラベル・内訳の分岐）へ反映する用の state。
   // ref と同じ値を持つが、判定が決まった時にパネルを再描画させるために別途持つ。
   const [homeCountry, setHomeCountry] = useState<string | null>(null);
@@ -2356,7 +2360,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               const cSt = stateInfoAt(c);
               const cRegion = cSt ? { key: cSt.key, a3: cSt.a3 } : null;
               const result = commitLocalPaint(id, 'manual', cMuni?.key ?? null, cRegion, cMuni?.address ?? cSt?.address ?? '', true);
-              if (result !== 'skip') syncPaint('POST', id, 'manual', cRegion?.key ?? null);
+              if (result !== 'skip') syncPaint('POST', id, 'manual', cRegion);
             }
             return;
           }
@@ -2374,7 +2378,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         method: 'POST' | 'DELETE',
         id: number,
         mode?: PaintMode,
-        regionKey?: string | null,
+        region?: { key: string; a3: string } | null,
         revisit = false,
         bulk = false
       ) => {
@@ -2394,9 +2398,12 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           ctx.lat = (ri + 0.5) / MESH_LAT_DIV;
           ctx.lng = (ci + 0.5) / MESH_LON_DIV;
           ctx.municipality = muniKeyFor(id);
-          ctx.region = regionKey ?? regionByPaintedCellRef.current.get(id) ?? null;
-          // 国コード（adm0_a3）。日本の外は州・県コードから導出、日本（市区町村あり）は "JPN"。
+          ctx.region = region?.key ?? regionByPaintedCellRef.current.get(id) ?? null;
+          // 国コード（adm0_a3）。GPS かどうかに関わらず「そのタイルの所属国」を必ず付ける。
+          // 呼び出し側が持っている a3 を最優先（stateMeta 未ロードでも確実）。無ければ州県コード
+          // から導出、それも無く市区町村があれば日本＝"JPN"。
           ctx.country =
+            region?.a3 ??
             (ctx.region ? stateMetaRef.current.get(ctx.region)?.adm0_a3 : null) ??
             (ctx.municipality ? 'JPN' : null);
         }
@@ -2488,7 +2495,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         region: { key: string; a3: string } | null
       ) => {
         const result = commitLocalPaint(id, mode, muniKey, region);
-        if (result !== 'skip') syncPaint('POST', id, mode, region?.key ?? null);
+        if (result !== 'skip') syncPaint('POST', id, mode, region);
       };
 
       // ローカルの塗りを取り消す（state のみ。サーバー同期はしない）
@@ -2709,7 +2716,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           if (c.id === skipId) continue;
           if (commitLocalPaint(c.id, 'manual', c.muniKey, c.reg, c.address, true) === 'skip') continue;
           // bulk=true：代表1セル（doManualPaint）だけが課金＆経験値を得る。残りは無料・経験値なし。
-          syncPaint('POST', c.id, 'manual', c.reg?.key ?? null, false, true);
+          syncPaint('POST', c.id, 'manual', c.reg, false, true);
           painted++;
         }
         return painted;
@@ -2818,7 +2825,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           else doForeignBlockPaint(id);
           return;
         }
-        const cost = freeDebug ? 0 : isAdjacent(id) ? COST_ADJACENT : COST_FAR;
+        // 1個目（まだ何も塗っていない）はどこでもコスト1・確認ダイアログなしで塗れる。
+        // 本来は GPS で現在地が塗られる想定だが、それが間に合わない時の救済。
+        const isFirstPaint = Object.keys(paintedRef.current).length === 0;
+        const cost = freeDebug ? 0 : isAdjacent(id) || isFirstPaint ? COST_ADJACENT : COST_FAR;
         if (cost > 0 && pointsRef.current < cost) {
           showToast(tRef.current('notEnoughPointsLeft', pointsRef.current as never));
           return;
@@ -2885,7 +2895,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         if (paintedRef.current[`mesh:${id}`] === 'gps') {
           // 既に訪問済み（黄）のセル。別セルから入り直した時だけ再訪EXPをサーバーに問い合わせる。
           // サーバーが前回訪問からのクールダウン（1時間）を判定し、満たせば +100 を返す。
-          if (enteredNewCell) syncPaint('POST', id, 'gps', region?.key ?? null, true);
+          if (enteredNewCell) syncPaint('POST', id, 'gps', region, true);
         } else {
           // 新規セル or となり塗り→gps 昇格：従来どおりローカル反映＋サーバー同期。
           applyPaint(id, 'gps', muniKey, region);
@@ -2919,12 +2929,28 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         };
         if (!tryResolve()) map.once('idle', tryResolve);
       };
+      // 現在地の国（adm0_a3）を判定し、前回 DB に反映した値と変わっていれば user.country を更新する。
+      // 国境の解決には world-states タイルが要るので、取れなければ次の idle で1回だけ再試行する。
+      const reportCountry = (lng: number, lat: number) => {
+        if (!userIdRef.current) return; // 未ログインは送らない（保存先が無い）
+        const tryReport = () => {
+          const a3 = stateInfoAt(map.project([lng, lat]))?.a3;
+          if (!a3) return false;
+          if (a3 !== reportedCountryRef.current) {
+            reportedCountryRef.current = a3;
+            updateMyCountry(a3);
+          }
+          return true;
+        };
+        if (!tryReport()) map.once('idle', tryReport);
+      };
       let firstGpsLogged = false;
       geolocate.on('geolocate', (pos: GeolocationPosition) => {
         const lng = pos.coords.longitude;
         const lat = pos.coords.latitude;
         paintGpsAt([lng, lat]);
         resolveHomeCountry(lng, lat);
+        reportCountry(lng, lat);
         // 直近の現在地を共有（塗り以外のアクションのログ位置に best-effort で使う）。
         const municipality = muniKeyFor(meshCodeAt(lng, lat));
         setLastKnownLocation({ lat, lng, municipality });
@@ -3574,32 +3600,46 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
 
       {/* 塗り方モード切り替え（左上・タイトルバーの下）。
           現地塗り＝GPSの現在地のみ自動で塗る / となり塗り＝マウスで隣接セルを塗れる。 */}
-      <div className="absolute top-4 left-4 flex rounded-lg shadow overflow-hidden text-sm font-medium select-none">
-        <button
-          type="button"
-          aria-pressed={paintMode === 'genchi'}
-          onClick={() => setPaintMode('genchi')}
-          className={`px-3 py-2 transition-colors ${
-            paintMode === 'genchi'
-              ? 'bg-yellow-400 text-gray-900'
-              : 'bg-white text-gray-600 hover:bg-gray-50'
-          }`}
-        >
-          {t('modeGenchi')}
-        </button>
-        <button
-          type="button"
-          aria-pressed={paintMode === 'tonari'}
-          onClick={() => setPaintMode('tonari')}
-          className={`px-3 py-2 transition-colors ${
-            paintMode === 'tonari'
-              ? 'text-white'
-              : 'bg-white text-gray-600 hover:bg-gray-50'
-          }`}
-          style={paintMode === 'tonari' ? { background: COLOR_MANUAL } : undefined}
-        >
-          {t('modeTonari')}
-        </button>
+      <div className="absolute top-4 left-4 flex flex-col items-start gap-2 select-none">
+        <div className="flex rounded-lg shadow overflow-hidden text-sm font-medium">
+          <button
+            type="button"
+            aria-pressed={paintMode === 'genchi'}
+            onClick={() => setPaintMode('genchi')}
+            className={`px-3 py-2 transition-colors ${
+              paintMode === 'genchi'
+                ? 'bg-yellow-400 text-gray-900'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            {t('modeGenchi')}
+          </button>
+          <button
+            type="button"
+            aria-pressed={paintMode === 'tonari'}
+            onClick={() => setPaintMode('tonari')}
+            className={`px-3 py-2 transition-colors ${
+              paintMode === 'tonari'
+                ? 'text-white'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+            style={paintMode === 'tonari' ? { background: COLOR_MANUAL } : undefined}
+          >
+            {t('modeTonari')}
+          </button>
+        </div>
+        {/* 塗りポイント残高（赤字・白ふち）。モード切り替えの下に表示。 */}
+        {userId && (
+          <div
+            className="text-base font-black text-red-600"
+            style={{
+              WebkitTextStroke: '3px #fff',
+              paintOrder: 'stroke fill',
+            }}
+          >
+            {t('paintPoints', points as never, maxPoints as never)}
+          </div>
+        )}
       </div>
 
       {(hoverStat || userId) && (

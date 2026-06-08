@@ -105,6 +105,9 @@ function UserRow({
             <option value="developer">開発者</option>
           </select>
         </td>
+        <td className="px-3 py-2 text-xs text-gray-600 whitespace-nowrap">
+          {u.country ?? '-'}
+        </td>
         <td className="px-3 py-2 text-right tabular-nums">{u.points?.level ?? '-'}</td>
         <td className="px-3 py-2 text-right tabular-nums">{u.points?.points ?? '-'}</td>
         <td className="px-3 py-2 text-right tabular-nums">{u.points?.exp ?? '-'}</td>
@@ -137,7 +140,7 @@ function UserRow({
       </tr>
       {editing && (
         <tr className="border-t border-gray-100 bg-blue-50/40">
-          <td colSpan={9} className="px-3 py-3">
+          <td colSpan={10} className="px-3 py-3">
             <div className="flex flex-wrap items-end gap-3">
               <label className="text-xs text-gray-600">
                 ポイント
@@ -206,6 +209,7 @@ export default function UsersPanel() {
           <tr className="text-left text-xs text-gray-500">
             <th className="px-3 py-2 font-medium">ユーザー</th>
             <th className="px-3 py-2 font-medium">権限</th>
+            <th className="px-3 py-2 font-medium">国</th>
             <th className="px-3 py-2 text-right font-medium">Lv</th>
             <th className="px-3 py-2 text-right font-medium">ポイント</th>
             <th className="px-3 py-2 text-right font-medium">経験値</th>
@@ -221,7 +225,7 @@ export default function UsersPanel() {
           ))}
           {users.length === 0 && (
             <tr>
-              <td colSpan={9} className="px-3 py-6 text-center text-gray-400">
+              <td colSpan={10} className="px-3 py-6 text-center text-gray-400">
                 ユーザーがいません
               </td>
             </tr>

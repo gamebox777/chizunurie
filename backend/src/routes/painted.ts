@@ -73,10 +73,14 @@ function parseBody(body: PaintBody | null) {
     typeof body.region === "string" && body.region.length <= 32
       ? body.region
       : null;
-  // 塗った国（adm0_a3。日本は "JPN"）。管理画面の塗りログ表示用。
+  // 塗った国（adm0_a3。日本は "JPN"）。管理画面の塗りログ表示用。GPS かどうかに関わらず
+  // 「そのタイルが所属する国」を必ず記録する。クライアントが country を送ってこなくても、
+  // 市区町村（muni）が取れていれば日本＝"JPN" とサーバー側で補完する（古いクライアント対策）。
   const country =
     typeof body.country === "string" && body.country.length <= 8
       ? body.country
+      : municipality
+      ? "JPN"
       : null;
   return { sourceLayer, keyCode, mode: resolvedMode, cost: resolvedCost, bulk, lat, lng, municipality, region, country };
 }

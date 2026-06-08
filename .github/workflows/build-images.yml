@@ -16,7 +16,10 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Coolify サーバーが arm64 なので arm64 を「ネイティブ arm64 ランナー」でビルドする。
+    # 以前は ubuntu-latest(amd64) + QEMU で arm64 をエミュレーションしており 40 分超かかっていた。
+    # public リポジトリなら ubuntu-24.04-arm が無料で使え、エミュレーション撤廃で数分に短縮できる。
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: write # ghcr.io への push に必要
@@ -35,9 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # arm64 もビルドするため QEMU を有効化（Coolify サーバーが arm64 のため）。
-      - uses: docker/setup-qemu-action@v3
-
+      # ネイティブ arm64 ランナーで arm64 のみビルドするため QEMU は不要（撤去）。
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to ghcr.io
@@ -52,8 +53,9 @@ jobs:
         with:
           context: ${{ matrix.context }}
           push: true
-          # Coolify サーバー(arm64)と一般的な amd64 の両方で動くマルチアーキイメージ。
-          platforms: linux/amd64,linux/arm64
+          # Coolify サーバーは arm64 なので arm64 のみビルドする（amd64 は使わないので撤去）。
+          # ネイティブ arm64 ランナー上のビルドなのでエミュレーションは発生しない。
+          platforms: linux/arm64
           build-args: ${{ matrix.build_args }}
           tags: |
             ghcr.io/gamebox777/chizunurie-${{ matrix.service }}:main
