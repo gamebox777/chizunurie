@@ -1,7 +1,10 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 import { LocaleProvider } from "@/lib/i18n";
+
+const GA_MEASUREMENT_ID = "G-CLKCJXR6CN";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -61,6 +64,19 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">
+        {/* Google tag (gtag.js) */}
+        <Script
+          src={`https://www.googletagmanager.com/gtag/js?id=${GA_MEASUREMENT_ID}`}
+          strategy="afterInteractive"
+        />
+        <Script id="google-analytics" strategy="afterInteractive">
+          {`
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('js', new Date());
+            gtag('config', '${GA_MEASUREMENT_ID}');
+          `}
+        </Script>
         <LocaleProvider>{children}</LocaleProvider>
       </body>
     </html>
