@@ -15,6 +15,13 @@
       "when": 1780845072304,
       "tag": "0001_bright_deathbird",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780880123907,
+      "tag": "0002_neat_maximus",
+      "breakpoints": true
     }
   ]
 }

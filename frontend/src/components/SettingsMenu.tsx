@@ -12,6 +12,7 @@ import {
   setBgmTrack,
   type BgmTrack,
 } from '@/lib/sound';
+import { isHapticsEnabled, setHapticsEnabled, isHapticsSupported } from '@/lib/haptics';
 
 type Props = {
   // 現在のニックネーム（メニュー先頭に表示）
@@ -33,14 +34,25 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
   // サウンド設定（localStorage 永続化）。初期値は描画後に同期する（SSR/水和対策）。
   const [seOn, setSeOn] = useState(true);
   const [bgmTrack, setTrack] = useState<BgmTrack>(0);
+  // バイブ（触覚フィードバック）。対応端末でのみ項目を出す。
+  const [hapticsOn, setHapticsOn] = useState(true);
+  const [hapticsSupported, setHapticsSupported] = useState(false);
   useEffect(() => {
     setSeOn(isSeEnabled());
     setTrack(getBgmTrack());
+    setHapticsSupported(isHapticsSupported());
+    setHapticsOn(isHapticsEnabled());
   }, []);
   const toggleSe = () => {
     const next = !seOn;
     setSeOn(next);
     setSeEnabled(next);
+  };
+  const toggleHaptics = () => {
+    const next = !hapticsOn;
+    setHapticsOn(next);
+    setHapticsEnabled(next);
+    if (next && typeof navigator !== 'undefined') navigator.vibrate?.(20); // ON にした瞬間に確認のビビッ
   };
   const selectBgm = (track: BgmTrack) => {
     setTrack(track);
@@ -157,6 +169,27 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
                   />
                 </span>
               </button>
+              {hapticsSupported && (
+                <button
+                  type="button"
+                  onClick={toggleHaptics}
+                  aria-pressed={hapticsOn}
+                  className="flex items-center justify-between text-sm text-gray-700"
+                >
+                  <span>{t('vibration')}</span>
+                  <span
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                      hapticsOn ? 'bg-blue-500' : 'bg-gray-300'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        hapticsOn ? 'translate-x-4' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </span>
+                </button>
+              )}
               <div>
                 <p className="text-sm text-gray-700 mb-1">{t('bgm')}</p>
                 <div className="grid grid-cols-2 gap-1">

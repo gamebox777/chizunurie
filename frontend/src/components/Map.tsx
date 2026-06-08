@@ -9,9 +9,23 @@ import { RUN_MODE, RUN_MODE_LABEL, RUN_MODE_BADGE } from '@/lib/runtime-env';
 import { useLocale, type Lang, type TFunc } from '@/lib/i18n';
 import { kanaToRomaji, prefRomaji } from '@/lib/romaji';
 import { playPaint, playLevelUp, playConquer, unlockAudio } from '@/lib/sound';
+import { vibratePaint } from '@/lib/haptics';
+import { showRewardedAd } from '@/lib/rewardedAd';
 
 const PAINT_API = '/api/backend/painted';
 const POINTS_API = '/api/backend/points';
+// 動画リワードの GPT 広告ユニットパス（/ネットワークコード/広告ユニットコード）。
+// 本番：GAM で作成済み（ネットワーク 23356418393・ユニット chizunurie_rewarded_video）。
+const REWARDED_AD_UNIT_PROD = '/23356418393/chizunurie_rewarded_video';
+// 開発：Google 公式のテスト用リワードユニット。ドメイン審査・ads.txt 不要で必ずテスト広告が出る。
+const REWARDED_AD_UNIT_SAMPLE = '/22639388115/rewarded_web_example';
+// 解決順：env で明示 > 開発ビルドはサンプル > 本番ユニット。
+// （NODE_ENV はビルド時に静的置換される。npm run dev=development / build=production）
+const REWARDED_AD_UNIT_PATH =
+  process.env.NEXT_PUBLIC_REWARDED_AD_UNIT ||
+  (process.env.NODE_ENV !== 'production'
+    ? REWARDED_AD_UNIT_SAMPLE
+    : REWARDED_AD_UNIT_PROD);
 // 市区町村ごとの総メッシュ数（塗り％の分母）と meshcode→市区町村 の対応表。
 // 約37万セル分を含むため map 表示後に遅延ロードする（build-muni-stats.mjs が生成）。
 const MUNI_STATS_URL = '/data/muni-stats.json';
@@ -43,10 +57,6 @@ type ServerPoints = {
 
 // 合計プレイ時間のハートビート間隔（約1分ごとに経過秒をサーバーへ送る）
 const HEARTBEAT_INTERVAL_MS = 60 * 1000;
-
-// 動画リワード：モック動画の長さ（秒）。視聴完了するとサーバーへ報酬を請求する。
-// 実広告SDK導入時は、この秒数カウントの代わりに広告の完了コールバックで請求する。
-const VIDEO_REWARD_DURATION_SEC = 10;
 
 // 動画リワードの利用可否（backend/src/lib/points.ts の VideoRewardStatus と一致）
 type VideoRewardStatus = {
@@ -608,13 +618,13 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   >(() => {});
   // 動画リワード（動画視聴でそのレベルの満タン分を回復）
   const [rewardStatus, setRewardStatus] = useState<VideoRewardStatus | null>(null);
-  const [videoOpen, setVideoOpen] = useState(false); // モック動画モーダルの表示
-  // 'watching'=再生中（カウントダウン）/ 'claiming'=報酬請求中 / 'error'=請求失敗
-  const [videoPhase, setVideoPhase] = useState<'watching' | 'claiming' | 'error'>(
-    'watching'
+  // 進行中フェーズ：null=非表示 / 'loading'=広告準備中 / 'claiming'=報酬請求中。
+  // 実際の広告 UI（全画面）は GPT が生成するため、こちらは前後のローディング表示専用。
+  const [videoPhase, setVideoPhase] = useState<'loading' | 'claiming' | null>(
+    null
   );
-  const [videoLeftSec, setVideoLeftSec] = useState(VIDEO_REWARD_DURATION_SEC);
-  const videoTimerRef = useRef<number | null>(null);
+  // 連打・二重起動を防ぐためのフラグ（state はクロージャで古くなるので ref で持つ）。
+  const videoBusyRef = useRef(false);
   // 市区町村ごとの塗り％表示用
   const [hoverStat, setHoverStat] = useState<string | null>(null); // ホバー中市区町村の「市名 35%（n/N）」
   // 外国（自国以外）にホバー中か。true の間「10×10まとめ塗り！」バッジを出す。
@@ -879,34 +889,59 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     }
   }, []);
 
-  // モック動画モーダルを開いて視聴カウントダウンを開始する。
-  const openVideoReward = useCallback(() => {
+  // 動画リワードの一連の流れ：
+  //  1) backend に nonce を要求する（クールダウン・1日上限はここで弾かれる）
+  //  2) GPT のリワード広告を表示し、視聴完了（granted）を待つ
+  //  3) granted なら nonce 付きで報酬を請求し、残高へ反映する
+  // 各段でエラー・未充填・途中離脱はトーストで案内し、フェーズを片付ける。
+  const openVideoReward = useCallback(async () => {
     if (!userIdRef.current) {
       showToast(tRef.current('needLoginVideo'));
       return;
     }
-    setVideoPhase('watching');
-    setVideoLeftSec(VIDEO_REWARD_DURATION_SEC);
-    setVideoOpen(true);
-  }, []);
-
-  // モーダルを閉じてカウントダウンタイマーを止める。
-  const closeVideoReward = useCallback(() => {
-    if (videoTimerRef.current !== null) {
-      window.clearInterval(videoTimerRef.current);
-      videoTimerRef.current = null;
-    }
-    setVideoOpen(false);
-  }, []);
-
-  // 視聴完了後にサーバーへ報酬を請求し、残高に反映する。
-  // クールダウン中・1日上限（429）は理由をトーストで知らせる。
-  const claimVideoReward = useCallback(async () => {
-    setVideoPhase('claiming');
+    if (videoBusyRef.current) return; // 二重起動防止
+    videoBusyRef.current = true;
+    setVideoPhase('loading');
     try {
+      // 1) nonce 発行（視聴前のクールダウン・上限チェックを兼ねる）
+      const nonceRes = await fetch(`${POINTS_API}/reward/video/nonce`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const nonceData = (await nonceRes.json().catch(() => null)) as
+        | { nonce?: string; status?: VideoRewardStatus; error?: string }
+        | null;
+      if (!nonceRes.ok || !nonceData?.nonce) {
+        if (nonceData?.status) setRewardStatus(nonceData.status);
+        const reason = nonceData?.error;
+        showToast(
+          reason === 'cooldown'
+            ? tRef.current('videoNotYet')
+            : reason === 'daily_limit'
+              ? tRef.current('rewardDailyLimit')
+              : tRef.current('recoverFailed')
+        );
+        return;
+      }
+
+      // 2) 広告表示（広告 UI は GPT が全画面で描画する）
+      const outcome = await showRewardedAd(REWARDED_AD_UNIT_PATH);
+      if (outcome !== 'granted') {
+        showToast(
+          outcome === 'dismissed'
+            ? tRef.current('videoDismissed')
+            : tRef.current('videoUnavailable')
+        );
+        return;
+      }
+
+      // 3) 報酬請求（nonce を添えてサーバーで照合してから付与される）
+      setVideoPhase('claiming');
       const res = await fetch(`${POINTS_API}/reward/video`, {
         method: 'POST',
         credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nonce: nonceData.nonce }),
       });
       const data = (await res.json().catch(() => null)) as
         | { points?: ServerPoints; granted?: number; status?: VideoRewardStatus }
@@ -922,19 +957,24 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               ? tRef.current('rewardDailyLimit')
               : tRef.current('recoverFailed')
         );
-        closeVideoReward();
         return;
       }
-      const ok = data as { points?: ServerPoints; granted?: number; status?: VideoRewardStatus };
+      const ok = data as {
+        points?: ServerPoints;
+        granted?: number;
+        status?: VideoRewardStatus;
+      };
       if (ok.points) applyServerPoints(ok.points);
       if (ok.status) setRewardStatus(ok.status);
-      closeVideoReward();
       showToast(tRef.current('recovered', (ok.granted ?? 0) as never));
     } catch (err) {
-      console.warn('failed to claim video reward', err);
-      setVideoPhase('error');
+      console.warn('video reward failed', err);
+      showToast(tRef.current('recoverFailed'));
+    } finally {
+      setVideoPhase(null);
+      videoBusyRef.current = false;
     }
-  }, [applyServerPoints, closeVideoReward]);
+  }, [applyServerPoints]);
 
   // 離れた場所（10ポイント）の確認ダイアログで「塗る」を押したとき
   const confirmFarPaint = useCallback(() => {
@@ -1140,30 +1180,6 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   useEffect(() => {
     if (!userId) setRewardStatus(null);
   }, [userId]);
-
-  // モック動画の視聴カウントダウン。0 になったら自動で報酬を請求する。
-  useEffect(() => {
-    if (!videoOpen || videoPhase !== 'watching') return;
-    videoTimerRef.current = window.setInterval(() => {
-      setVideoLeftSec((s) => {
-        if (s <= 1) {
-          if (videoTimerRef.current !== null) {
-            window.clearInterval(videoTimerRef.current);
-            videoTimerRef.current = null;
-          }
-          claimVideoReward();
-          return 0;
-        }
-        return s - 1;
-      });
-    }, 1000);
-    return () => {
-      if (videoTimerRef.current !== null) {
-        window.clearInterval(videoTimerRef.current);
-        videoTimerRef.current = null;
-      }
-    };
-  }, [videoOpen, videoPhase, claimVideoReward]);
 
   // 塗りポイントの時間回復（クライアント側）。1秒ごとに回復時刻を過ぎていれば加算し、
   // カウントダウン表示用に nowTick も更新する。サーバーが権威なので塗り時に再同期される。
@@ -1403,6 +1419,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       }, COMBO_WINDOW_MS);
       // 塗り音（連鎖が伸びるほど音程が上がる）
       playPaint(comboRef.current);
+      // スマホの触覚フィードバック（現地塗り・となり塗りでビビッ。設定OFF・非対応端末では無視）
+      vibratePaint();
 
       // 制覇判定（市区町村 → 都道府県）。塗り数は commitLocalPaint で加算済み。
       if (muniKey && !completedMuniRef.current.has(muniKey)) {
@@ -3390,11 +3408,9 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                   {t('regenIn', formatCountdown(regenAt - nowTick, t) as never)}
                 </div>
               )}
-              {/* 動画リワード：動画を見てそのレベルの満タン分を回復
-                  ※「動画を見て回復」は今は使えないのでボタン表示のみ無効化。
-                     処理（openVideoReward / rewardStatus 取得など）はそのまま残す。
-                     再開するときは下の IIFE のコメントを外す。 */}
-              {/* {(() => {
+              {/* 動画リワード：動画を見てそのレベルの満タン分を回復。
+                  クールダウン中・1日上限はボタンを無効化して理由を表示する。 */}
+              {(() => {
                 const cooldownLeft =
                   rewardStatus?.nextAvailableAt != null
                     ? rewardStatus.nextAvailableAt - nowTick
@@ -3402,7 +3418,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                 const onCooldown = cooldownLeft > 0;
                 const dailyLimit =
                   rewardStatus != null && rewardStatus.remainingToday <= 0;
-                const disabled = onCooldown || dailyLimit;
+                const disabled = onCooldown || dailyLimit || videoPhase !== null;
                 return (
                   <button
                     type="button"
@@ -3421,7 +3437,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                         : t('rewardWatch', (rewardStatus ? rewardStatus.remainingToday : undefined) as never)}
                   </button>
                 );
-              })()} */}
+              })()}
             </div>
           )}
         </div>
@@ -3489,83 +3505,20 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           </div>
         </div>
       )}
-      {videoOpen && (
+      {/* 広告本体（全画面）は GPT が描画する。ここは前後のローディング表示のみ。 */}
+      {videoPhase !== null && (
         <div
           className="absolute inset-0 z-20 flex items-center justify-center bg-black/50"
-          // 視聴中は背景クリックで閉じさせない（最後まで見せる）。請求中も閉じない。
+          role="status"
+          aria-live="polite"
         >
-          <div
-            className="w-[90%] max-w-md rounded-xl bg-white p-5 shadow-xl"
-            role="dialog"
-            aria-label={t('videoTitle')}
-          >
-            <h2 className="mb-3 text-sm font-semibold text-gray-800">
-              {t('videoTitle')}
-            </h2>
-            {/* モック動画プレースホルダ（実広告SDK導入時はここを差し替える） */}
-            <div className="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-lg bg-gray-900">
-              <span className="text-5xl text-white/80">▶</span>
-              <span className="absolute bottom-2 right-3 rounded bg-black/60 px-2 py-0.5 text-xs font-mono text-white">
-                {videoPhase === 'watching'
-                  ? `00:${String(videoLeftSec).padStart(2, '0')}`
-                  : '00:00'}
-              </span>
-              <span className="absolute left-3 top-2 rounded bg-white/20 px-2 py-0.5 text-[10px] font-bold text-white">
-                {t('videoAdSample')}
-              </span>
-            </div>
-            {/* 進捗バー */}
-            <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-gray-200">
-              <div
-                className="h-full rounded-full bg-emerald-500 transition-[width] duration-500"
-                style={{
-                  width: `${
-                    ((VIDEO_REWARD_DURATION_SEC - videoLeftSec) /
-                      VIDEO_REWARD_DURATION_SEC) *
-                    100
-                  }%`,
-                }}
-              />
-            </div>
-            <div className="mt-3 text-center text-sm text-gray-600">
-              {videoPhase === 'watching' &&
-                t('videoWatching', videoLeftSec as never)}
-              {videoPhase === 'claiming' && t('videoClaiming')}
-              {videoPhase === 'error' && (
-                <span className="text-red-600">
-                  {t('videoError')}
-                </span>
-              )}
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              {videoPhase === 'error' ? (
-                <>
-                  <button
-                    type="button"
-                    className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100"
-                    onClick={closeVideoReward}
-                  >
-                    {t('close')}
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600"
-                    onClick={claimVideoReward}
-                  >
-                    {t('retry')}
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="rounded-lg px-4 py-2 text-sm font-medium text-gray-500 hover:bg-gray-100 disabled:opacity-40"
-                  onClick={closeVideoReward}
-                  disabled={videoPhase === 'claiming'}
-                >
-                  {videoPhase === 'watching' ? t('stop') : t('close')}
-                </button>
-              )}
-            </div>
+          <div className="flex flex-col items-center gap-3 rounded-xl bg-white px-6 py-5 shadow-xl">
+            <span className="h-6 w-6 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
+            <span className="text-sm font-medium text-gray-700">
+              {videoPhase === 'claiming'
+                ? t('videoClaiming')
+                : t('videoLoading')}
+            </span>
           </div>
         </div>
       )}

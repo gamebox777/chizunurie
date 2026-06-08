@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { LocaleProvider } from "@/lib/i18n";
@@ -16,6 +16,13 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "地図ぬりえ",
   description: "地域を塗っていく白地図ゲーム",
+};
+
+// GPT のリワード広告は「モバイル最適化ページ（ズーム中立）」でのみ配信されるため、
+// viewport を明示しておく（Next のデフォルトと同値だが要件として固定する）。
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({

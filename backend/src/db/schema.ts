@@ -160,6 +160,11 @@ export const userPoints = pgTable("user_points", {
   videoRewardCount: integer("video_reward_count").notNull().default(0),
   // videoRewardCount が属する JST の日付（"YYYY-MM-DD"）。未受領なら null。
   videoRewardDay: text("video_reward_day"),
+  // Web の GPT リワードは AdMob のような SSV ポストバックが無く、報酬付与はクライアントの
+  // rewardedSlotGranted で判断する。直接POSTの乱用・リプレイを抑えるため、視聴開始時に
+  // 1回限りの nonce を発行（rewardNonce）して請求時に照合し、成功したら消す（単回使用）。
+  rewardNonce: text("reward_nonce"),
+  rewardNonceAt: timestamp("reward_nonce_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

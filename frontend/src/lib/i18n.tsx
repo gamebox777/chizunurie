@@ -45,6 +45,7 @@ const ja: Dict = {
   bgmSong1: '曲1',
   bgmSong2: '曲2',
   bgmSong3: '曲3',
+  vibration: 'バイブ',
 
   // AuthModal
   googleLogin: 'Googleでログイン',
@@ -101,6 +102,9 @@ const ja: Dict = {
   videoAdSample: '広告（サンプル）',
   videoWatching: (s: number) => `あと ${s} 秒で「そのレベルの満タン分」を回復します`,
   videoClaiming: 'ポイントを回復しています…',
+  videoLoading: '広告を準備しています…',
+  videoDismissed: '最後まで視聴すると塗りポイントを回復できます',
+  videoUnavailable: 'いま広告を表示できません。しばらくしてからお試しください',
   videoError: '回復に失敗しました。もう一度お試しください。',
   close: '閉じる',
   retry: 'もう一度受け取る',
@@ -203,6 +207,7 @@ const en: Dict = {
   bgmSong1: 'Song 1',
   bgmSong2: 'Song 2',
   bgmSong3: 'Song 3',
+  vibration: 'Vibration',
 
   // AuthModal
   googleLogin: 'Sign in with Google',
@@ -260,6 +265,9 @@ const en: Dict = {
   videoWatching: (s: number) =>
     `Recovering a full level's worth in ${s}s`,
   videoClaiming: 'Recovering points…',
+  videoLoading: 'Preparing the ad…',
+  videoDismissed: 'Watch the full video to recover paint points',
+  videoUnavailable: 'No ad available right now. Please try again later',
   videoError: 'Recovery failed. Please try again.',
   close: 'Close',
   retry: 'Get it again',

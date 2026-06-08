@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { userPoints } from "../db/schema.js";
@@ -49,6 +50,8 @@ export const MAX_HEARTBEAT_DELTA_SEC = 120;
 // 不正・乱用対策として「クールダウン」と「1日の上限回数」を併用する。
 export const VIDEO_REWARD_COOLDOWN_MS = 30 * 60 * 1000; // 前回視聴から30分は再視聴不可
 export const VIDEO_REWARD_MAX_PER_DAY = 5; // 1日（JST）に受け取れる上限回数
+// 視聴開始時に発行する nonce の有効期間。広告の表示〜視聴完了に十分な余裕を持たせる。
+export const VIDEO_REWARD_NONCE_TTL_MS = 10 * 60 * 1000;
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -356,6 +359,15 @@ export type VideoRewardStatus = {
 
 export type VideoRewardResult =
   | { ok: true; state: PointsState; granted: number; status: VideoRewardStatus }
+  | {
+      ok: false;
+      reason: "cooldown" | "daily_limit" | "invalid_nonce";
+      status: VideoRewardStatus;
+    };
+
+// 視聴開始前の nonce 発行結果。クールダウン中・1日上限なら発行しない。
+export type VideoRewardNonceResult =
+  | { ok: true; nonce: string; status: VideoRewardStatus }
   | { ok: false; reason: "cooldown" | "daily_limit"; status: VideoRewardStatus };
 
 // 行の動画リワードメタ（受領時刻・当日回数）から現在の利用可否を組み立てる。
@@ -395,16 +407,42 @@ async function selectRewardMeta(
   lastVideoRewardAt: Date | null;
   videoRewardCount: number;
   videoRewardDay: string | null;
+  rewardNonce: string | null;
+  rewardNonceAt: Date | null;
 } | null> {
   const rows = await tx
     .select({
       lastVideoRewardAt: userPoints.lastVideoRewardAt,
       videoRewardCount: userPoints.videoRewardCount,
       videoRewardDay: userPoints.videoRewardDay,
+      rewardNonce: userPoints.rewardNonce,
+      rewardNonceAt: userPoints.rewardNonceAt,
     })
     .from(userPoints)
     .where(eq(userPoints.userId, userId));
   return rows.length === 0 ? null : rows[0];
+}
+
+// 視聴開始前に1回限りの nonce を発行して行に保存する。発行時点でクールダウン中・
+// 1日上限なら発行しない（早期に弾く）。発行した nonce は claimVideoReward で照合する。
+export async function issueVideoRewardNonce(
+  userId: string,
+  now: number,
+  tx: DbExecutor = db
+): Promise<VideoRewardNonceResult> {
+  const status = await getVideoRewardStatus(userId, now, tx);
+  if (status.nextAvailableAt !== null) {
+    return { ok: false, reason: "cooldown", status };
+  }
+  if (status.remainingToday <= 0) {
+    return { ok: false, reason: "daily_limit", status };
+  }
+  const nonce = randomUUID();
+  await tx
+    .update(userPoints)
+    .set({ rewardNonce: nonce, rewardNonceAt: new Date(now) })
+    .where(eq(userPoints.userId, userId));
+  return { ok: true, nonce, status };
 }
 
 // 動画リワードの現在の利用可否を返す（付与はしない）。行が無ければ初期状態を作る。
@@ -429,6 +467,7 @@ export async function getVideoRewardStatus(
 export async function claimVideoReward(
   userId: string,
   now: number,
+  nonce: string | null,
   tx: DbExecutor = db
 ): Promise<VideoRewardResult> {
   const state = await ensurePoints(userId, now, tx); // 行を作成＋回復を確定
@@ -453,6 +492,18 @@ export async function claimVideoReward(
     return { ok: false, reason: "daily_limit", status };
   }
 
+  // nonce 照合：視聴開始時に発行したもの（単回使用・未失効）であることを確認する。
+  // Web の GPT リワードは SSV ポストバックが無いため、これが直接POST乱用への最低限の歯止め。
+  const nonceOk =
+    typeof nonce === "string" &&
+    nonce.length > 0 &&
+    meta?.rewardNonce === nonce &&
+    meta?.rewardNonceAt != null &&
+    now - meta.rewardNonceAt.getTime() <= VIDEO_REWARD_NONCE_TTL_MS;
+  if (!nonceOk) {
+    return { ok: false, reason: "invalid_nonce", status };
+  }
+
   // 付与：そのレベルの満タン分（= 自然回復の上限と同量）を加算する。
   const granted = maxPointsForLevel(state.level);
   const nextPoints = state.points + granted; // 必ず max 以上になる（満タン扱い）
@@ -467,6 +518,9 @@ export async function claimVideoReward(
       lastVideoRewardAt: updatedAt,
       videoRewardCount: nextCount,
       videoRewardDay: today,
+      // 使った nonce は消す（単回使用＝同じ視聴で二重に受け取れない）。
+      rewardNonce: null,
+      rewardNonceAt: null,
     })
     .where(eq(userPoints.userId, userId));
 
