@@ -5,6 +5,7 @@ import {
   claimVideoReward,
   ensurePoints,
   getVideoRewardStatus,
+  resetPoints,
   setPoints,
 } from "../lib/points.js";
 
@@ -71,5 +72,14 @@ pointsRouter.post("/debug/set", async (c) => {
     return c.json({ error: "bad request" }, 400);
   }
   const state = await setPoints(user.id, Math.floor(value), Date.now());
+  return c.json(state);
+});
+
+// デバッグ用：ポイント・レベル・経験値を初期状態に戻す（塗りデータは含まない）。開発者のみ。
+pointsRouter.post("/debug/reset", async (c) => {
+  const user = await requireUser(c.req.raw);
+  if (!user) return c.json({ error: "unauthorized" }, 401);
+  if (!isDeveloper(user)) return c.json({ error: "forbidden" }, 403);
+  const state = await resetPoints(user.id, Date.now());
   return c.json(state);
 });

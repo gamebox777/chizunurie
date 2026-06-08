@@ -18,6 +18,7 @@
     "deploy:local": "bash scripts/build-push-local.sh",
     "fetch-chocho": "node scripts/fetch-chocho.mjs",
     "build-mesh": "node --max-old-space-size=8192 scripts/build-mesh.mjs",
+    "build-muni-classify": "npx mapshaper frontend/public/data/municipalities_poly.geojson -filter-fields N03_001,N03_004,N03_005 -simplify 60% keep-shapes -o format=geojson precision=0.00002 force frontend/public/data/muni-classify.geojson",
     "build-muni-stats": "node --max-old-space-size=8192 scripts/build-muni-stats.mjs",
     "build-muni-kana": "node scripts/build-muni-kana.mjs",
     "build-world-land": "node scripts/build-world-land.mjs",

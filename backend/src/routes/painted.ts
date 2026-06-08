@@ -30,6 +30,7 @@ type PaintBody = {
   keyCode?: unknown;
   mode?: unknown;
   cost?: unknown;
+  bulk?: unknown;
   lat?: unknown;
   lng?: unknown;
   municipality?: unknown;
@@ -56,6 +57,9 @@ function parseBody(body: PaintBody | null) {
   // 省略時は隣接塗り（COST_ADJACENT）扱い。許可値以外は弾く。
   const resolvedCost =
     typeof cost === "number" && ALLOWED_COSTS.has(cost) ? cost : COST_ADJACENT;
+  // bulk: 外国 10×10 まとめ塗りの「残り」セル。代表1セルだけが課金＆経験値を得て、
+  // 残りはこのフラグで無料・経験値なしに塗る（manual の新規 insert のみ意味を持つ）。
+  const bulk = body.bulk === true;
   // 塗った時点の文脈（任意）。新規 insert のときだけ保存する。
   const lat = toCoord(body.lat, 90);
   const lng = toCoord(body.lng, 180);
@@ -68,7 +72,7 @@ function parseBody(body: PaintBody | null) {
     typeof body.region === "string" && body.region.length <= 32
       ? body.region
       : null;
-  return { sourceLayer, keyCode, mode: resolvedMode, cost: resolvedCost, lat, lng, municipality, region };
+  return { sourceLayer, keyCode, mode: resolvedMode, cost: resolvedCost, bulk, lat, lng, municipality, region };
 }
 
 paintedRouter.get("/", async (c) => {
@@ -197,6 +201,12 @@ paintedRouter.post("/", async (c) => {
 
       if (inserted.length === 0) {
         // 既に塗り済み → 課金せず現在の残高を返す
+        const state = await ensurePoints(user.id, now, tx);
+        return { ok: true as const, points: state, gainedExp: 0 };
+      }
+
+      // 外国まとめ塗りの「残り」セル：課金も経験値もなし（代表1セルが既に支払い済み）。
+      if (parsed.bulk) {
         const state = await ensurePoints(user.id, now, tx);
         return { ok: true as const, points: state, gainedExp: 0 };
       }

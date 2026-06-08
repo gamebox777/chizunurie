@@ -100,14 +100,34 @@ function blip(
 }
 
 // となり塗り成功：軽い「ポンッ」という2音の上昇。
-export function playPaint(): void {
+// combo（連鎖数）を渡すと、連鎖が伸びるほど半音ずつ音程を上げて気持ちよさを足す
+// （最大1オクターブ＝12半音で頭打ち）。
+export function playPaint(combo = 0): void {
   if (!isSeEnabled()) return;
   const c = getCtx();
   if (!c || !masterGain) return;
   if (c.state === 'suspended') void c.resume();
   const t = c.currentTime;
-  blip(c, masterGain, 660, t, 0.12, 0.25, 'triangle'); // E5
-  blip(c, masterGain, 990, t + 0.06, 0.14, 0.2, 'triangle'); // B5
+  const semis = Math.min(12, Math.max(0, combo - 1)); // 連鎖2目から +1半音…
+  const shift = Math.pow(2, semis / 12);
+  blip(c, masterGain, 660 * shift, t, 0.12, 0.25, 'triangle'); // E5+
+  blip(c, masterGain, 990 * shift, t + 0.06, 0.14, 0.2, 'triangle'); // B5+
+}
+
+// 市区町村を制覇（100%）したときのファンファーレ。レベルアップより華やかに。
+export function playConquer(): void {
+  if (!isSeEnabled()) return;
+  const c = getCtx();
+  if (!c || !masterGain) return;
+  if (c.state === 'suspended') void c.resume();
+  const t = c.currentTime;
+  // 上昇アルペジオ（ドミソドミ）＋きらめき2発
+  const notes = [523.25, 659.25, 783.99, 1046.5, 1318.51]; // C5 E5 G5 C6 E6
+  notes.forEach((f, i) => {
+    blip(c, masterGain!, f, t + i * 0.08, 0.32, 0.28, 'triangle');
+  });
+  blip(c, masterGain, 1567.98, t + 0.42, 0.4, 0.18, 'sine'); // G6
+  blip(c, masterGain, 2093.0, t + 0.52, 0.45, 0.14, 'sine'); // C7 きらめき
 }
 
 // レベルアップ：明るい上昇アルペジオ（ドミソド）。

@@ -8,7 +8,7 @@ import { logEvent, setLastKnownLocation } from '@/lib/userlog';
 import { RUN_MODE, RUN_MODE_LABEL, RUN_MODE_BADGE } from '@/lib/runtime-env';
 import { useLocale, type Lang, type TFunc } from '@/lib/i18n';
 import { kanaToRomaji, prefRomaji } from '@/lib/romaji';
-import { playPaint, playLevelUp, unlockAudio } from '@/lib/sound';
+import { playPaint, playLevelUp, playConquer, unlockAudio } from '@/lib/sound';
 
 const PAINT_API = '/api/backend/painted';
 const POINTS_API = '/api/backend/points';
@@ -27,7 +27,7 @@ const COST_FAR = 10; // 離れた場所（確認ダイアログ付き）
 // 外国（自国＝GPSで判定した adm0_a3 以外）はざっくり 10×10 のブロックをまとめて塗る。
 // 1ブロック固定コスト・隣接条件なし・離れていても COST_FAR は課さない。
 const FOREIGN_BLOCK_SIZE = 10; // 外国のまとめ塗りブロックの一辺（セル数）
-const COST_FOREIGN_BLOCK = 10; // 外国 1 ブロック（最大100マス）の固定コスト
+const COST_FOREIGN_BLOCK = 1; // 外国 1 ブロック（最大100マス）の固定コスト＝1マス分のポイント
 
 // サーバーの塗りポイント状態（backend/src/lib/points.ts の PointsState と一致）
 type ServerPoints = {
@@ -88,6 +88,29 @@ type PaintMode = 'gps' | 'manual';
 
 const COLOR_GPS = '#facc15'; // 黄色（一番強い）
 const COLOR_MANUAL = '#a0522d'; // 茶色
+
+// 制覇（市区町村100%塗り）した境界を強調する金枠の色
+const COLOR_CONQUER = '#f59e0b';
+// コンボ（連鎖塗り）が途切れたと見なすまでの間隔（ms）
+const COMBO_WINDOW_MS = 2500;
+
+// 制覇した市区町村の金枠グローを描く MapLibre フィルタを組み立てる。
+// municipalities レイヤーの "PREF|CITY+WARD" が完了キー集合に含まれる地物だけ通す。
+// muni-stats / ラベルと同じキー形式 `${N03_001}|${N03_004}${N03_005}` で照合する。
+function muniGlowFilter(keys: string[]): maplibregl.FilterSpecification {
+  if (keys.length === 0) return ['==', ['literal', 0], ['literal', 1]]; // 常に偽
+  return [
+    'in',
+    [
+      'concat',
+      ['coalesce', ['get', 'N03_001'], ''],
+      '|',
+      ['coalesce', ['get', 'N03_004'], ''],
+      ['coalesce', ['get', 'N03_005'], ''],
+    ],
+    ['literal', keys],
+  ] as unknown as maplibregl.FilterSpecification;
+}
 
 const BLANK_STYLE: maplibregl.StyleSpecification = {
   version: 8,
@@ -160,6 +183,66 @@ function meshCellRing(code: number): [number, number][] {
     [lng0, lat1],
     [lng0, lat0],
   ];
+}
+
+// ── 市区町村の帰属判定（セル中心 point-in-polygon）──────────────────
+// 塗ったセルがどの市区町村に属するか（塗り％の分子）を、ズームに依存する
+// queryRenderedFeatures（タイルは zoom ごとに簡略化が違う）ではなく、build-muni-stats
+// が分母を数えるときと「同一のジオメトリ・同一のアルゴリズム」で判定する。これにより
+// 分子＝分母が厳密に一致し、どのズームで塗っても市区町村は必ず 100% に到達する。
+// 判定用ポリゴンは muni-classify.geojson（build-muni-classify が生成・遅延ロード）。
+const MUNI_CLASSIFY_URL = '/data/muni-classify.geojson';
+
+// 帰属判定用の市区町村。parts は build-muni-stats と同じ {rings, bbox}（polysWithBbox で生成）。
+type MuniPoly = { key: string; address: string; parts: PolyWithBbox[] };
+
+// 帰属判定を速くする粗いグリッド索引（バケット → そのバケットに bbox が重なる市区町村の
+// インデックス昇順）。約0.2°（緯度約22km）刻み。塗りセルを大量に数え直す（reclassify）
+// ときに、全1905市区町村を線形走査せず候補だけ調べられるようにする。
+const MUNI_GRID = 0.2;
+const muniBucketKey = (gx: number, gy: number) => gx * 100000 + gy;
+
+function buildMuniIndex(feats: MuniPoly[]): Map<number, number[]> {
+  const index = new Map<number, number[]>();
+  for (let fi = 0; fi < feats.length; fi++) {
+    for (const { bbox } of feats[fi].parts) {
+      const gx0 = Math.floor(bbox[0] / MUNI_GRID);
+      const gx1 = Math.floor(bbox[2] / MUNI_GRID);
+      const gy0 = Math.floor(bbox[1] / MUNI_GRID);
+      const gy1 = Math.floor(bbox[3] / MUNI_GRID);
+      for (let gx = gx0; gx <= gx1; gx++) {
+        for (let gy = gy0; gy <= gy1; gy++) {
+          const bk = muniBucketKey(gx, gy);
+          let arr = index.get(bk);
+          if (!arr) index.set(bk, (arr = []));
+          // feats を昇順に回しているので、同一バケットも昇順を保つ（ファイル順＝分母の重複排除順）
+          if (arr[arr.length - 1] !== fi) arr.push(fi);
+        }
+      }
+    }
+  }
+  return index;
+}
+
+// セル中心 (lng,lat) を含む最初の市区町村（ファイル順）を返す。build-muni-stats の
+// グローバル重複排除（先に確定した市区町村にだけ数える）と同じく「ファイル順で最初に
+// 含むもの」を採用するので、分母と完全に同じ帰属になる。
+function classifyMuniCell(
+  feats: MuniPoly[],
+  index: Map<number, number[]>,
+  lng: number,
+  lat: number
+): { key: string; address: string } | null {
+  const cand = index.get(muniBucketKey(Math.floor(lng / MUNI_GRID), Math.floor(lat / MUNI_GRID)));
+  if (!cand) return null;
+  for (const fi of cand) {
+    const f = feats[fi];
+    for (const { rings, bbox } of f.parts) {
+      if (lng < bbox[0] || lng > bbox[2] || lat < bbox[1] || lat > bbox[3]) continue;
+      if (pointInRings(lng, lat, rings)) return { key: f.key, address: f.address };
+    }
+  }
+  return null;
 }
 
 // 国土地理院の住所検索API（キー不要・日本の地名/住所→経緯度・市区町村〜町丁目の細かさ）
@@ -541,6 +624,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const muniByPaintedCellRef = useRef<Map<number, string>>(new Map());
   const totalByMuniRef = useRef<Map<string, number>>(new Map()); // "PREF|CITY" → 総セル数（分母）
   const paintedByMuniRef = useRef<Map<string, number>>(new Map()); // "PREF|CITY" → 塗ったセル数（分子）
+  const muniPolysRef = useRef<MuniPoly[]>([]); // 帰属判定用ポリゴン（muni-classify.geojson・遅延ロード）
+  const muniIndexRef = useRef<Map<number, number[]>>(new Map()); // 帰属判定用の粗いグリッド索引
   const hoverKeyRef = useRef<string | null>(null); // 現在ホバー中の市区町村キー
   // ── 世界版の塗り％（州・県 adm1_code ＋ 国 adm0_a3 単位）──────────────────
   // 日本の muni と同じ二段（分母=world-stats / 分子=塗ったセルから集計）。日本の外を塗ると入る。
@@ -563,6 +648,90 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const labelRefreshTimerRef = useRef<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+
+  // ── 制覇（市区町村100%）演出 ──
+  const completedMuniRef = useRef<Set<string>>(new Set()); // 100%塗った "PREF|CITY" 集合（金枠グローの対象）
+  const completedPrefRef = useRef<Set<string>>(new Set()); // 完全制覇した都道府県名の集合
+  const [conqueredCount, setConqueredCount] = useState(0); // 制覇した市区町村数（UI再描画用）
+  const [conquer, setConquer] = useState<string | null>(null); // 制覇バナーのメッセージ
+  const conquerTimerRef = useRef<number | null>(null);
+
+  // ── コンボ（連鎖塗り）演出 ──
+  const comboRef = useRef(0);
+  const lastPaintAtRef = useRef(0);
+  const [combo, setCombo] = useState(0);
+  const comboTimerRef = useRef<number | null>(null);
+  const comboKeyRef = useRef(0); // 表示の再アニメ用キー
+
+  // ── 塗りの瞬間の波紋（paint-ripple）。塗ったセルを中心に地図空間で広がる。──
+  // 地図座標への貼り付け（パン/ズーム追従）は MapLibre の Marker に任せる。波紋の大きさだけ
+  // requestAnimationFrame でセルの実ピクセル幅（--size）に追従させ、ズームと一緒に拡大させる。
+  const fxItemsRef = useRef<Array<{ el: HTMLDivElement; lng: number; marker: maplibregl.Marker }>>([]);
+  const fxRafRef = useRef<number | null>(null);
+
+  // 生きている波紋のサイズをセル幅に合わせて毎フレーム更新（空になったら自動で止まる）。
+  const tickRipples = useCallback(() => {
+    const map = mapRef.current;
+    const items = fxItemsRef.current;
+    if (!map || items.length === 0) {
+      fxRafRef.current = null;
+      return;
+    }
+    for (const it of items) {
+      const c = map.project([it.lng, 35]);
+      const e = map.project([it.lng + 1 / MESH_LON_DIV, 35]); // 隣セルとの差＝セル横幅px
+      const size = Math.max(12, Math.abs(e.x - c.x));
+      it.el.style.setProperty('--size', `${size}px`);
+    }
+    fxRafRef.current = requestAnimationFrame(tickRipples);
+  }, []);
+
+  // 塗ったセル中心（地理座標）に派手な波紋を出す。
+  const spawnRipple = useCallback(
+    (lng: number, lat: number, color: string) => {
+      const map = mapRef.current;
+      if (!map) return;
+      const el = document.createElement('div');
+      el.className = 'paint-ripple';
+      el.style.setProperty('--c', color);
+      // セル横幅 px を初期サイズに（rAF が来る前から正しい大きさで出す）
+      const c = map.project([lng, lat]);
+      const e = map.project([lng + 1 / MESH_LON_DIV, lat]);
+      el.style.setProperty('--size', `${Math.max(12, Math.abs(e.x - c.x))}px`);
+      el.innerHTML =
+        '<span class="paint-ripple-flash"></span>' +
+        '<span class="paint-ripple-ring r1"></span>' +
+        '<span class="paint-ripple-ring r2"></span>' +
+        '<span class="paint-ripple-ring r3"></span>';
+      const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat([lng, lat])
+        .addTo(map);
+      const item = { el, lng, marker };
+      fxItemsRef.current.push(item);
+      if (fxRafRef.current === null) fxRafRef.current = requestAnimationFrame(tickRipples);
+      window.setTimeout(() => {
+        marker.remove();
+        fxItemsRef.current = fxItemsRef.current.filter((i) => i !== item);
+      }, 1700);
+    },
+    [tickRipples]
+  );
+
+  // アンマウント時に rAF と残った波紋を片付ける
+  useEffect(() => {
+    return () => {
+      if (fxRafRef.current !== null) cancelAnimationFrame(fxRafRef.current);
+      for (const it of fxItemsRef.current) it.marker.remove();
+      fxItemsRef.current = [];
+    };
+  }, []);
+
+  // 新規セルが塗られた瞬間に呼ぶハンドラ（波紋・コンボ・制覇判定）。
+  // map 初期化 effect 内の commitLocalPaint から最新クロージャを呼べるよう ref 経由にする。
+  const onCellPaintedRef = useRef<(id: number, muniKey: string | null, mode: PaintMode) => void>(
+    () => {}
+  );
+
   const [debugMoving, setDebugMoving] = useState(false);
   // デバッグ用：マウスで塗った場所を消すモード。ON の間はクリックで塗らずに消す
   // （現地塗り・となり塗り問わず消せる）。クリックハンドラから同期参照するため ref も持つ。
@@ -592,6 +761,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const [debugOpen, setDebugOpen] = useState(false);
   // 「塗りを全部消す」の確認ダイアログ
   const [confirmClearAll, setConfirmClearAll] = useState(false);
+  // 「ユーザーデータをリセット」の確認ダイアログ（塗り＋レベル・経験値を初期化）
+  const [confirmResetAll, setConfirmResetAll] = useState(false);
   const openDebugRef = useRef<() => void>(() => {});
   // データ詳細（右からスライドするパネル）。自分の塗り実績を集計して見せる。
   const [statsOpen, setStatsOpen] = useState(false);
@@ -1081,6 +1252,24 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     []
   );
 
+  // セル（CELLID）の所属市区町村を共有ポリゴン（muni-classify）のセル中心 PiP で判定する。
+  // 分母 build-muni-stats と同一基準なので、塗り％の分子がズーム非依存で分母と一致する。
+  // 判定用ポリゴン未ロード時は null（呼び出し側がタイル判定にフォールバック）。
+  const classifyMuniAt = useCallback(
+    (id: number): { key: string; address: string } | null => {
+      const feats = muniPolysRef.current;
+      if (feats.length === 0) return null;
+      const [ri, ci] = gridFromMeshCode(id);
+      return classifyMuniCell(
+        feats,
+        muniIndexRef.current,
+        (ci + 0.5) / MESH_LON_DIV,
+        (ri + 0.5) / MESH_LAT_DIV
+      );
+    },
+    []
+  );
+
   // ホバー中の塗り％を組み立てて state に反映。日本（市区町村）と世界（国・州/県）の
   // どちらか — 日本の muni キーがあれば日本式、無ければホバー中の adm1_code で世界式。
   const refreshHoverStat = useCallback(() => {
@@ -1142,6 +1331,105 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   }, []);
 
   // 塗り状態から市区町村ごとの塗りセル数を作り直す（対応表ロード時・DB復元時に呼ぶ）
+  // 制覇した市区町村の金枠グローを地図に反映する（完了キー集合 → フィルタ）。
+  const applyConquerGlow = useCallback(() => {
+    const map = mapRef.current;
+    if (!map || !map.getLayer('muni-complete-glow')) return;
+    const filter = muniGlowFilter([...completedMuniRef.current]);
+    map.setFilter('muni-complete-glow', filter);
+    if (map.getLayer('muni-complete-glow-blur')) map.setFilter('muni-complete-glow-blur', filter);
+  }, []);
+
+  // 塗り数と分母から「制覇した市区町村／完全制覇した都道府県」を作り直す（演出なし）。
+  // データ復元・分母ロード時に呼ぶ。グローとカウンタも更新する。
+  const recomputeCompleted = useCallback(() => {
+    const totals = totalByMuniRef.current;
+    const paintedC = paintedByMuniRef.current;
+    const doneMuni = new Set<string>();
+    for (const [key, total] of totals) {
+      if (total > 0 && (paintedC.get(key) ?? 0) >= total) doneMuni.add(key);
+    }
+    completedMuniRef.current = doneMuni;
+    // 完全制覇した都道府県（その県のすべての市区町村キーが完了）
+    const prefTotal = new Map<string, number>();
+    const prefDone = new Map<string, number>();
+    for (const [key] of totals) {
+      const pref = key.split('|')[0];
+      prefTotal.set(pref, (prefTotal.get(pref) ?? 0) + 1);
+      if (doneMuni.has(key)) prefDone.set(pref, (prefDone.get(pref) ?? 0) + 1);
+    }
+    const donePref = new Set<string>();
+    for (const [pref, tot] of prefTotal) {
+      if (tot > 0 && (prefDone.get(pref) ?? 0) >= tot) donePref.add(pref);
+    }
+    completedPrefRef.current = donePref;
+    applyConquerGlow();
+    setConqueredCount(doneMuni.size);
+  }, [applyConquerGlow]);
+
+  // 制覇バナーを一定時間だけ出す。
+  const showConquer = useCallback((message: string) => {
+    setConquer(message);
+    if (conquerTimerRef.current !== null) window.clearTimeout(conquerTimerRef.current);
+    conquerTimerRef.current = window.setTimeout(() => {
+      setConquer(null);
+      conquerTimerRef.current = null;
+    }, 2600);
+  }, []);
+
+  // 新規セルが塗られた瞬間の演出：波紋（paint-ripple）・コンボ・制覇判定。
+  const handleCellPainted = useCallback(
+    (id: number, muniKey: string | null, _mode: PaintMode) => {
+      // 波紋：塗ったセル中心（地理座標）に地図追従の波紋を出す
+      {
+        const [ri, ci] = gridFromMeshCode(id);
+        const lng = (ci + 0.5) / MESH_LON_DIV;
+        const lat = (ri + 0.5) / MESH_LAT_DIV;
+        // 波紋は塗り方に依らず黄色半透明（派手に大きく広げる）
+        spawnRipple(lng, lat, 'rgba(250, 204, 21, 0.55)');
+      }
+      // コンボ：一定間隔内に塗り続けると連鎖数が伸びる
+      const now = Date.now();
+      comboRef.current =
+        now - lastPaintAtRef.current <= COMBO_WINDOW_MS ? comboRef.current + 1 : 1;
+      lastPaintAtRef.current = now;
+      comboKeyRef.current += 1;
+      setCombo(comboRef.current);
+      if (comboTimerRef.current !== null) window.clearTimeout(comboTimerRef.current);
+      comboTimerRef.current = window.setTimeout(() => {
+        comboRef.current = 0;
+        setCombo(0);
+        comboTimerRef.current = null;
+      }, COMBO_WINDOW_MS);
+      // 塗り音（連鎖が伸びるほど音程が上がる）
+      playPaint(comboRef.current);
+
+      // 制覇判定（市区町村 → 都道府県）。塗り数は commitLocalPaint で加算済み。
+      if (muniKey && !completedMuniRef.current.has(muniKey)) {
+        const total = totalByMuniRef.current.get(muniKey);
+        const cnt = paintedByMuniRef.current.get(muniKey) ?? 0;
+        if (total && total > 0 && cnt >= total) {
+          const prefsBefore = completedPrefRef.current.size;
+          recomputeCompleted(); // 集合・グロー・カウンタを更新
+          const pref = muniKey.split('|')[0];
+          if (completedPrefRef.current.size > prefsBefore && completedPrefRef.current.has(pref)) {
+            showConquer(tRef.current('prefConquered', pref as never));
+          } else {
+            const city = muniKey.split('|')[1] || muniKey;
+            showConquer(tRef.current('muniConquered', city as never));
+          }
+          playConquer();
+        }
+      }
+    },
+    [recomputeCompleted, showConquer, spawnRipple]
+  );
+
+  // commitLocalPaint（map 初期化 effect 内・mount 時クロージャ）から最新版を呼べるよう ref に保持
+  useEffect(() => {
+    onCellPaintedRef.current = handleCellPainted;
+  }, [handleCellPainted]);
+
   const rebuildPaintedByMuni = useCallback(() => {
     const counts = new Map<string, number>();
     const lookup = muniByPaintedCellRef.current;
@@ -1154,7 +1442,25 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     }
     paintedByMuniRef.current = counts;
     refreshHoverStat();
-  }, [refreshHoverStat]);
+    recomputeCompleted(); // 制覇した市区町村・都道府県とグローを作り直す
+  }, [refreshHoverStat, recomputeCompleted]);
+
+  // 判定用ポリゴン（muni-classify）ロード後、既存の塗りセルの市区町村帰属を共有ポリゴンの
+  // セル中心 PiP で全て付け直す。DB 保存の市区町村（旧・ズーム依存の判定）ではなく分母と
+  // 同じ判定で数え直すので、既存の塗りも分母と厳密一致し正しい％になる。
+  const reclassifyPaintedMuni = useCallback(() => {
+    if (muniPolysRef.current.length === 0) return;
+    const lookup = new Map<number, string>();
+    for (const key of Object.keys(paintedRef.current)) {
+      const [layer, idStr] = key.split(':');
+      if (layer !== 'mesh') continue;
+      const id = Number(idStr);
+      const m = classifyMuniAt(id);
+      if (m) lookup.set(id, m.key);
+    }
+    muniByPaintedCellRef.current = lookup;
+    rebuildPaintedByMuni();
+  }, [classifyMuniAt, rebuildPaintedByMuni]);
 
   // 塗り状態から州・県／国ごとの塗りセル数を作り直す（world-stats ロード時・DB復元時に呼ぶ）。
   // 国は state メタの adm0_a3 から導出する。
@@ -1187,6 +1493,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     regionByPaintedCellRef.current = new Map();
     paintedByStateRef.current = new Map();
     paintedByCountryRef.current = new Map();
+    completedMuniRef.current = new Set();
+    completedPrefRef.current = new Set();
+    setConqueredCount(0);
+    applyConquerGlow();
     refreshHoverStat();
 
     if (!userIdRef.current) return;
@@ -1204,7 +1514,36 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       console.warn('failed to clear all painted regions', err);
       showToast('塗りの全消去に失敗しました');
     }
-  }, [refreshHoverStat]);
+  }, [refreshHoverStat, applyConquerGlow]);
+
+  // デバッグ用：ユーザーデータを丸ごと初期化する（塗りを全消去し、レベル・経験値・残高を初期状態に戻す）。
+  const resetUserData = useCallback(async () => {
+    if (!userIdRef.current) {
+      showToast('ログインするとリセットできます');
+      return;
+    }
+    // まず塗りをすべて消す（地図・state・サーバー）。
+    await clearAllPaint();
+    // 次にレベル・経験値・残高を初期状態に戻す。
+    try {
+      const res = await fetch(`${POINTS_API}/debug/reset`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        showToast('ユーザーデータのリセットに失敗しました');
+        return;
+      }
+      const data = (await res.json()) as ServerPoints;
+      // 初期化なのでレベルアップ演出が出ないよう、検出基準も初期レベルにそろえる。
+      levelRef.current = data.level;
+      applyServerPoints(data);
+      showToast('ユーザーデータを初期状態に戻しました');
+    } catch (err) {
+      console.warn('failed to reset user data', err);
+      showToast('ユーザーデータのリセットに失敗しました');
+    }
+  }, [clearAllPaint, applyServerPoints]);
 
   // ラベル（市区町村・政令市・都道府県）のテキストに塗り％を差し込んで再描画する。
   // 市区町村キー（"PREF|CITY"）の総数・塗り数を走査して、政令市・都道府県は合算する。
@@ -1542,6 +1881,39 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         },
       });
 
+      // 制覇（市区町村を100%塗った）境界の金枠グロー。下に太いぼかし＋上に細い実線の
+      // 2枚重ねで「ここは制覇済み」を一目で分かるようにする。完了キー集合でフィルタし、
+      // recomputeCompleted から setFilter で更新する（pulse は別 effect で line-opacity を揺らす）。
+      map.addLayer({
+        id: 'muni-complete-glow-blur',
+        type: 'line',
+        source: 'japan',
+        'source-layer': 'municipalities',
+        minzoom: 6,
+        filter: muniGlowFilter([]),
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': COLOR_CONQUER,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 6, 3, 12, 9],
+          'line-opacity': 0.5,
+          'line-blur': ['interpolate', ['linear'], ['zoom'], 6, 2, 12, 6],
+        },
+      });
+      map.addLayer({
+        id: 'muni-complete-glow',
+        type: 'line',
+        source: 'japan',
+        'source-layer': 'municipalities',
+        minzoom: 6,
+        filter: muniGlowFilter([]),
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#fde68a',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 6, 1.2, 12, 2.8],
+          'line-opacity': 0.95,
+        },
+      });
+
       // 都道府県境界（赤の太線・全ズームレベルで表示）。塗りの上に重ねる。
       map.addLayer({
         id: 'prefectures-border',
@@ -1671,6 +2043,15 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         return { key: p.adm1_code, a3, address: [cName, sName].filter(Boolean).join(' ') };
       };
 
+      // セル中心の画面座標。塗り％の分母（muni-stats / world-stats）は「セル中心が
+      // どの市区町村・州県に入るか」で数える。塗ったセルの帰属もクリック／GPS 位置では
+      // なくセル中心で判定して基準点を合わせる（セル端をクリックすると隣の自治体に
+      // 乗ってしまい、全部塗っても塗り％が 100% に届かない／超える原因になっていた）。
+      const cellCenterPoint = (id: number): maplibregl.PointLike => {
+        const [ri, ci] = gridFromMeshCode(id);
+        return map.project([(ci + 0.5) / MESH_LON_DIV, (ri + 0.5) / MESH_LAT_DIV]);
+      };
+
       // 外国（自国以外）か。自国（homeCountryRef）が未判定の間や国コード不明の間は
       // false（＝従来どおり1マス塗り）にする。
       const isForeign = (a3: string | null | undefined): boolean =>
@@ -1750,8 +2131,13 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               !eraseModeRef.current &&
               paintedRef.current[`mesh:${id}`] !== 'gps'
             ) {
-              const result = commitLocalPaint(id, 'manual', info?.key ?? null, region, info?.address ?? region?.address ?? '', true);
-              if (result !== 'skip') syncPaint('POST', id, 'manual', region?.key ?? null);
+              // 帰属はカーソル位置ではなく共有ポリゴンのセル中心 PiP（分母と厳密一致・ズーム非依存）。
+              const c = cellCenterPoint(id);
+              const cMuni = muniPolysRef.current.length > 0 ? classifyMuniAt(id) : muniInfoAt(c);
+              const cSt = stateInfoAt(c);
+              const cRegion = cSt ? { key: cSt.key, a3: cSt.a3 } : null;
+              const result = commitLocalPaint(id, 'manual', cMuni?.key ?? null, cRegion, cMuni?.address ?? cSt?.address ?? '', true);
+              if (result !== 'skip') syncPaint('POST', id, 'manual', cRegion?.key ?? null);
             }
             return;
           }
@@ -1770,11 +2156,13 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         id: number,
         mode?: PaintMode,
         regionKey?: string | null,
-        revisit = false
+        revisit = false,
+        bulk = false
       ) => {
         if (!userIdRef.current) return;
         // POST のときは塗った位置の文脈（セル中心の緯度経度・市区町村・州県コード）を添える。
         // ip/ua はサーバー側で取得する。DELETE には付けない。
+        // bulk=true は外国まとめ塗りの残りセル（代表1セルが課金＆経験値を得て、残りは無料・経験値なし）。
         const ctx: { lat?: number; lng?: number; municipality?: string | null; region?: string | null } = {};
         if (method === 'POST') {
           const [ri, ci] = gridFromMeshCode(id);
@@ -1787,7 +2175,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           method,
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sourceLayer: 'mesh', keyCode: String(id), mode, ...ctx }),
+          body: JSON.stringify({ sourceLayer: 'mesh', keyCode: String(id), mode, ...(bulk ? { bulk: true } : {}), ...ctx }),
         })
           .then(async (res) => {
             // POST（GPS塗り・なぞり塗り）はサーバーが経験値・レベルを返す。反映してレベルアップ演出も出す。
@@ -1852,6 +2240,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             changed = true;
           }
           if (changed) refreshHoverStat();
+          // 新規セルの演出（波紋・コンボ・制覇判定・塗り音）。silent はまとめ塗り等で抑止。
+          if (!silent) onCellPaintedRef.current?.(id, muniKey, mode);
         }
         return existing ? 'promoted' : 'new';
       };
@@ -1925,7 +2315,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           return;
         }
         if (commitLocalPaint(id, 'manual', muniKey, region, address) === 'skip') return;
-        playPaint(); // となり塗り成功の効果音
+        // 塗り音・波紋・コンボは commitLocalPaint→onCellPainted が鳴らす（連鎖で音程上昇）
 
         const prevPoints = pointsRef.current;
         const prevRegenAt = regenAtRef.current;
@@ -2031,14 +2421,19 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       // 日本なら muniKey が入り、日本の外でも世界の州・県（region）が取れれば塗れる。
       const pickFeatureAt = (e: maplibregl.MapMouseEvent) => {
         if (map.getZoom() < MESH_MIN_ZOOM) return null;
-        const info = muniInfoAt(e.point);
-        const region = stateInfoAt(e.point);
-        if (!info && !region) return null; // 海上など陸地でない
+        const id = meshCodeAt(e.lngLat.lng, e.lngLat.lat);
+        const center = cellCenterPoint(id);
+        const info = muniInfoAt(center);     // 可視陸地の判定＆判定ポリゴン未ロード時のフォールバック
+        const region = stateInfoAt(center);
+        // 帰属（塗り％の分子）は共有ポリゴンのセル中心 PiP を最優先（分母 muni-stats と厳密一致・ズーム非依存）。
+        const muni = muniPolysRef.current.length > 0 ? classifyMuniAt(id) : info;
+        // 分母に入るセル（muni あり）は必ず塗れるようにする。可視陸地（info）/世界（region）でも塗れる。
+        if (!muni && !info && !region) return null; // 海上など陸地でない
         return {
-          id: meshCodeAt(e.lngLat.lng, e.lngLat.lat),
-          muniKey: info?.key ?? null,
+          id,
+          muniKey: muni?.key ?? null,
           region: region ? { key: region.key, a3: region.a3 } : null,
-          address: info?.address ?? region?.address ?? '',
+          address: muni?.address ?? info?.address ?? region?.address ?? '',
         };
       };
 
@@ -2061,12 +2456,14 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           const pt = map.project([lng, lat]);
           const info = muniInfoAt(pt);
           const region = stateInfoAt(pt);
-          if (!info && !region) continue; // 塗れない箇所（海上など）はスキップ
+          // 帰属は共有ポリゴンのセル中心 PiP（分母と厳密一致・ズーム非依存）。未ロード時はタイル判定。
+          const muni = muniPolysRef.current.length > 0 ? classifyMuniAt(id) : info;
+          if (!muni && !info && !region) continue; // 塗れない箇所（海上など）はスキップ
           out.push({
             id,
-            muniKey: info?.key ?? null,
+            muniKey: muni?.key ?? null,
             reg: region ? { key: region.key, a3: region.a3 } : null,
-            address: info?.address ?? region?.address ?? '',
+            address: muni?.address ?? info?.address ?? region?.address ?? '',
           });
         }
         return out;
@@ -2079,7 +2476,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         for (const c of cells) {
           if (c.id === skipId) continue;
           if (commitLocalPaint(c.id, 'manual', c.muniKey, c.reg, c.address, true) === 'skip') continue;
-          syncPaint('POST', c.id, 'manual', c.reg?.key ?? null);
+          // bulk=true：代表1セル（doManualPaint）だけが課金＆経験値を得る。残りは無料・経験値なし。
+          syncPaint('POST', c.id, 'manual', c.reg?.key ?? null, false, true);
           painted++;
         }
         return painted;
@@ -2246,8 +2644,9 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         let muniKey: string | null = null;
         let region: { key: string; a3: string } | null = null;
         if (map.getZoom() >= MESH_MIN_ZOOM) {
-          const pt = map.project(lngLat);
-          muniKey = muniInfoAt(pt)?.key ?? null;
+          const pt = cellCenterPoint(id);
+          // 帰属は共有ポリゴンのセル中心 PiP（分母と厳密一致・ズーム非依存）。未ロード時はタイル判定。
+          muniKey = (muniPolysRef.current.length > 0 ? classifyMuniAt(id) : muniInfoAt(pt))?.key ?? null;
           const st = stateInfoAt(pt);
           region = st ? { key: st.key, a3: st.a3 } : null;
         }
@@ -2502,7 +2901,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         }
         paintedRef.current = next;
         setPainted(next);
-        rebuildPaintedByMuni(); // 復元した塗りを市区町村ごとに集計し直す
+        // 判定用ポリゴンがロード済みなら DB の保存市区町村ではなく共有ポリゴンのセル中心 PiP で
+        // 数え直す（分母と厳密一致）。未ロードなら一旦 DB 値で集計し、ロード時に数え直される。
+        if (muniPolysRef.current.length > 0) reclassifyPaintedMuni();
+        else rebuildPaintedByMuni(); // 復元した塗りを市区町村ごとに集計し直す
         rebuildPaintedByRegion(); // 同じく州・県／国ごとに集計し直す
       } catch (err) {
         console.warn('failed to load painted regions', err);
@@ -2512,7 +2914,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     return () => {
       cancelled = true;
     };
-  }, [userId, isPending, mapReady, refreshHoverStat, rebuildPaintedByMuni, rebuildPaintedByRegion]);
+  }, [userId, isPending, mapReady, refreshHoverStat, rebuildPaintedByMuni, reclassifyPaintedMuni, rebuildPaintedByRegion]);
 
   // 塗り状態が変わったら低ズーム用オーバーレイを更新
   useEffect(() => {
@@ -2658,6 +3060,42 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     };
   }, [mapReady, rebuildPaintedByMuni, applyLabelStats]);
 
+  // 塗りセルの市区町村帰属を判定する共有ポリゴン（muni-classify.geojson・gzip約1.5MB）を
+  // 遅延ロードする。build-muni-stats（分母）と同一ファイル・同一 PiP で判定するため、
+  // 塗り％の分子＝分母が厳密一致し、どのズームで塗っても必ず 100% に到達する。
+  // ロード後は既存の塗りも新判定で数え直す（reclassifyPaintedMuni）。
+  useEffect(() => {
+    if (!mapReady || muniPolysRef.current.length > 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(MUNI_CLASSIFY_URL);
+        if (!res.ok) return;
+        const data = (await res.json()) as { features: GeoJSON.Feature[] };
+        if (cancelled) return;
+        const feats: MuniPoly[] = [];
+        for (const f of data.features) {
+          const p = (f.properties ?? {}) as Record<string, string>;
+          const pref = p.N03_001 ?? '';
+          const city = `${p.N03_004 ?? ''}${p.N03_005 ?? ''}`;
+          if (!city) continue;
+          const parts = polysWithBbox(f.geometry);
+          if (parts.length === 0) continue;
+          feats.push({ key: `${pref}|${city}`, address: `${pref}${city}`, parts });
+        }
+        if (cancelled) return;
+        muniPolysRef.current = feats;
+        muniIndexRef.current = buildMuniIndex(feats);
+        reclassifyPaintedMuni(); // 既存の塗りを新判定で数え直す
+      } catch (err) {
+        console.warn('failed to load muni classify', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mapReady, reclassifyPaintedMuni]);
+
   // 世界版の塗り％の分母（州・県／国ごとの総セル数）と地名メタを遅延ロード（約500KB）。
   // build-world-stats.mjs が生成。日本の muni-stats と独立に扱う。
   useEffect(() => {
@@ -2695,6 +3133,27 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     refreshHoverStat();
   }, [lang, mapReady, applyLabelStats, refreshHoverStat]);
 
+  // 制覇した境界の金枠グローをゆっくり明滅させる（制覇が1つ以上あるときだけ動かす）。
+  useEffect(() => {
+    if (!mapReady || conqueredCount === 0) return;
+    const map = mapRef.current;
+    if (!map) return;
+    let raf = 0;
+    let start = 0;
+    const tick = (ts: number) => {
+      if (!start) start = ts;
+      const phase = ((ts - start) / 1400) * Math.PI * 2; // 約1.4秒周期
+      const o = 0.45 + 0.25 * (0.5 + 0.5 * Math.sin(phase));
+      if (map.getLayer('muni-complete-glow-blur')) {
+        map.setPaintProperty('muni-complete-glow-blur', 'line-opacity', o);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [mapReady, conqueredCount]);
+
+
   const modes = Object.values(painted);
   const count = modes.length;
   const gpsCount = modes.filter((m) => m === 'gps').length;
@@ -2728,11 +3187,33 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         const prefs = [...paintedByPref.entries()]
           .map(([name, p]) => ({ name, painted: p, total: totalByPref.get(name) ?? 0 }))
           .sort((a, b) => b.painted - a.painted);
+        // 制覇コレクション：100%塗った市区町村（表示名）と完全制覇した都道府県。
+        // recomputeCompleted と同じ判定を分母・分子から直接出す（ref に依存しない）。
+        const conqueredMunis: string[] = [];
+        const prefDone = new Map<string, number>();
+        for (const [key, tot] of totalByMuniRef.current) {
+          if (tot > 0 && (paintedByMuniRef.current.get(key) ?? 0) >= tot) {
+            conqueredMunis.push(key.split('|')[1] || key);
+            const pref = key.split('|')[0];
+            prefDone.set(pref, (prefDone.get(pref) ?? 0) + 1);
+          }
+        }
+        const prefMuniCount = new Map<string, number>();
+        for (const [key] of totalByMuniRef.current) {
+          const pref = key.split('|')[0];
+          prefMuniCount.set(pref, (prefMuniCount.get(pref) ?? 0) + 1);
+        }
+        const conqueredPrefs = [...prefMuniCount.entries()]
+          .filter(([pref, tot]) => tot > 0 && (prefDone.get(pref) ?? 0) >= tot)
+          .map(([pref]) => pref);
+        conqueredMunis.sort();
         return {
           prefVisited: paintedByPref.size,
           muniVisited: visitedMuni.size,
           nationTotal,
           prefs,
+          conqueredMunis,
+          conqueredPrefs,
         };
       })()
     : null;
@@ -2807,6 +3288,38 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+
+      {/* 塗りの瞬間の波紋（paint-ripple）は MapLibre の Marker として地図に直接貼り付ける（spawnRipple が生成）。 */}
+
+      {/* コンボ（連鎖塗り）表示。2連鎖以上で中央上に大きく出す。 */}
+      {combo >= 2 && (
+        <div
+          key={comboKeyRef.current}
+          className="combo-pop pointer-events-none absolute left-1/2 top-24 z-20 -translate-x-1/2 select-none text-center"
+        >
+          <div
+            className="text-5xl font-black tracking-tight drop-shadow-[0_2px_4px_rgba(0,0,0,0.35)]"
+            style={{ color: COLOR_GPS, WebkitTextStroke: '1.5px #b45309' }}
+          >
+            {combo}
+          </div>
+          <div className="text-xs font-bold text-amber-700 drop-shadow">{t('combo', combo as never)}</div>
+        </div>
+      )}
+
+      {/* 制覇バナー（市区町村100% / 都道府県完全制覇）。 */}
+      {conquer && (
+        <div
+          className="pointer-events-none absolute left-1/2 top-1/3 z-30 -translate-x-1/2"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="conquer-pop flex items-center gap-2 rounded-full bg-gradient-to-r from-amber-400 to-yellow-500 px-6 py-3 text-lg font-black text-white shadow-2xl ring-4 ring-amber-200">
+            {conquer}
+          </div>
+        </div>
+      )}
+
       {/* 塗り方モード切り替え（左上・タイトルバーの下）。
           現地塗り＝GPSの現在地のみ自動で塗る / となり塗り＝マウスで隣接セルを塗れる。 */}
       <div className="absolute top-4 left-4 flex rounded-lg shadow overflow-hidden text-sm font-medium select-none">
@@ -2836,6 +3349,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           {t('modeTonari')}
         </button>
       </div>
+
       {(hoverStat || userId) && (
         <div className="absolute bottom-4 left-4 bg-white rounded-lg px-4 py-2 shadow text-sm font-medium text-gray-700 space-y-1">
           {hoverStat && (
@@ -3267,6 +3781,16 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               >
                 塗りを全部消す
               </button>
+              <button
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm font-medium text-white bg-red-600 border border-red-600 rounded-lg hover:bg-red-700"
+                onClick={() => {
+                  setDebugOpen(false);
+                  setConfirmResetAll(true);
+                }}
+              >
+                ユーザーデータをリセット
+              </button>
             </div>
           </div>
         </div>
@@ -3304,6 +3828,46 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                 }}
               >
                 全部消す
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {confirmResetAll && (
+        <div
+          className="absolute inset-0 z-20 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setConfirmResetAll(false)}
+        >
+          <div
+            className="w-80 max-w-full rounded-xl bg-white p-5 shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-label="ユーザーデータのリセットの確認"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-base font-bold text-gray-900">
+              ユーザーデータをリセット
+            </h2>
+            <p className="mt-2 text-sm text-gray-600">
+              塗った場所をすべて消し、レベル・経験値・塗りポイントを初期状態に戻します。この操作は元に戻せません。よろしいですか？
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50"
+                onClick={() => setConfirmResetAll(false)}
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700"
+                onClick={() => {
+                  setConfirmResetAll(false);
+                  resetUserData();
+                }}
+              >
+                リセットする
               </button>
             </div>
           </div>
@@ -3488,6 +4052,45 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                   }}
                 />
               </div>
+            </div>
+
+            {/* 制覇コレクション（100%塗った市区町村・完全制覇した都道府県） */}
+            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <span className="text-sm font-bold text-amber-800">🏆 {t('conquered')}</span>
+                <span className="text-sm font-black text-amber-700 tabular-nums">
+                  {stats ? stats.conqueredMunis.length : conqueredCount}
+                </span>
+              </div>
+              {stats && stats.conqueredPrefs.length > 0 && (
+                <div className="mb-1.5">
+                  <div className="text-[11px] text-amber-700/80">{t('conqueredPref')}</div>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {stats.conqueredPrefs.map((p) => (
+                      <span
+                        key={p}
+                        className="rounded-full bg-amber-400 px-2 py-0.5 text-[11px] font-bold text-amber-900"
+                      >
+                        👑 {lang === 'en' ? prefRomaji(p) : p}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {stats && stats.conqueredMunis.length > 0 ? (
+                <div className="flex flex-wrap gap-1">
+                  {stats.conqueredMunis.map((m, i) => (
+                    <span
+                      key={`${m}-${i}`}
+                      className="rounded-md bg-white px-1.5 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200"
+                    >
+                      {m}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[11px] text-amber-700/70">{t('noConquered')}</p>
+              )}
             </div>
 
             {/* 都道府県ごとの塗り％（多い順） */}

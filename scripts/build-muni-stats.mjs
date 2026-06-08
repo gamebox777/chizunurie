@@ -5,7 +5,12 @@
  * 市区町村ポリゴンから直接「各市区町村に何セル（約1km等面積グリッド）入るか」を数える。
  * 出力するのは分母となるセル総数だけで、セル一覧（ジオメトリ）は持たない＝数KBで済む。
  *
- * 入力: frontend/public/data/municipalities_poly.geojson（N03_001/004/005 を持つ）
+ * 入力: frontend/public/data/muni-classify.geojson（N03_001/004/005 を持つ・市区町村
+ *   境界の簡略化済み軽量ポリゴン。クライアント（Map.tsx）も同じファイルを読み、同じ
+ *   セル中心 point-in-polygon で塗りセルの帰属を判定する。両者が同一ジオメトリ・同一
+ *   アルゴリズムで数えるため、塗り％の分子（クライアント）と分母（ここ）が厳密に一致し、
+ *   どのズームで塗っても市区町村は必ず 100% に到達する。
+ *   （muni-classify.geojson は build-muni-classify が municipalities_poly.geojson から生成）
  * 出力: frontend/public/data/muni-stats.json
  *   {
  *     "munis": [
@@ -76,9 +81,9 @@ function toPolygons(geometry) {
 // セルキー（ri,ci を一意な数値に）。グローバル重複排除に使う
 const cellKey = (ri, ci) => ri * 100000 + ci;
 
-console.log('市区町村ポリゴンを読み込み中...');
+console.log('市区町村ポリゴン（判定用・muni-classify）を読み込み中...');
 const muni = JSON.parse(
-  readFileSync(join(publicData, 'municipalities_poly.geojson'), 'utf8')
+  readFileSync(join(publicData, 'muni-classify.geojson'), 'utf8')
 );
 
 // PREF|CITY ごとの陸地セル数を数える。1セルは最初に確定した市区町村にだけ数える

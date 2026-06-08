@@ -4,7 +4,7 @@ import { userPoints } from "../db/schema.js";
 
 // ── 塗りポイントの調整パラメータ（今後バランス調整予定） ──────────────
 export const INITIAL_POINTS = 10; // 登録時（初回）に付与される残高
-export const REGEN_INTERVAL_MS = 30 * 60 * 1000; // 30分で1ポイント回復
+export const REGEN_INTERVAL_MS = 10 * 60 * 1000; // 10分で1ポイント回復
 
 // 塗りのコスト（クライアントが隣接判定して送る。サーバーは残高のみ権威的に管理する）
 export const COST_ADJACENT = 1; // 塗り済みに隣接する場所
@@ -16,8 +16,8 @@ export const ALLOWED_COSTS = new Set([0, COST_ADJACENT, COST_FAR]);
 // 塗りポイントの最大値（時間回復の上限）はレベルに応じて増える。
 //   level 1 = 10、以降レベルが上がるごとに +1。
 const BASE_MAX_POINTS = 10; // level 1 のときの最大塗りポイント
-// 次のレベルに必要な経験値。level 1→2 で 1000、以降レベルが上がるごとに +100。
-const BASE_EXP_TO_NEXT = 1000;
+// 次のレベルに必要な経験値。level 1→2 で 500、以降レベルが上がるごとに +100。
+const BASE_EXP_TO_NEXT = 500;
 const EXP_TO_NEXT_STEP = 100;
 
 // 塗りで得られる経験値
@@ -262,6 +262,29 @@ export async function setPoints(
     state.playTimeSec,
     state.totalExp
   );
+}
+
+// デバッグ用：ユーザーのポイント状態を初期値（レベル1・経験値0・初期残高）に戻す。
+// 回復時計は now を基準に張り直す。塗りデータは別（painted ルーターの DELETE /all）で消す。
+export async function resetPoints(
+  userId: string,
+  now: number,
+  tx: DbExecutor = db
+): Promise<PointsState> {
+  await ensurePoints(userId, now, tx); // 行が無ければ初期化しておく
+  const updatedAt = new Date(now);
+  await tx
+    .update(userPoints)
+    .set({
+      points: INITIAL_POINTS,
+      level: 1,
+      exp: 0,
+      totalExp: 0,
+      playTimeSec: 0,
+      updatedAt,
+    })
+    .where(eq(userPoints.userId, userId));
+  return toState(INITIAL_POINTS, updatedAt, 1, 0, 0, 0);
 }
 
 // cost ぶんポイントを消費する。残高不足なら null を返す（呼び出し側でロールバック）。
