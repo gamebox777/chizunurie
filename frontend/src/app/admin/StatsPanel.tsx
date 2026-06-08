@@ -1,7 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { fetchStats, type AdminStats } from './api';
+import {
+  fetchAccessStats,
+  fetchStats,
+  type AccessStats,
+  type AdminStats,
+} from './api';
 
 const ROLE_LABELS: Record<string, string> = {
   user: '一般ユーザー',
@@ -20,11 +25,15 @@ function Card({ title, value, sub }: { title: string; value: string; sub?: strin
 
 export default function StatsPanel() {
   const [stats, setStats] = useState<AdminStats | null>(null);
+  const [access, setAccess] = useState<AccessStats | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
     fetchStats()
       .then(setStats)
+      .catch((e: Error) => setError(e.message));
+    fetchAccessStats()
+      .then(setAccess)
       .catch((e: Error) => setError(e.message));
   }, []);
 
@@ -32,9 +41,41 @@ export default function StatsPanel() {
   if (!stats) return <p className="text-sm text-gray-500">読み込み中…</p>;
 
   const { users, painted } = stats;
+  // 日別の最大件数（バーの正規化用）。
+  const maxDaily = access?.daily.reduce((m, d) => Math.max(m, d.count), 0) ?? 0;
 
   return (
     <div className="space-y-6">
+      <section>
+        <h2 className="mb-3 text-sm font-semibold text-gray-600">サイトアクセス</h2>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <Card title="累計アクセス数" value={(access?.total ?? 0).toLocaleString()} />
+          <Card title="今日" value={(access?.today ?? 0).toLocaleString()} />
+          <Card title="直近7日" value={(access?.last7 ?? 0).toLocaleString()} />
+        </div>
+        {access && access.daily.length > 0 && (
+          <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+            <p className="mb-2 text-xs text-gray-500">日別（新しい順・最大30日）</p>
+            <ul className="space-y-1">
+              {access.daily.map((d) => (
+                <li key={d.date} className="flex items-center gap-2 text-xs">
+                  <span className="w-24 shrink-0 tabular-nums text-gray-500">{d.date}</span>
+                  <span className="h-3 flex-1 overflow-hidden rounded bg-gray-100">
+                    <span
+                      className="block h-full rounded bg-blue-400"
+                      style={{ width: maxDaily ? `${(d.count / maxDaily) * 100}%` : '0%' }}
+                    />
+                  </span>
+                  <span className="w-16 shrink-0 text-right tabular-nums font-medium text-gray-700">
+                    {d.count.toLocaleString()}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
+
       <section>
         <h2 className="mb-3 text-sm font-semibold text-gray-600">ユーザー</h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">

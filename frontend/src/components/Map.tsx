@@ -11,7 +11,7 @@ import { useLocale, type Lang, type TFunc } from '@/lib/i18n';
 import { kanaToRomaji, prefRomaji } from '@/lib/romaji';
 import { playPaint, playLevelUp, playConquer, unlockAudio } from '@/lib/sound';
 import { vibratePaint } from '@/lib/haptics';
-import { isBasemapEnabled, onBasemapChange } from '@/lib/basemap';
+import { isBasemapEnabled, onBasemapChange, getBasemapOpacity, onBasemapOpacityChange } from '@/lib/basemap';
 import { isGpsAddressEnabled, onGpsAddressChange } from '@/lib/gpsAddress';
 import { showRewardedAd } from '@/lib/rewardedAd';
 
@@ -157,6 +157,20 @@ const PAINTED_OVERLAY_MIN_ZOOM = 6;
 // 出さず、世界地図（白地図＋国境＋ラベル）を全面表示する。ズームインすると日本（bounds 内）
 // だけ地形画像が乗る。低ズームで bounds の矩形が世界地図の上に出るのを防ぐため。
 const GSI_OVERLAY_MIN_ZOOM = 6;
+
+// 地理院オーバーレイを乗せる矩形群。GSI 標準地図は海上・国外でも不透明な（≒真っ白な）
+// タイルを返すため、日本全体を覆う1個の巨大 bounds にすると外洋・日本海の大半・国外まで
+// GSI が CARTO 世界地図を覆い「世界が消える」。そこで主要な陸地クラスタごとに tight な
+// bounds を分けて張り、矩形の外（外洋・国外）では CARTO が見えるようにする。
+// （ラスターの bounds は矩形1個しか持てないため source を島ごとに分ける。矩形内に残る
+//  沿岸海・内海は GSI のまま。小笠原・南鳥島・沖ノ鳥島など遠方離島は CARTO 表示で割り切る。）
+const GSI_OVERLAY_REGIONS: { id: string; bounds: [number, number, number, number] }[] = [
+  { id: 'hokkaido', bounds: [139.2, 41.3, 146.1, 45.7] }, // 北海道＋利尻・礼文
+  { id: 'honshu', bounds: [130.6, 33.2, 142.2, 41.7] }, // 本州（佐渡・能登・房総・下北含む）
+  { id: 'shikoku', bounds: [132.0, 32.6, 134.9, 34.6] }, // 四国
+  { id: 'kyushu', bounds: [128.3, 30.0, 132.3, 34.8] }, // 九州＋対馬・種子島・屋久島
+  { id: 'nansei', bounds: [122.8, 24.0, 131.1, 29.0] }, // 奄美〜沖縄〜宮古〜石垣〜与那国
+];
 
 // 約1kmの等面積グリッド = 緯度 1/120°・経度 1/80° の均一グリッド
 const MESH_LAT_DIV = 120;
@@ -746,9 +760,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       el.style.setProperty('--size', `${Math.max(12, Math.abs(e.x - c.x))}px`);
       el.innerHTML =
         '<span class="paint-ripple-flash"></span>' +
-        '<span class="paint-ripple-ring r1"></span>' +
-        '<span class="paint-ripple-ring r2"></span>' +
-        '<span class="paint-ripple-ring r3"></span>';
+        '<span class="paint-ripple-ring r1"></span>';
       const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
         .setLngLat([lng, lat])
         .addTo(map);
@@ -820,10 +832,12 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const addressMarkerRef = useRef<maplibregl.Marker | null>(null); // 現在地の住所ラベル
   const gpsAddressEnabledRef = useRef(true); // 現在地の住所ラベル表示 ON/OFF（設定・既定 ON）
   // 塗り方の操作モード。genchi=現地塗り（GPSの現在地のみ自動で塗る）/
-  // tonari=となり塗り（マウスで隣接セルを塗れる）。GPS自動塗りは両モード共通。
+  // tonari=となり塗り（マウスで隣接セルを塗れる）/ nazori=なぞり塗り（マウスオーバー・
+  // スワイプで隣接セルを連続塗り・地図はスクロールしない）。GPS自動塗りは全モード共通。
   // map init effect 内のクリックハンドラから同期参照するため ref も持つ。
-  const [paintMode, setPaintMode] = useState<'genchi' | 'tonari'>('genchi');
-  const paintModeRef = useRef<'genchi' | 'tonari'>('genchi');
+  type PaintOpMode = 'genchi' | 'tonari' | 'nazori';
+  const [paintMode, setPaintMode] = useState<PaintOpMode>('genchi');
+  const paintModeRef = useRef<PaintOpMode>('genchi');
   // 地名検索ダイアログ
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -1232,8 +1246,26 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   useEffect(() => {
     return onBasemapChange((on) => {
       const map = mapRef.current;
-      if (!map || !map.getLayer('gsi-std-overlay')) return;
-      map.setLayoutProperty('gsi-std-overlay', 'visibility', on ? 'visible' : 'none');
+      if (!map) return;
+      for (const region of GSI_OVERLAY_REGIONS) {
+        const id = `gsi-std-overlay-${region.id}`;
+        if (map.getLayer(id)) {
+          map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+        }
+      }
+    });
+  }, []);
+
+  // 絵付きの地図（world-basemap / 地理院ラスター）の不透明度を設定スライダーから受け取る。
+  useEffect(() => {
+    return onBasemapOpacityChange((v) => {
+      const map = mapRef.current;
+      if (!map) return;
+      if (map.getLayer('world-basemap')) map.setPaintProperty('world-basemap', 'raster-opacity', v);
+      for (const region of GSI_OVERLAY_REGIONS) {
+        const id = `gsi-std-overlay-${region.id}`;
+        if (map.getLayer(id)) map.setPaintProperty(id, 'raster-opacity', v);
+      }
     });
   }, []);
 
@@ -1252,10 +1284,17 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
 
   useEffect(() => {
     paintModeRef.current = paintMode;
-    // 現在地の住所ラベルは現地塗りモード専用。となり塗りに切り替えたら消す。
+    // 現在地の住所ラベルは現地塗りモード専用。となり塗り・なぞり塗りに切り替えたら消す。
     if (paintMode !== 'genchi') {
       addressMarkerRef.current?.remove();
       addressMarkerRef.current = null;
+    }
+    // なぞり塗り中は地図をスクロールさせない（スワイプ＝塗り操作にする）。
+    // 1本指パン（マウスドラッグ＋タッチパン）を止める。ピンチズームは残す。
+    const map = mapRef.current;
+    if (map) {
+      if (paintMode === 'nazori') map.dragPan.disable();
+      else map.dragPan.enable();
     }
   }, [paintMode]);
 
@@ -1928,7 +1967,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         id: 'world-basemap',
         type: 'raster',
         source: 'world-basemap',
-        paint: { 'raster-opacity': 1 },
+        // 絵付きの地図の不透明度（設定スライダーで調整・既定 0.5）。塗ったセルを目立たせる。
+        paint: { 'raster-opacity': getBasemapOpacity() },
       });
       // 州・県境（細線・z4 以上で薄く）。
       map.addLayer({
@@ -2010,7 +2050,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         paint: {
           // ズーム9以上では区画毎の境界線をはっきり表示する
           'line-color': ['step', ['zoom'], '#aaaaaa', 9, '#888888'],
-          'line-width': ['step', ['zoom'], 0.6, 9, 1.2],
+          'line-width': ['step', ['zoom'], 1, 9, 1.8],
         },
       });
 
@@ -2019,39 +2059,43 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       // 白地図（municipalities-fill）の上・塗り（painted-overlay-fill）の下に置くので、
       // 塗っていない所だけ地図が薄く透け、塗ったセルははっきり残る。
       // ON/OFF は設定メニュー（SettingsMenu）から。出典表記は attribution で表示。
-      map.addSource('gsi-std', {
-        type: 'raster',
-        tiles: ['https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png'],
-        tileSize: 256,
-        maxzoom: 18,
-        // 地理院タイルは日本にしか中身が無く、海外の高ズームでは空タイル（不透明）を
-        // 返す。このオーバーレイは world.pmtiles レイヤーの上に乗るので、bounds で
-        // 日本の範囲に限定しないと、海外をズームインした時に空タイルが世界地図を
-        // 覆って「海外の地図が消える」状態になる。日本国内（北方領土〜南鳥島〜沖ノ鳥島）を
-        // 含む bbox に絞り、範囲外では world.pmtiles がそのまま見えるようにする。
-        bounds: [122.0, 20.0, 154.0, 46.5],
-        attribution:
-          '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noreferrer">地理院タイル</a>',
-      });
-      map.addLayer({
-        id: 'gsi-std-overlay',
-        type: 'raster',
-        source: 'gsi-std',
-        // 日本へズームインした時だけ地形画像を出す。低ズーム（世界全体表示）では出さず、
-        // 世界地図（白地図＋国境＋ラベル）を全面で見せる。こうしないと bounds の矩形が
-        // 世界地図の上に四角く乗って「世界地図が表示されていない箇所」に見えてしまう。
-        minzoom: GSI_OVERLAY_MIN_ZOOM,
-        layout: { visibility: isBasemapEnabled() ? 'visible' : 'none' },
-        paint: { 'raster-opacity': 1 },
-      });
+      // 海外をズームインした時に GSI の空タイル（不透明）が CARTO 世界地図を覆って
+      // 「世界が消える」のを防ぐため、日本全体を覆う1個の bounds ではなく、主要な陸地
+      // クラスタごとに tight な bounds を分けて張る（GSI_OVERLAY_REGIONS）。矩形の外
+      // （外洋・国外）では world-basemap がそのまま見える。
+      for (const region of GSI_OVERLAY_REGIONS) {
+        map.addSource(`gsi-std-${region.id}`, {
+          type: 'raster',
+          tiles: ['https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          maxzoom: 18,
+          bounds: region.bounds,
+          attribution:
+            '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noreferrer">地理院タイル</a>',
+        });
+        map.addLayer({
+          id: `gsi-std-overlay-${region.id}`,
+          type: 'raster',
+          source: `gsi-std-${region.id}`,
+          // 日本へズームインした時だけ地形画像を出す。低ズーム（世界全体表示）では出さず、
+          // 世界地図（白地図＋国境＋ラベル）を全面で見せる。こうしないと bounds の矩形が
+          // 世界地図の上に四角く乗って「世界地図が表示されていない箇所」に見えてしまう。
+          minzoom: GSI_OVERLAY_MIN_ZOOM,
+          layout: { visibility: isBasemapEnabled() ? 'visible' : 'none' },
+          // 絵付きの地図の不透明度（設定スライダーで調整・既定 0.5）。
+          paint: { 'raster-opacity': getBasemapOpacity() },
+        });
+      }
       // レイヤーの重ね順を整える。下→上で：
       //   白地図フィル（world-countries-fill / world-states-fill / municipalities-fill）
       //   → 世界の地図画像（world-basemap・全ズーム全世界）
-      //   → 地理院タイル（gsi-std-overlay・日本ズーム時のみ上乗せ）
+      //   → 地理院タイル（gsi-std-overlay-*・日本ズーム時のみ上乗せ）
       //   → 国境/州境/ラベル/市区町村境界（地図画像の上に出して隠れないように）
       //   → （この後 addLayer される 塗り/メッシュ/政令市枠/県境/日本のラベル）
       map.moveLayer('municipalities-fill', 'world-basemap'); // 日本の白塗りを世界画像の下へ
-      map.moveLayer('gsi-std-overlay', 'world-states-border'); // GSI を境界線の下・世界画像の上へ
+      for (const region of GSI_OVERLAY_REGIONS) {
+        map.moveLayer(`gsi-std-overlay-${region.id}`, 'world-states-border'); // GSI を境界線の下・世界画像の上へ
+      }
 
       // 塗りオーバーレイ。塗ったセルをクライアント生成の矩形で全ズーム描画する。
       // mesh は PMTiles に焼かず数式生成するので、塗りの色付けはこのオーバーレイが一手に担う。
@@ -2136,7 +2180,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         type: 'line',
         source: 'prefectures-geojson',
         layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: { 'line-color': '#e03131', 'line-width': 1.2 },
+        paint: { 'line-color': '#e03131', 'line-width': 3.6 },
       });
 
       // 都道府県名・市区町村名・政令市名のラベルは、塗り％を横に差し込めるよう
@@ -2361,6 +2405,9 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               const cRegion = cSt ? { key: cSt.key, a3: cSt.a3 } : null;
               const result = commitLocalPaint(id, 'manual', cMuni?.key ?? null, cRegion, cMuni?.address ?? cSt?.address ?? '', true);
               if (result !== 'skip') syncPaint('POST', id, 'manual', cRegion);
+            } else if (paintModeRef.current === 'nazori' && !eraseModeRef.current) {
+              // なぞり塗り：マウスオーバーで隣接セルを 1pt 消費しながら塗る。
+              nazoriPaintAt(e);
             }
             return;
           }
@@ -2416,6 +2463,12 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           .then(async (res) => {
             // POST（GPS塗り・なぞり塗り）はサーバーが経験値・レベルを返す。反映してレベルアップ演出も出す。
             if (method !== 'POST' || !res.ok) return;
+            // 外国まとめ塗りの残りセル（bulk）は無料・経験値なし。サーバーは ensurePoints の
+            // 現在残高を返すが、これは代表セルの spendPoints と並走し「消費前の残高」を返すことが
+            // 多い。bulk 応答（約99件）が代表セルの応答に競り勝って applyServerPoints すると、
+            // 減算したばかりの残高を元に戻してしまう（＝海外で塗りポイントが減らない不具合）。
+            // bulk は残高・経験値を一切反映しない。
+            if (bulk) return;
             const data = (await res.json().catch(() => null)) as {
               points?: ServerPoints;
               gainedExp?: number;
@@ -2451,7 +2504,10 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         muniKey: string | null,
         region: { key: string; a3: string } | null,
         address?: string,
-        silent = false
+        silent = false,
+        // 波紋・ふわっと表示などの演出は出すが、住所トーストだけは抑止する。
+        // 外国まとめ塗りの代表セルで使い、最後にまとめて「場所＋マス数」を1回だけ出す。
+        quietToast = false
       ): 'new' | 'promoted' | 'skip' => {
         const key = `mesh:${id}`;
         const current = paintedRef.current;
@@ -2465,7 +2521,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         if (!existing) {
           // その場で塗った日時を記録（DB 復元値より優先＝実際に塗った日時を表示する）。
           paintedAtRef.current.set(id, new Date().toISOString());
-          if (!silent && address) showToast(address);
+          if (!silent && !quietToast && address) showToast(address);
           // 新規セルのみカウントを +1（gps への昇格では増やさない）
           let changed = false;
           if (muniKey) {
@@ -2550,13 +2606,16 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         muniKey: string | null,
         region: { key: string; a3: string } | null,
         address: string,
-        cost: number
+        cost: number,
+        // 外国まとめ塗りの代表セルでは住所トーストを抑止し、呼び出し側が最後に
+        // 「場所＋マス数」を1回だけ出す（波紋・ふわっと表示は出す）。
+        quietToast = false
       ) => {
         if (!userIdRef.current) {
           showToast(tRef.current('needLoginPaint'));
           return;
         }
-        if (commitLocalPaint(id, 'manual', muniKey, region, address) === 'skip') return;
+        if (commitLocalPaint(id, 'manual', muniKey, region, address, false, quietToast) === 'skip') return;
         // 塗り音・波紋・コンボは commitLocalPaint→onCellPainted が鳴らす（連鎖で音程上昇）
 
         const prevPoints = pointsRef.current;
@@ -2676,6 +2735,29 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         };
       };
 
+      // なぞり塗り：マウスオーバー／スワイプで通ったセルを連続で塗る。
+      // ・隣接した箇所しか塗れない（最初の1セルだけ自由）／・1マス COST_ADJACENT 消費。
+      // 塗れない時（未ログイン・低ズーム・海上・非隣接・塗り済み・残高不足）は静かにスキップ。
+      const nazoriPaintAt = (e: maplibregl.MapMouseEvent | maplibregl.MapTouchEvent) => {
+        if (!userIdRef.current) return;
+        if (map.getZoom() < MESH_MIN_ZOOM) return;
+        const picked = pickFeatureAt(e as maplibregl.MapMouseEvent);
+        if (!picked) return;
+        const { id, muniKey, region, address } = picked;
+        if (paintedRef.current[`mesh:${id}`]) return; // 塗り済み（gps/manual）はそのまま
+        const isFirstPaint = Object.keys(paintedRef.current).length === 0;
+        if (!isAdjacent(id) && !isFirstPaint) return; // 隣接した箇所しか塗れない
+        if (pointsRef.current < COST_ADJACENT) return; // 残高不足は静かにスキップ
+        doManualPaint(id, muniKey, region, address, COST_ADJACENT);
+      };
+
+      // スマホはスワイプ（touchmove）で塗る。なぞり塗り中のみ・1本指のみ（ピンチは塗らない）。
+      map.on('touchmove', (e) => {
+        if (paintModeRef.current !== 'nazori') return;
+        if (e.points && e.points.length > 1) return; // 2本指（ズーム）は塗り対象外
+        nazoriPaintAt(e);
+      });
+
       // クリックしたセル中心の 10×10 ブロックのうち、まだ塗っていない陸地セルだけを集める。
       // セル中心を画面座標へ投影して陸地判定＋地名解決する（海上・画面外は除外）。
       // 外国まとめ塗り（doForeignBlockPaint）と開発者デバッグ塗り（doBulkDebugPaint）で共用。
@@ -2737,10 +2819,12 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           return;
         }
         // 代表セル（1つめ＝未塗り陸地が確定）を有料で塗り、残りは無料同期。
+        // 代表セルの住所トーストは抑止し（quietToast）、波紋・ふわっと表示は1回だけ出す。
+        // 最後に「場所＋マス数」を1回だけトーストする（演出・トーストとも1ブロック=1回）。
         const paid = cells[0];
-        doManualPaint(paid.id, paid.muniKey, paid.reg, paid.address, COST_FOREIGN_BLOCK);
+        doManualPaint(paid.id, paid.muniKey, paid.reg, paid.address, COST_FOREIGN_BLOCK, true);
         const rest = paintBlockCells(cells, paid.id);
-        showToast(tRef.current('foreignPainted', (rest + 1) as never));
+        showToast(tRef.current('foreignPainted', paid.address as never, (rest + 1) as never));
       };
 
       // 開発者デバッグ：Cmd（Mac）/Ctrl（Win）+クリックで、クリックしたセルを中心に
@@ -2753,7 +2837,50 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         }
       };
 
+      // 世界表示（塗りズーム未満）で国をタップしたら、その国全体が収まるように飛ぶ。
+      // 読み込み済みタイル（世界表示では全タイル）から同じ国のポリゴンを集めて bbox を作る。
+      const flyToCountryAt = (point: maplibregl.PointLike): boolean => {
+        const hit = map.queryRenderedFeatures(point, { layers: ['world-countries-fill'] })[0];
+        const a3 = hit?.properties?.ADM0_A3;
+        if (typeof a3 !== 'string' || !a3) return false;
+        const parts = map.querySourceFeatures('world', {
+          sourceLayer: 'countries',
+          filter: ['==', 'ADM0_A3', a3],
+        });
+        const feats = parts.length ? parts : [hit];
+        let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+        // 日付変更線をまたぐ国（ロシア等）に備え、経度を 0..360 に寄せた幅も別に持つ。
+        let shiftMin = Infinity, shiftMax = -Infinity;
+        const scan = (coords: unknown): void => {
+          if (typeof (coords as number[])[0] === 'number') {
+            const [lng, lat] = coords as number[];
+            if (lat < minLat) minLat = lat;
+            if (lat > maxLat) maxLat = lat;
+            if (lng < minLng) minLng = lng;
+            if (lng > maxLng) maxLng = lng;
+            const s = lng < 0 ? lng + 360 : lng;
+            if (s < shiftMin) shiftMin = s;
+            if (s > shiftMax) shiftMax = s;
+          } else {
+            for (const c of coords as unknown[]) scan(c);
+          }
+        };
+        for (const f of feats) scan((f.geometry as GeoJSON.Polygon).coordinates);
+        if (!isFinite(minLat)) return false;
+        // 通常幅と日付変更線シフト幅の狭い方を採用（広域にズームアウトしすぎるのを防ぐ）。
+        let west = minLng, east = maxLng;
+        if (maxLng - minLng > shiftMax - shiftMin) {
+          west = shiftMin;
+          east = shiftMax;
+        }
+        const bounds = new maplibregl.LngLatBounds([west, minLat], [east, maxLat]);
+        map.fitBounds(bounds, { padding: 60, maxZoom: 7, duration: 1200 });
+        return true;
+      };
+
       map.on('click', (e) => {
+        // 世界表示（塗りズーム未満）でのタップは、まずその国へ寄せる（海上なら通常処理へ）。
+        if (map.getZoom() < MESH_MIN_ZOOM && flyToCountryAt(e.point)) return;
         // デバッグの消しモード：クリックしたセルの塗りを消す（現地・となり問わず）。
         if (eraseModeRef.current) {
           if (map.getZoom() < MESH_MIN_ZOOM) {
@@ -2784,6 +2911,19 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           const picked = pickFeatureAt(e);
           if (!picked) return;
           doBulkDebugPaint(picked.id);
+          return;
+        }
+        // なぞり塗り中はタップ（スワイプせず1点だけ触れた場合）でもそのセルを塗る。
+        if (paintModeRef.current === 'nazori') {
+          if (map.getZoom() < MESH_MIN_ZOOM) {
+            showToast(tRef.current('zoomToPaint'));
+            return;
+          }
+          if (!userIdRef.current) {
+            showToast(tRef.current('needLoginPaint'));
+            return;
+          }
+          nazoriPaintAt(e);
           return;
         }
         // となり塗り（マウスでの塗り）はとなり塗りモード時のみ。
@@ -3627,6 +3767,19 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           >
             {t('modeTonari')}
           </button>
+          <button
+            type="button"
+            aria-pressed={paintMode === 'nazori'}
+            onClick={() => setPaintMode('nazori')}
+            className={`px-3 py-2 transition-colors ${
+              paintMode === 'nazori'
+                ? 'text-white'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+            style={paintMode === 'nazori' ? { background: COLOR_MANUAL } : undefined}
+          >
+            {t('modeNazori')}
+          </button>
         </div>
         {/* 塗りポイント残高（赤字・白ふち）。モード切り替えの下に表示。 */}
         {userId && (
@@ -3638,6 +3791,12 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             }}
           >
             {t('paintPoints', points as never, maxPoints as never)}
+          </div>
+        )}
+        {/* なぞり塗り中の注意点（塗りポイント表示の下・なぞり塗りモード時のみ）。 */}
+        {paintMode === 'nazori' && (
+          <div className="max-w-[15rem] whitespace-pre-line rounded-lg bg-white/90 px-3 py-2 text-xs font-medium leading-relaxed text-gray-700 shadow">
+            {t('nazoriHint')}
           </div>
         )}
       </div>
@@ -3743,7 +3902,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           className="absolute top-4 right-4 z-10 text-white rounded-lg px-3 py-2 shadow text-xs font-medium flex items-center gap-1.5 hover:opacity-90"
         >
           <span className="inline-block w-2.5 h-2.5 rounded-full bg-white" />
-          なぞり塗りモード（マウスオーバーで塗る / タップで解除）
+          デバッグ無料なぞり塗り（マウスオーバーで塗る / タップで解除）
         </button>
       )}
       {toast && (
@@ -3996,7 +4155,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                   setDebugOpen(false);
                 }}
               >
-                {hoverPaintMode ? 'なぞり塗りを解除する' : 'マウスオーバーで塗るモード'}
+                {hoverPaintMode ? 'デバッグ無料なぞり塗りを解除する' : 'デバッグ無料なぞり塗り（マウスオーバー）'}
               </button>
               <button
                 type="button"
@@ -4281,45 +4440,6 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               </div>
             </div>
 
-            {/* 制覇コレクション（100%塗った市区町村・完全制覇した都道府県） */}
-            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
-              <div className="mb-1.5 flex items-baseline justify-between">
-                <span className="text-sm font-bold text-amber-800">🏆 {t('conquered')}</span>
-                <span className="text-sm font-black text-amber-700 tabular-nums">
-                  {stats ? stats.conqueredMunis.length : conqueredCount}
-                </span>
-              </div>
-              {stats && stats.conqueredPrefs.length > 0 && (
-                <div className="mb-1.5">
-                  <div className="text-[11px] text-amber-700/80">{t('conqueredPref')}</div>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {stats.conqueredPrefs.map((p) => (
-                      <span
-                        key={p}
-                        className="rounded-full bg-amber-400 px-2 py-0.5 text-[11px] font-bold text-amber-900"
-                      >
-                        👑 {lang === 'en' ? prefRomaji(p) : p}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {stats && stats.conqueredMunis.length > 0 ? (
-                <div className="flex flex-wrap gap-1">
-                  {stats.conqueredMunis.map((m, i) => (
-                    <span
-                      key={`${m}-${i}`}
-                      className="rounded-md bg-white px-1.5 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200"
-                    >
-                      {m}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-[11px] text-amber-700/70">{t('noConquered')}</p>
-              )}
-            </div>
-
             {/* 都道府県ごとの塗り％（多い順） */}
             <h3 className="text-xs font-semibold text-gray-600 mb-2">{t('perPrefTitle')}</h3>
             {stats && stats.prefs.length > 0 ? (
@@ -4364,6 +4484,45 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                 {count === 0 ? t('noPainted') : t('calcBreakdown')}
               </p>
             )}
+
+            {/* 制覇コレクション（100%塗った市区町村・完全制覇した都道府県）。一番下に表示する。 */}
+            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <span className="text-sm font-bold text-amber-800">🏆 {t('conquered')}</span>
+                <span className="text-sm font-black text-amber-700 tabular-nums">
+                  {stats ? stats.conqueredMunis.length : conqueredCount}
+                </span>
+              </div>
+              {stats && stats.conqueredPrefs.length > 0 && (
+                <div className="mb-1.5">
+                  <div className="text-[11px] text-amber-700/80">{t('conqueredPref')}</div>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {stats.conqueredPrefs.map((p) => (
+                      <span
+                        key={p}
+                        className="rounded-full bg-amber-400 px-2 py-0.5 text-[11px] font-bold text-amber-900"
+                      >
+                        👑 {lang === 'en' ? prefRomaji(p) : p}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {stats && stats.conqueredMunis.length > 0 ? (
+                <div className="flex flex-wrap gap-1">
+                  {stats.conqueredMunis.map((m, i) => (
+                    <span
+                      key={`${m}-${i}`}
+                      className="rounded-md bg-white px-1.5 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200"
+                    >
+                      {m}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[11px] text-amber-700/70">{t('noConquered')}</p>
+              )}
+            </div>
               </>
             )}
 

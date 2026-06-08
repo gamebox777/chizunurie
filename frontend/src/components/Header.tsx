@@ -6,6 +6,7 @@ import { useLocale } from '@/lib/i18n';
 import AuthModal from './AuthModal';
 import NicknameModal from './NicknameModal';
 import SettingsMenu from './SettingsMenu';
+import ShareButton from './ShareButton';
 
 type ModalTab = 'login' | 'register';
 
@@ -26,6 +27,8 @@ export default function Header({ hoverAddress = '' }: HeaderProps) {
         <span className="flex-1 text-sm text-gray-600 truncate min-w-0" title={hoverAddress}>
           {hoverAddress}
         </span>
+
+        <ShareButton />
 
         {!isPending && (
           session ? (

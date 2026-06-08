@@ -13,7 +13,13 @@ import {
   type BgmTrack,
 } from '@/lib/sound';
 import { isHapticsEnabled, setHapticsEnabled, isHapticsSupported } from '@/lib/haptics';
-import { isBasemapEnabled, setBasemapEnabled } from '@/lib/basemap';
+import {
+  isBasemapEnabled,
+  setBasemapEnabled,
+  getBasemapOpacity,
+  setBasemapOpacity,
+  DEFAULT_BASEMAP_OPACITY,
+} from '@/lib/basemap';
 import { isGpsAddressEnabled, setGpsAddressEnabled } from '@/lib/gpsAddress';
 import { hydrateSettings, pushSettings } from '@/lib/userSettings';
 
@@ -42,6 +48,8 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
   const [hapticsSupported, setHapticsSupported] = useState(false);
   // 地理院「標準地図」を薄く重ねるオーバーレイ（既定 ON）。
   const [basemapOn, setBasemapOn] = useState(true);
+  // 絵付きの地図（ラスター）の不透明度（0〜1・既定 0.5）。スライダーで調整。
+  const [basemapOpacity, setBasemapOpacityState] = useState(DEFAULT_BASEMAP_OPACITY);
   // 現在地の住所ラベル表示（既定 ON）。
   const [gpsAddressOn, setGpsAddressOn] = useState(true);
   // localStorage 由来の現在値をローカル state に反映する（即描画用）。
@@ -50,6 +58,7 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
     setTrack(getBgmTrack());
     setHapticsOn(isHapticsEnabled());
     setBasemapOn(isBasemapEnabled());
+    setBasemapOpacityState(getBasemapOpacity());
     setGpsAddressOn(isGpsAddressEnabled());
   };
   useEffect(() => {
@@ -76,6 +85,11 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
     const next = !basemapOn;
     setBasemapOn(next);
     setBasemapEnabled(next); // Map.tsx が即座にレイヤー表示を切り替える
+    pushSettings(lang);
+  };
+  const changeBasemapOpacity = (v: number) => {
+    setBasemapOpacityState(v);
+    setBasemapOpacity(v); // Map.tsx が即座にラスターの raster-opacity を更新する
     pushSettings(lang);
   };
   const toggleGpsAddress = () => {
@@ -205,6 +219,23 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
                   />
                 </span>
               </button>
+              {/* 絵付きの地図（ラスター）の濃さ（不透明度）スライダー */}
+              <div className="flex items-center gap-2 text-sm text-gray-700">
+                <span className="whitespace-nowrap">{t('baseMapOpacity')}</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={Math.round(basemapOpacity * 100)}
+                  onChange={(e) => changeBasemapOpacity(Number(e.target.value) / 100)}
+                  aria-label={t('baseMapOpacity')}
+                  className="flex-1 accent-blue-500"
+                />
+                <span className="w-9 text-right tabular-nums text-gray-500">
+                  {Math.round(basemapOpacity * 100)}%
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={toggleGpsAddress}

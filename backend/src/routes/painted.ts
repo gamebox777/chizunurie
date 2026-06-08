@@ -13,7 +13,6 @@ import {
   ensurePoints,
   spendPoints,
 } from "../lib/points.js";
-import { clientInfo } from "../lib/userlog.js";
 
 export const paintedRouter = new Hono();
 
@@ -114,11 +113,9 @@ paintedRouter.post("/", async (c) => {
   }
 
   const now = Date.now();
-  // 塗った時点の文脈（新規 insert のときだけ保存）。ip/ua はサーバー側で取得。
-  const { ipAddress, userAgent } = clientInfo(c);
+  // 塗った時点の文脈（新規 insert のときだけ保存）。
+  // ip/ua はデータ量削減のため塗りログには保存しない。
   const context = {
-    ipAddress,
-    userAgent,
     lat: parsed.lat,
     lng: parsed.lng,
     municipality: parsed.municipality,

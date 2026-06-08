@@ -90,8 +90,6 @@ export default function PaintedLogPanel() {
               <th className="px-3 py-2 font-medium">国</th>
               <th className="px-3 py-2 font-medium">市区町村</th>
               <th className="px-3 py-2 font-medium">緯度経度</th>
-              <th className="px-3 py-2 font-medium">IP</th>
-              <th className="px-3 py-2 font-medium">UserAgent</th>
             </tr>
           </thead>
           <tbody>
@@ -113,17 +111,11 @@ export default function PaintedLogPanel() {
                 <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap tabular-nums">
                   {formatLatLng(p.lat, p.lng)}
                 </td>
-                <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">
-                  {p.ipAddress ?? '-'}
-                </td>
-                <td className="px-3 py-2 text-xs text-gray-400 break-all">
-                  {p.userAgent ?? '-'}
-                </td>
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-3 py-6 text-center text-gray-400">
+                <td colSpan={7} className="px-3 py-6 text-center text-gray-400">
                   塗りログがありません
                 </td>
               </tr>

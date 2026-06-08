@@ -3,8 +3,15 @@ import type { Context } from "hono";
 import { and, desc, eq, lt, sql } from "drizzle-orm";
 import { getSessionUser, isDeveloper } from "../lib/auth.js";
 import { db } from "../db/index.js";
-import { paintedRegions, user, userLogs, userPoints } from "../db/schema.js";
+import {
+  paintedRegions,
+  siteVisits,
+  user,
+  userLogs,
+  userPoints,
+} from "../db/schema.js";
 import { ensurePoints } from "../lib/points.js";
+import { jstDateKey } from "../lib/time.js";
 
 // 開発者専用の管理画面（フロントの /admin）向け API。
 // すべてのルートで isDeveloper を要求する。Next.js の rewrite 経由で
@@ -103,6 +110,42 @@ adminRouter.get("/stats", async (c) => {
   return c.json({
     users: { total: users?.total ?? 0, byRole },
     painted: { total, gps, manual: total - gps },
+  });
+});
+
+// サイトへのアクセス数（site_visits）の集計。累計・今日・直近の日別件数を返す。
+adminRouter.get("/access-stats", async (c) => {
+  const guard = await requireDeveloper(c);
+  if (guard) return guard;
+
+  // 直近30日ぶんの日別件数（新しい順）。
+  const daily = await db
+    .select({ date: siteVisits.date, count: siteVisits.count })
+    .from(siteVisits)
+    .orderBy(desc(siteVisits.date))
+    .limit(30);
+
+  // 全期間の累計。
+  const [agg] = await db
+    .select({
+      total: sql<number>`coalesce(sum(${siteVisits.count}), 0)::int`,
+    })
+    .from(siteVisits);
+
+  const today = jstDateKey();
+  const todayCount = daily.find((d) => d.date === today)?.count ?? 0;
+  // 直近7日（今日を含む）の合計。日付文字列 "YYYY-MM-DD" の辞書順比較で絞る
+  // （アクセスが無い日は行が無いので件数では数えられないため日付で判定する）。
+  const since7 = jstDateKey(Date.now() - 6 * 86400000);
+  const last7 = daily
+    .filter((d) => d.date >= since7)
+    .reduce((s, d) => s + d.count, 0);
+
+  return c.json({
+    total: agg?.total ?? 0,
+    today: todayCount,
+    last7,
+    daily, // 新しい順・最大30件
   });
 });
 
@@ -328,8 +371,6 @@ adminRouter.get("/painted", async (c) => {
       sourceLayer: paintedRegions.sourceLayer,
       keyCode: paintedRegions.keyCode,
       mode: paintedRegions.mode,
-      ipAddress: paintedRegions.ipAddress,
-      userAgent: paintedRegions.userAgent,
       lat: paintedRegions.lat,
       lng: paintedRegions.lng,
       municipality: paintedRegions.municipality,

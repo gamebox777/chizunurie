@@ -91,9 +91,8 @@ export const paintedRegions = pgTable(
     // 表示色はクライアントが mode から決める（COLOR_GPS / COLOR_MANUAL）ので色は保存しない。
     mode: text("mode").notNull().default("manual"),
     // 塗った時点の文脈（INSERT 時のみ書き込む。再POST・GPS昇格では更新しない）。
-    // ip/ua はサーバー側で取得。lat/lng はセル中心、municipality は "PREF|CITY"。
-    ipAddress: text("ip_address"),
-    userAgent: text("user_agent"),
+    // lat/lng はセル中心、municipality は "PREF|CITY"。
+    // ip/ua は塗りログのデータ量削減のため保存しない（user_logs 側にのみ残す）。
     lat: doublePrecision("lat"),
     lng: doublePrecision("lng"),
     municipality: text("municipality"),
@@ -138,6 +137,15 @@ export const userLogs = pgTable(
   },
   (t) => [index("user_logs_user_created_idx").on(t.userId, t.createdAt)]
 );
+
+// サイトへのアクセス数（ページ表示回数）を日別に数える集計テーブル。
+// 1日1行・アクセスのたびに count を +1（upsert で増分）するので行が増えず軽量。
+// 「誰が」ではなく「何回」を見る用途なので未ログインの訪問も数え、userId は持たない。
+// date は JST の "YYYY-MM-DD"（jstDateKey で生成）。
+export const siteVisits = pgTable("site_visits", {
+  date: text("date").primaryKey(),
+  count: integer("count").notNull().default(0),
+});
 
 // 塗りポイント残高＋ユーザーレベル。GPS（実際の移動）は無料だが、それ以外の隣接塗り／
 // 離れた場所の塗りは塗りポイントを消費する。ポイントは時間経過で回復する（points.ts 参照）。

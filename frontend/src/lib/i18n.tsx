@@ -27,6 +27,10 @@ const ja: Dict = {
   appTitle: 'ちずぬりえ',
   login: 'ログイン',
   register: '新規登録',
+  shareOnX: 'Xでシェア',
+  shareText: '歩いた街が色になる白地図ゲーム「ちずぬりえ」🗾📍 GPSで現在地を塗って、市区町村→都道府県と"制覇"していくやつ。ブラウザですぐ遊べます👇',
+  copyLink: 'リンクをコピー',
+  linkCopied: 'コピーしました',
 
   // SettingsMenu
   settings: '設定',
@@ -48,6 +52,7 @@ const ja: Dict = {
   vibration: 'バイブ',
   mapDisplay: '地図表示',
   baseMapOverlay: '地図を薄く表示',
+  baseMapOpacity: '地図の濃さ',
   gpsAddressLabel: '現在地の住所を表示',
 
   // AuthModal
@@ -84,6 +89,9 @@ const ja: Dict = {
   comingSoonBody: 'この地域はまだ開発中です',
   modeGenchi: '現地塗り',
   modeTonari: 'となり塗り',
+  modeNazori: 'なぞり塗り',
+  nazoriHint:
+    'なぞり塗り中\n・隣接した場所だけ塗れます\n・1マスにつき塗りポイントを1消費します\n・マウスオーバー（スマホは画面をスワイプ）で塗れます\n・地図はスクロールしません',
 
   // Map: ポイント／レベルパネル
   expLabel: (a: number, b: number) => `経験値 ${a} / ${b}`,
@@ -160,7 +168,7 @@ const ja: Dict = {
   notEnoughPoints: '塗りポイントが足りません',
   notEnoughPointsLeft: (n: number) => `塗りポイントが足りません（残り ${n}）`,
   foreignBulkHint: '🌏 外国は10×10まとめ塗り！',
-  foreignPainted: (n: number) => `外国を${n}マスまとめ塗り！`,
+  foreignPainted: (place: string, n: number) => `${place || '外国'}を${n}マスまとめ塗り！`,
   expGained: (n: number) => `経験値 +${n} 🎉`,
   expRevisit: (n: number) => `再訪ボーナス 経験値 +${n} 🎉`,
   expFloat: (n: number) => `経験値+${n}`,
@@ -193,6 +201,10 @@ const en: Dict = {
   appTitle: 'Chizunurie',
   login: 'Log in',
   register: 'Sign up',
+  shareOnX: 'Share on X',
+  shareText: 'Chizunurie — a paint-the-map game where the towns you walk turn into color 🗾📍 Use GPS to paint where you are and conquer Japan, city by city. Play free in your browser 👇',
+  copyLink: 'Copy link',
+  linkCopied: 'Copied!',
 
   // SettingsMenu
   settings: 'Settings',
@@ -214,6 +226,7 @@ const en: Dict = {
   vibration: 'Vibration',
   mapDisplay: 'Map display',
   baseMapOverlay: 'Show map faintly',
+  baseMapOpacity: 'Map intensity',
   gpsAddressLabel: 'Show current address',
 
   // AuthModal
@@ -250,6 +263,9 @@ const en: Dict = {
   comingSoonBody: 'This area is still under development',
   modeGenchi: 'On-site',
   modeTonari: 'Adjacent',
+  modeNazori: 'Trace',
+  nazoriHint:
+    'Trace painting\n・Only adjacent cells can be painted\n・Each cell costs 1 paint point\n・Paint by hovering (swipe on the screen on mobile)\n・The map will not scroll',
 
   // Map: points / level panel
   expLabel: (a: number, b: number) => `EXP ${a} / ${b}`,
@@ -327,7 +343,8 @@ const en: Dict = {
   notEnoughPoints: 'Not enough paint points',
   notEnoughPointsLeft: (n: number) => `Not enough paint points (${n} left)`,
   foreignBulkHint: '🌏 Abroad paints 10×10 at once!',
-  foreignPainted: (n: number) => `Painted ${n} cells abroad at once!`,
+  foreignPainted: (place: string, n: number) =>
+    `Painted ${n} cells at ${place || 'abroad'} at once!`,
   expGained: (n: number) => `EXP +${n} 🎉`,
   expRevisit: (n: number) => `Revisit bonus  EXP +${n} 🎉`,
   expFloat: (n: number) => `+${n} EXP`,

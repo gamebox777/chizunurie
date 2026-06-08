@@ -13,9 +13,33 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const SITE_URL = "https://chizunurie.gamebox777.org";
+const SITE_NAME = "ちずぬりえ";
+const SITE_DESC = "歩いた街が色になる、GPS白地図ぬりつぶしゲーム";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "地図ぬりえ",
-  description: "地域を塗っていく白地図ゲーム",
+  description: SITE_DESC,
+  icons: {
+    icon: "/promo/icon.png",
+    apple: "/promo/icon.png",
+  },
+  openGraph: {
+    type: "website",
+    url: SITE_URL,
+    siteName: SITE_NAME,
+    title: "ちずぬりえ｜歩いて、塗る。",
+    description: SITE_DESC,
+    locale: "ja_JP",
+    images: [{ url: "/promo/promo-ogp.png", width: 1200, height: 630, alt: SITE_NAME }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "ちずぬりえ｜歩いて、塗る。",
+    description: SITE_DESC,
+    images: ["/promo/promo-ogp.png"],
+  },
 };
 
 // GPT のリワード広告は「モバイル最適化ページ（ズーム中立）」でのみ配信されるため、

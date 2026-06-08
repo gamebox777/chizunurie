@@ -36,6 +36,20 @@
       "when": 1780904138962,
       "tag": "0004_serious_garia",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1780911166517,
+      "tag": "0005_watery_katie_power",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1780914795180,
+      "tag": "0006_glorious_the_hood",
+      "breakpoints": true
     }
   ]
 }

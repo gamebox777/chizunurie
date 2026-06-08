@@ -11,7 +11,12 @@ import {
   type BgmTrack,
 } from './sound';
 import { isHapticsEnabled, setHapticsEnabled } from './haptics';
-import { isBasemapEnabled, setBasemapEnabled } from './basemap';
+import {
+  isBasemapEnabled,
+  setBasemapEnabled,
+  getBasemapOpacity,
+  setBasemapOpacity,
+} from './basemap';
 import { isGpsAddressEnabled, setGpsAddressEnabled } from './gpsAddress';
 import type { Lang } from './i18n';
 import { fetchMySettings, saveMySettings } from './userApi';
@@ -21,6 +26,7 @@ export type UserSettings = {
   bgm?: BgmTrack; // BGM 曲番号（0=OFF）
   haptics?: boolean; // バイブ ON/OFF
   basemap?: boolean; // 地理院オーバーレイ ON/OFF
+  basemapOpacity?: number; // 絵付きの地図（ラスター）の不透明度（0〜1）
   gpsAddress?: boolean; // 現在地の住所ラベル ON/OFF
   lang?: Lang; // 表示言語
 };
@@ -32,6 +38,7 @@ export function collectSettings(lang: Lang): UserSettings {
     bgm: getBgmTrack(),
     haptics: isHapticsEnabled(),
     basemap: isBasemapEnabled(),
+    basemapOpacity: getBasemapOpacity(),
     gpsAddress: isGpsAddressEnabled(),
     lang,
   };
@@ -44,6 +51,7 @@ export function applyLocalSettings(s: UserSettings): void {
   if (s.bgm === 0 || s.bgm === 1 || s.bgm === 2 || s.bgm === 3) setBgmTrack(s.bgm);
   if (typeof s.haptics === 'boolean') setHapticsEnabled(s.haptics);
   if (typeof s.basemap === 'boolean') setBasemapEnabled(s.basemap);
+  if (typeof s.basemapOpacity === 'number') setBasemapOpacity(s.basemapOpacity);
   if (typeof s.gpsAddress === 'boolean') setGpsAddressEnabled(s.gpsAddress);
 }
 
