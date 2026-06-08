@@ -43,6 +43,10 @@ export const metadata: Metadata = {
     description: SITE_DESC,
     images: ["/promo/promo-ogp.png"],
   },
+  // AdSense サイト所有権の確認用メタタグ
+  other: {
+    "google-adsense-account": "ca-pub-3466778617044617",
+  },
 };
 
 // GPT のリワード広告は「モバイル最適化ページ（ズーム中立）」でのみ配信されるため、
