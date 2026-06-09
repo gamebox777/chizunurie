@@ -18,6 +18,12 @@ export type Lang = 'ja' | 'en';
 
 const STORAGE_KEY = 'chizunurie:lang';
 
+// ブラウザタブのタイトル（layout.tsx の静的 title と一致させる・言語で切替）
+const DOC_TITLE: Record<Lang, string> = {
+  ja: 'ちずぬりえ',
+  en: 'Color the Map',
+};
+
 // 各エントリは「文字列」または「引数を受け取って文字列を返す関数」。
 type Entry = string | ((...args: never[]) => string);
 type Dict = Record<string, Entry>;
@@ -94,11 +100,8 @@ const ja: Dict = {
   comingSoonBody: 'この地域はまだ開発中です',
   modeGenchi: '現地塗り',
   modeTonari: 'となり塗り',
-  modeNazori: 'なぞり塗り',
-  nazoriHint:
-    'なぞり塗り中\n・隣接した場所だけ塗れます\n・1マスにつき塗りポイントを1消費します\n・マウスオーバー（スマホは画面をスワイプ）で塗れます\n・地図はスクロールしません',
   tonariHint:
-    'となり塗り中\n・クリックで1マス、ドラッグ（スマホはスワイプ）で連続して塗れます\n・隣接した場所は塗りポイント1、離れた場所は10消費（確認あり）\n・ドラッグ中は隣接した場所だけ塗ります\n・地図はスクロールしません（移動は移動モードで）',
+    'となり塗り中\n・クリックで1マス、隣接した場所からドラッグ（スマホはスワイプ）で連続して塗れます\n・隣接した場所は塗りポイント1、離れた場所は10消費（確認あり）\n・となりじゃない場所をドラッグすると地図が動きます',
 
   // Map: ポイント／レベルパネル
   expLabel: (a: number, b: number) => `経験値 ${a} / ${b}`,
@@ -300,11 +303,8 @@ const en: Dict = {
   comingSoonBody: 'This area is still under development',
   modeGenchi: 'On-site',
   modeTonari: 'Adjacent',
-  modeNazori: 'Trace',
-  nazoriHint:
-    'Trace painting\n・Only adjacent cells can be painted\n・Each cell costs 1 paint point\n・Paint by hovering (swipe on the screen on mobile)\n・The map will not scroll',
   tonariHint:
-    'Adjacent painting\n・Click for one cell, or drag (swipe on mobile) to paint continuously\n・Adjacent cells cost 1 point; far cells cost 10 (with confirmation)\n・While dragging, only adjacent cells are painted\n・The map will not scroll (use move mode to pan)',
+    'Adjacent painting\n・Click for one cell, or drag (swipe on mobile) from an adjacent cell to paint continuously\n・Adjacent cells cost 1 point; far cells cost 10 (with confirmation)\n・Dragging from a non-adjacent spot scrolls the map',
 
   // Map: points / level panel
   expLabel: (a: number, b: number) => `EXP ${a} / ${b}`,
@@ -462,6 +462,7 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
     if (saved === 'ja' || saved === 'en') {
       setLangState(saved);
       document.documentElement.lang = saved;
+      document.title = DOC_TITLE[saved];
     }
   }, []);
 
@@ -473,6 +474,7 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
       // localStorage 不可（プライベートモード等）でも言語切替自体は機能させる
     }
     document.documentElement.lang = l;
+    document.title = DOC_TITLE[l];
   }, []);
 
   const t = useCallback<TFunc>(

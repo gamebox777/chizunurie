@@ -75,7 +75,9 @@ export type GameSettings = {
 // サーバーに保存されたゲーム共通設定を取得する。開発者でなければ／失敗時は空オブジェクト。
 export async function fetchGameSettings(): Promise<GameSettings> {
   try {
-    const res = await fetch(`${SETTINGS_API}`, { credentials: 'include' });
+    // リロードのたびに最新の設定をサーバーから取り直す（ブラウザの HTTP キャッシュで古い値が
+    // 返らないように no-store を明示する）。
+    const res = await fetch(`${SETTINGS_API}`, { credentials: 'include', cache: 'no-store' });
     if (!res.ok) return {};
     const data = (await res.json()) as { settings?: GameSettings };
     return data.settings ?? {};
@@ -91,7 +93,9 @@ export async function fetchGameSettings(): Promise<GameSettings> {
 // 出すたびに DB を読みにこないようにする。失敗時は空オブジェクト。
 export async function fetchPublicGameSettings(): Promise<GameSettings> {
   try {
-    const res = await fetch(`${SETTINGS_API}/public`);
+    // 波紋などの共通設定は管理画面で変更されるので、リロードのたびに最新を取り直す（HTTP
+    // キャッシュで古い波紋設定が返らないように no-store を明示する）。
+    const res = await fetch(`${SETTINGS_API}/public`, { cache: 'no-store' });
     if (!res.ok) return {};
     const data = (await res.json()) as { settings?: GameSettings };
     return data.settings ?? {};

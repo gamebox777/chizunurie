@@ -1040,10 +1040,10 @@ export default function MapView() {
   const addressMarkerRef = useRef<maplibregl.Marker | null>(null); // 現在地の住所ラベル
   const gpsAddressEnabledRef = useRef(true); // 現在地の住所ラベル表示 ON/OFF（設定・既定 ON）
   // 塗り方の操作モード。genchi=現地塗り（GPSの現在地のみ自動で塗る）/
-  // tonari=となり塗り（マウスで隣接セルを塗れる）/ nazori=なぞり塗り（マウスオーバー・
-  // スワイプで隣接セルを連続塗り・地図はスクロールしない）。GPS自動塗りは全モード共通。
+  // tonari=となり塗り（マウスで隣接セルを塗れる・ドラッグ／スワイプで連続塗り・
+  // 地図はスクロールしない）。GPS自動塗りは全モード共通。
   // map init effect 内のクリックハンドラから同期参照するため ref も持つ。
-  type PaintOpMode = 'genchi' | 'tonari' | 'nazori';
+  type PaintOpMode = 'genchi' | 'tonari';
   const [paintMode, setPaintMode] = useState<PaintOpMode>('genchi');
   const paintModeRef = useRef<PaintOpMode>('genchi');
   // 地名検索ダイアログ
@@ -1623,19 +1623,16 @@ export default function MapView() {
 
   useEffect(() => {
     paintModeRef.current = paintMode;
-    // 現在地の住所ラベルは現地塗りモード専用。となり塗り・なぞり塗りに切り替えたら消す。
+    // 現在地の住所ラベルは現地塗りモード専用。となり塗りに切り替えたら消す。
     if (paintMode !== 'genchi') {
       addressMarkerRef.current?.remove();
       addressMarkerRef.current = null;
     }
-    // なぞり塗り・となり塗り中は地図をスクロールさせない（ドラッグ＝塗り操作にする）。
-    // 1本指パン（マウスドラッグ＋タッチパン）を止める。ピンチズームは残す。パンは
-    // 「移動モード（十字キー）」で行う。現地塗りはドラッグ＝パンのまま。
+    // dragPan は基本どのモードでも有効。となり塗りでは「塗れる場所（隣接セル）」から
+    // 始めたドラッグだけ mousedown/touchstart で一時的に dragPan を無効化して連続塗りにし、
+    // となりじゃない場所から始めたドラッグはそのままマップスクロールにする。
     const map = mapRef.current;
-    if (map) {
-      if (paintMode === 'nazori' || paintMode === 'tonari') map.dragPan.disable();
-      else map.dragPan.enable();
-    }
+    if (map) map.dragPan.enable();
   }, [paintMode]);
 
   // ログイン時に塗りポイント残高を取得。ログアウト時は 0 にリセット。
@@ -2546,7 +2543,7 @@ export default function MapView() {
         source: 'mesh-hover',
         minzoom: MESH_MIN_ZOOM,
         // 'hl' プロパティ（setHover が付与）で色を切り替える。となり塗りで隣接して塗れる時は
-        // 緑、離れていて遠距離塗りになる時は赤、それ以外（現地・なぞり・消す・通常ホバー）は黒。
+        // 緑、離れていて遠距離塗りになる時は赤、それ以外（現地・消す・通常ホバー）は黒。
         paint: {
           'fill-color': [
             'match',
@@ -2691,7 +2688,7 @@ export default function MapView() {
       const hoverAddrCache = revGeoCacheRef.current;
       let hoverGeocodeTimer: number | null = null;
       let hoverId: number | null = null;
-      // となり塗りでマウス左ボタンを押したままドラッグしている間 true。なぞり塗りと同じく
+      // となり塗りでマウス左ボタンを押したままドラッグしている間 true。
       // ドラッグで通った隣接セルを連続で塗る（dragPan は無効化済み）。
       let tonariDragging = false;
 
@@ -2782,17 +2779,14 @@ export default function MapView() {
               const cRegion = cSt ? { key: cSt.key, a3: cSt.a3 } : null;
               const result = commitLocalPaint(id, 'manual', cMuni?.key ?? null, cRegion, cMuni?.address ?? cSt?.address ?? '', true);
               if (result !== 'skip') syncPaint('POST', id, 'manual', cRegion);
-            } else if (paintModeRef.current === 'nazori' && !eraseModeRef.current) {
-              // なぞり塗り：マウスオーバーで隣接セルを 1pt 消費しながら塗る。
-              nazoriPaintAt(e);
             } else if (
               paintModeRef.current === 'tonari' &&
               tonariDragging &&
               !eraseModeRef.current
             ) {
-              // となり塗りのドラッグ連続塗り：左ボタンを押したまま通った隣接セルを塗る。
-              // なぞり塗りと同じ判定（隣接のみ・1pt・非隣接や残高不足は静かにスキップ）。
-              nazoriPaintAt(e);
+              // となり塗りのドラッグ連続塗り：左ボタンを押したまま通った隣接セルを塗る
+              // （隣接のみ・1pt・非隣接や残高不足は静かにスキップ）。
+              tonariPaintAt(e);
             }
             return;
           }
@@ -2804,26 +2798,31 @@ export default function MapView() {
       map.on('mouseleave', () => {
         clearHover();
         tonariDragging = false;
+        if (paintModeRef.current === 'tonari') map.dragPan.enable();
         map.getCanvas().style.cursor = '';
       });
 
-      // となり塗りのドラッグ塗り開始。左ボタン押下で開始セルを1つ塗り（取りこぼし防止）、
-      // 以降は mousemove が通ったセルを連続で塗る。デバッグのホバー塗り中は対象外。
-      // 開始セルの塗りは nazoriPaintAt 任せ（隣接のみ・非隣接は塗らない）なので、非隣接セルの
-      // 単発クリックは従来どおり click ハンドラの確認ダイアログ（10pt）に回る。
+      // となり塗りのドラッグ塗り開始。左ボタン押下で開始セルが「塗れる場所（隣接 or 最初の1マス）」
+      // なら、そのドラッグだけ dragPan を無効化して連続塗りにする（取りこぼし防止に開始セルも塗る）。
+      // となりじゃない場所から始めたら塗らず dragPan は有効のまま＝マップスクロールになる
+      // （モードは となり塗りのまま）。非隣接セルの単発クリックは従来どおり click ハンドラの
+      // 確認ダイアログ（10pt）に回る。デバッグのホバー塗り中は対象外。
       map.on('mousedown', (e) => {
         if ((e.originalEvent as MouseEvent).button !== 0) return; // 左ボタンのみ
         if (
           paintModeRef.current === 'tonari' &&
           !eraseModeRef.current &&
-          !hoverPaintModeRef.current
+          !hoverPaintModeRef.current &&
+          tonariPaintAt(e) // 塗れた＝隣接セル → ドラッグ連続塗りに入る
         ) {
           tonariDragging = true;
-          nazoriPaintAt(e);
+          map.dragPan.disable();
         }
       });
       map.on('mouseup', () => {
         tonariDragging = false;
+        // 次のジェスチャに備えて dragPan を戻す（隣接から始めれば mousedown で再び無効化する）。
+        if (paintModeRef.current === 'tonari') map.dragPan.enable();
       });
 
       const syncPaint = (
@@ -2868,7 +2867,7 @@ export default function MapView() {
           body: JSON.stringify({ sourceLayer: 'mesh', keyCode: String(id), mode, ...(bulk ? { bulk: true } : {}), ...(subIndex !== null ? { subIndex } : {}), ...ctx }),
         })
           .then(async (res) => {
-            // POST（GPS塗り・なぞり塗り）はサーバーが経験値・レベルを返す。反映してレベルアップ演出も出す。
+            // POST（GPS塗り・となり塗り）はサーバーが経験値・レベルを返す。反映してレベルアップ演出も出す。
             if (method !== 'POST' || !res.ok) return;
             // 外国まとめ塗りの残りセル（bulk）は無料・経験値なし。サーバーは ensurePoints の
             // 現在残高を返すが、これは代表セルの spendPoints と並走し「消費前の残高」を返すことが
@@ -3146,28 +3145,44 @@ export default function MapView() {
         };
       };
 
-      // なぞり塗り：マウスオーバー／スワイプで通ったセルを連続で塗る。
+      // となり塗り：ドラッグ／スワイプで通ったセルを連続で塗る。塗れたら true を返す。
       // ・隣接した箇所しか塗れない（最初の1セルだけ自由）／・1マス COST_ADJACENT 消費。
-      // 塗れない時（未ログイン・低ズーム・海上・非隣接・塗り済み・残高不足）は静かにスキップ。
-      const nazoriPaintAt = (e: maplibregl.MapMouseEvent | maplibregl.MapTouchEvent) => {
-        if (!userIdRef.current) return;
-        if (map.getZoom() < MESH_MIN_ZOOM) return;
+      // 塗れない時（未ログイン・低ズーム・海上・非隣接・塗り済み・残高不足）は静かに false。
+      const tonariPaintAt = (e: maplibregl.MapMouseEvent | maplibregl.MapTouchEvent): boolean => {
+        if (!userIdRef.current) return false;
+        if (map.getZoom() < MESH_MIN_ZOOM) return false;
         const picked = pickFeatureAt(e as maplibregl.MapMouseEvent);
-        if (!picked) return;
+        if (!picked) return false;
         const { id, muniKey, region, address } = picked;
-        if (paintedRef.current[`mesh:${id}`]) return; // 塗り済み（gps/manual）はそのまま
+        if (paintedRef.current[`mesh:${id}`]) return false; // 塗り済み（gps/manual）はそのまま
         const isFirstPaint = Object.keys(paintedRef.current).length === 0;
-        if (!isAdjacent(id) && !isFirstPaint) return; // 隣接した箇所しか塗れない
-        if (pointsRef.current < COST_ADJACENT) return; // 残高不足は静かにスキップ
+        if (!isAdjacent(id) && !isFirstPaint) return false; // 隣接した箇所しか塗れない
+        if (pointsRef.current < COST_ADJACENT) return false; // 残高不足は静かにスキップ
         doManualPaint(id, muniKey, region, address, COST_ADJACENT);
+        return true;
       };
 
-      // スマホはスワイプ（touchmove）で塗る。なぞり塗り・となり塗り中のみ・1本指のみ
-      // （ピンチは塗らない）。となり塗りも dragPan を無効化済みなのでスワイプ＝塗りになる。
+      // スマホ：1本指スワイプ。となり塗り中のみ。touchstart の開始セルが「塗れる場所」なら
+      // dragPan を無効化して連続塗り（tonariDragging=true）にし、そうでなければ塗らず
+      // dragPan 有効のまま＝マップスクロール（→ dragstart で となり塗りを抜ける）。
+      map.on('touchstart', (e) => {
+        if (paintModeRef.current !== 'tonari') return;
+        if (eraseModeRef.current || hoverPaintModeRef.current) return;
+        if (e.points && e.points.length > 1) return; // 2本指（ピンチ）は対象外
+        if (tonariPaintAt(e)) {
+          tonariDragging = true;
+          map.dragPan.disable();
+        }
+      });
       map.on('touchmove', (e) => {
-        if (paintModeRef.current !== 'nazori' && paintModeRef.current !== 'tonari') return;
+        if (paintModeRef.current !== 'tonari') return;
         if (e.points && e.points.length > 1) return; // 2本指（ズーム）は塗り対象外
-        nazoriPaintAt(e);
+        if (!tonariDragging) return; // となり以外から始めたスワイプはスクロール（塗らない）
+        tonariPaintAt(e);
+      });
+      map.on('touchend', () => {
+        tonariDragging = false;
+        if (paintModeRef.current === 'tonari') map.dragPan.enable();
       });
 
       // クリックしたセル中心の 10×10 ブロックのうち、まだ塗っていない陸地セルだけを集める。
@@ -3323,19 +3338,6 @@ export default function MapView() {
           const picked = pickFeatureAt(e);
           if (!picked) return;
           doBulkDebugPaint(picked.id);
-          return;
-        }
-        // なぞり塗り中はタップ（スワイプせず1点だけ触れた場合）でもそのセルを塗る。
-        if (paintModeRef.current === 'nazori') {
-          if (map.getZoom() < MESH_MIN_ZOOM) {
-            showToast(tRef.current('zoomToPaint'));
-            return;
-          }
-          if (!userIdRef.current) {
-            showToast(tRef.current('needLoginPaint'));
-            return;
-          }
-          nazoriPaintAt(e);
           return;
         }
         // となり塗り（マウスでの塗り）はとなり塗りモード時のみ。
@@ -4497,19 +4499,6 @@ export default function MapView() {
           >
             {t('modeTonari')}
           </button>
-          <button
-            type="button"
-            aria-pressed={paintMode === 'nazori'}
-            onClick={() => setPaintMode('nazori')}
-            className={`px-3 py-2 transition-colors ${
-              paintMode === 'nazori'
-                ? 'text-white'
-                : 'bg-white text-gray-600 hover:bg-gray-50'
-            }`}
-            style={paintMode === 'nazori' ? { background: COLOR_MANUAL } : undefined}
-          >
-            {t('modeNazori')}
-          </button>
         </div>
         {/* 塗りポイント残高（赤字・白ふち）＋次の回復までのカウントダウン（+1まで …）。
             下地は半透明の白。モード切り替えの下に表示。 */}
@@ -4531,11 +4520,11 @@ export default function MapView() {
             )}
           </div>
         )}
-        {/* となり塗り・なぞり塗り中の注意点（塗りポイント表示の下・各モード時のみ）。
-            どちらもドラッグ＝塗りで地図はスクロールしない旨を伝える。 */}
-        {(paintMode === 'nazori' || paintMode === 'tonari') && (
+        {/* となり塗り中の注意点（塗りポイント表示の下・となり塗りモード時のみ）。
+            ドラッグ＝塗りで地図はスクロールしない旨を伝える。 */}
+        {paintMode === 'tonari' && (
           <div className="max-w-[15rem] whitespace-pre-line rounded-lg bg-white/90 px-3 py-2 text-xs font-medium leading-relaxed text-gray-700 shadow">
-            {t(paintMode === 'nazori' ? 'nazoriHint' : 'tonariHint')}
+            {t('tonariHint')}
           </div>
         )}
       </div>
