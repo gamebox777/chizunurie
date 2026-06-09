@@ -51,3 +51,8 @@ frontend/public/data/mesh.geojson
 
 # pmtiles binary (Mac/Linux 用ローカル配置: Windows版の pmtiles.exe は git 管理対象)
 /pmtiles
+
+# Capacitor（mobile/）— ネイティブプロジェクトと生成物。cap add で再生成できる
+mobile/ios/
+mobile/android/
+mobile/node_modules/

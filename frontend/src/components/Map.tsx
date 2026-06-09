@@ -22,6 +22,7 @@ import { isBasemapEnabled, onBasemapChange, getBasemapOpacity, onBasemapOpacityC
 import { isGpsAddressEnabled, onGpsAddressChange } from '@/lib/gpsAddress';
 import { getIconSize, onIconSizeChange } from '@/lib/iconSize';
 import { showRewardedAd } from '@/lib/rewardedAd';
+import { isNativeApp } from '@/lib/platform';
 import ShareIcons from './ShareIcons';
 
 const PAINT_API = '/api/backend/painted';
@@ -611,15 +612,6 @@ type RegionRankingsResponse = {
   regions: { key: string; count: number }[];
   board: RankingBoard;
 };
-
-// 塗った日時（ISO 文字列）を「YYYY/M/D HH:mm」に整形。不正値は空文字。
-function formatPaintedAt(iso: string | undefined | null): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
 
 // 塗った全セルを矩形ポリゴンの FeatureCollection に変換（低ズーム用オーバーレイ）。
 // メッシュコードから数式でセル範囲を復元するので PMTiles 側にメッシュが無い
@@ -2570,14 +2562,8 @@ export default function MapView() {
         hoverKeyRef.current = muniKey;
         hoverRegionRef.current = region?.key ?? null;
         refreshHoverStat();
-        // 自分が塗ったセルなら地名の後ろに塗った日時を添える（その場塗りは now で上書き済み）。
-        const withPaintedAt = (text: string): string => {
-          if (!paintedRef.current[`mesh:${id}`]) return text;
-          const stamp = formatPaintedAt(paintedAtRef.current.get(id));
-          return stamp ? `${text}（${stamp}）` : text;
-        };
         const cached = hoverAddrCache.get(id);
-        setHoverAddress(withPaintedAt(cached ?? address));
+        setHoverAddress(cached ?? address);
         if (hoverGeocodeTimer !== null) {
           clearTimeout(hoverGeocodeTimer);
           hoverGeocodeTimer = null;
@@ -2590,7 +2576,7 @@ export default function MapView() {
           hoverGeocodeTimer = window.setTimeout(() => {
             reverseGeocode(lng, lat).then((full) => {
               if (full) hoverAddrCache.set(id, full);
-              if (hoverId === id && full) setHoverAddress(withPaintedAt(full));
+              if (hoverId === id && full) setHoverAddress(full);
             });
           }, 250);
         }
@@ -4174,8 +4160,11 @@ export default function MapView() {
                 </div>
               </div>
               {/* 動画リワード：動画を見てそのレベルの満タン分を回復。
-                  クールダウン中・1日上限はボタンを無効化して理由を表示する。 */}
-              {(() => {
+                  クールダウン中・1日上限はボタンを無効化して理由を表示する。
+                  ネイティブアプリ（mobile/）では動画の仕組みが Web と異なるため、当面ボタンを
+                  非表示にする（ブラウザ版はそのまま表示）。出し分けは @/lib/platform の
+                  isNativeApp() で判定。 */}
+              {!isNativeApp() && (() => {
                 const cooldownLeft =
                   rewardStatus?.nextAvailableAt != null
                     ? rewardStatus.nextAvailableAt - nowTick
