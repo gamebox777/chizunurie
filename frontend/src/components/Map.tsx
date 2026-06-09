@@ -603,7 +603,7 @@ type RankingTab = RankingMetric | RankingRegionMetric;
 type RankingPeriod = 'all' | 'month' | 'week';
 type RankingEntry = { rank: number; userId: string; name: string; value: number };
 type RankingBoard = { top: RankingEntry[]; me: RankingEntry | null };
-type RankingsResponse = { boards: Record<RankingMetric, RankingBoard> };
+type RankingsResponse = { totalUsers: number; boards: Record<RankingMetric, RankingBoard> };
 // 地域別ランキング（都道府県毎・国毎）。regions はドロップダウン用の地域一覧、
 // key は実際に集計した地域（未指定時はバックエンドが最も塗られた地域を選ぶ）。
 type RegionRankingsResponse = {
@@ -4166,8 +4166,9 @@ export default function MapView() {
         </div>
         )
       )}
-      {/* zoom 表示を右下に置く（設定の歯車はヘッダー右側に戻した）。 */}
-      <div className="absolute bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+      {/* zoom 表示を右下に置く（設定の歯車はヘッダー右側に戻した）。
+          優先度は最低（マップよりは上だが、ランキング・データ詳細などのパネルより下）。 */}
+      <div className="absolute bottom-4 right-4 z-[5] flex flex-col items-end gap-2">
         <div className="bg-white rounded-lg px-3 py-2 shadow text-sm font-mono text-gray-600">
           zoom: <span ref={zoomLabelRef}>4.5</span>
         </div>
@@ -4929,7 +4930,14 @@ export default function MapView() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-bold text-gray-800">{t('rankingsTitle')}</h2>
+              <h2 className="text-base font-bold text-gray-800">
+                {t('rankingsTitle')}
+                {rankingsData && (
+                  <span className="ml-2 text-xs font-normal text-gray-400">
+                    {t('rankTotalUsers', rankingsData.totalUsers as never)}
+                  </span>
+                )}
+              </h2>
               <button
                 type="button"
                 aria-label={t('close')}
@@ -5044,9 +5052,6 @@ export default function MapView() {
                   </p>
                 );
               }
-              const meInTop = board.me
-                ? board.top.some((e) => e.userId === board.me!.userId)
-                : false;
               const medal = (rank: number) =>
                 rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : '';
               const row = (e: RankingEntry) => {
@@ -5082,12 +5087,12 @@ export default function MapView() {
                       {t('rankLevelAllOnly')}
                     </p>
                   )}
-                  <ul className="space-y-0.5">{board.top.map(row)}</ul>
-                  {board.me && !meInTop && (
-                    <div className="mt-3 border-t border-gray-100 pt-2">
+                  {board.me && (
+                    <div className="mb-2 border-b border-gray-100 pb-2">
                       <ul className="space-y-0.5">{row(board.me)}</ul>
                     </div>
                   )}
+                  <ul className="space-y-0.5">{board.top.map(row)}</ul>
                 </>
               );
                   })()}

@@ -92,6 +92,7 @@ rankingsRouter.get("/", async (c) => {
   const level = (u: RankUser) => u.level ?? 1;
 
   return c.json({
+    totalUsers: users.length,
     boards: {
       painted: buildBoard(users, painted, painted, meId),
       gps: buildBoard(users, gps, gps, meId),
