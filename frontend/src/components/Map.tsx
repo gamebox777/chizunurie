@@ -1046,6 +1046,8 @@ export default function MapView() {
   type PaintOpMode = 'genchi' | 'tonari';
   const [paintMode, setPaintMode] = useState<PaintOpMode>('genchi');
   const paintModeRef = useRef<PaintOpMode>('genchi');
+  // となり塗りの説明文の開閉。?アイコン or 説明文をもう一度押すとトグル（既定は閉じる）。
+  const [tonariHintOpen, setTonariHintOpen] = useState(false);
   // 地名検索ダイアログ
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -4499,6 +4501,18 @@ export default function MapView() {
           >
             {t('modeTonari')}
           </button>
+          {/* ?アイコン＝となり塗りの説明文の開閉トグル（となり塗りモード時のみ）。 */}
+          {paintMode === 'tonari' && (
+            <button
+              type="button"
+              aria-label={t('tonariHint')}
+              aria-pressed={tonariHintOpen}
+              onClick={() => setTonariHintOpen((v) => !v)}
+              className="flex w-8 items-center justify-center bg-white font-bold text-gray-500 hover:bg-gray-50"
+            >
+              ?
+            </button>
+          )}
         </div>
         {/* 塗りポイント残高（赤字・白ふち）＋次の回復までのカウントダウン（+1まで …）。
             下地は半透明の白。モード切り替えの下に表示。 */}
@@ -4520,12 +4534,16 @@ export default function MapView() {
             )}
           </div>
         )}
-        {/* となり塗り中の注意点（塗りポイント表示の下・となり塗りモード時のみ）。
-            ドラッグ＝塗りで地図はスクロールしない旨を伝える。 */}
-        {paintMode === 'tonari' && (
-          <div className="max-w-[15rem] whitespace-pre-line rounded-lg bg-white/90 px-3 py-2 text-xs font-medium leading-relaxed text-gray-700 shadow">
+        {/* となり塗り中の注意点（塗りポイント表示の下・となり塗りモード時かつ?アイコンを押して開いた時のみ）。
+            ドラッグ＝塗りで地図はスクロールしない旨を伝える。説明文をもう一度押すと閉じる。 */}
+        {paintMode === 'tonari' && tonariHintOpen && (
+          <button
+            type="button"
+            onClick={() => setTonariHintOpen(false)}
+            className="max-w-[15rem] cursor-pointer whitespace-pre-line rounded-lg bg-white/90 px-3 py-2 text-left text-xs font-medium leading-relaxed text-gray-700 shadow"
+          >
             {t('tonariHint')}
-          </div>
+          </button>
         )}
       </div>
 

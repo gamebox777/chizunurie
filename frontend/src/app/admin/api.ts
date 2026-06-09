@@ -124,6 +124,7 @@ export function fetchLogs(params: {
 
 export function fetchPaintedLog(params: {
   userId?: string;
+  mode?: 'gps' | 'manual';
   beforeId?: number;
   limit?: number;
 }) {

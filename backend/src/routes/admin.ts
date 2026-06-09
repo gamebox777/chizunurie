@@ -378,10 +378,14 @@ adminRouter.get("/painted", async (c) => {
 
   const { limit, beforeId } = parsePaging(c);
   const userId = c.req.query("userId");
+  // モード絞り込み（gps / manual）。それ以外の値は無視してすべて返す。
+  const mode = c.req.query("mode");
 
   // 絞り込み条件（カーソル beforeId を含まない）。総件数の集計にも使う。
   const filterConds = [];
   if (userId) filterConds.push(eq(paintedRegions.userId, userId));
+  if (mode === "gps" || mode === "manual")
+    filterConds.push(eq(paintedRegions.mode, mode));
 
   const conds = [...filterConds];
   if (beforeId !== null) conds.push(lt(paintedRegions.id, beforeId));

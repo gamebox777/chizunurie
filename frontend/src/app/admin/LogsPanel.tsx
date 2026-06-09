@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchLogs, type UserLog } from './api';
 import Pager from './Pager';
+import UserFilter from './UserFilter';
 
 const PAGE_SIZE = 100;
 
@@ -96,6 +97,7 @@ export default function LogsPanel() {
   const [logs, setLogs] = useState<UserLog[] | null>(null);
   const [error, setError] = useState('');
   const [action, setAction] = useState('');
+  const [userId, setUserId] = useState('');
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
   const [hasNext, setHasNext] = useState(false);
@@ -109,7 +111,7 @@ export default function LogsPanel() {
       setLoading(true);
       setError('');
       const beforeId = cursorsRef.current[p];
-      fetchLogs({ action: action || undefined, beforeId, limit: PAGE_SIZE })
+      fetchLogs({ userId: userId || undefined, action: action || undefined, beforeId, limit: PAGE_SIZE })
         .then((r) => {
           setLogs(r.logs);
           setTotal(r.total);
@@ -122,10 +124,10 @@ export default function LogsPanel() {
         .catch((e: Error) => setError(e.message))
         .finally(() => setLoading(false));
     },
-    [action]
+    [action, userId]
   );
 
-  // 絞り込み（action）が変わったらカーソルを捨てて先頭ページから読み直す。
+  // 絞り込み（action・ユーザー）が変わったらカーソルを捨てて先頭ページから読み直す。
   useEffect(() => {
     cursorsRef.current = [undefined];
     loadPage(0);
@@ -133,20 +135,23 @@ export default function LogsPanel() {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <label className="text-xs text-gray-600">アクション</label>
-        <select
-          value={action}
-          onChange={(e) => setAction(e.target.value)}
-          className="rounded border border-gray-300 bg-white px-2 py-1 text-sm"
-        >
-          <option value="">すべて</option>
-          {ACTION_OPTIONS.map((a) => (
-            <option key={a} value={a}>
-              {ACTION_LABEL[a]}
-            </option>
-          ))}
-        </select>
+      <div className="flex flex-wrap items-center gap-4">
+        <UserFilter userId={userId} onChange={setUserId} />
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-gray-600">アクション</label>
+          <select
+            value={action}
+            onChange={(e) => setAction(e.target.value)}
+            className="rounded border border-gray-300 bg-white px-2 py-1 text-sm"
+          >
+            <option value="">すべて</option>
+            {ACTION_OPTIONS.map((a) => (
+              <option key={a} value={a}>
+                {ACTION_LABEL[a]}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {error && <p className="text-sm text-red-600">読み込みに失敗しました：{error}</p>}

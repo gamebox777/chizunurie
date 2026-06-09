@@ -8,6 +8,7 @@ import {
   setRole,
   type AdminUser,
 } from './api';
+import UserFilter from './UserFilter';
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -232,6 +233,8 @@ export default function UsersPanel() {
   const [users, setUsers] = useState<AdminUser[] | null>(null);
   const [error, setError] = useState('');
   const [page, setPage] = useState(0);
+  // 選択中ユーザー（空なら全員表示）。
+  const [userId, setUserId] = useState('');
 
   const load = () => {
     fetchUsers()
@@ -244,18 +247,30 @@ export default function UsersPanel() {
   if (error) return <p className="text-sm text-red-600">読み込みに失敗しました：{error}</p>;
   if (!users) return <p className="text-sm text-gray-500">読み込み中…</p>;
 
-  const total = users.length;
+  // ユーザーを選んだら、その1人だけを一覧に表示する。
+  const visibleUsers = userId ? users.filter((u) => u.id === userId) : users;
+  const total = visibleUsers.length;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  // データ再読込で件数が減っても範囲外に出ないようにクランプする。
+  // データ再読込・絞り込みで件数が減っても範囲外に出ないようにクランプする。
   const safePage = Math.min(page, pageCount - 1);
-  const pageUsers = users.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+  const pageUsers = visibleUsers.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
   const pager = (
     <Pager page={safePage} pageCount={pageCount} total={total} onChange={setPage} />
   );
 
   return (
-    <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-      <div className="border-b border-gray-100">{pager}</div>
+    <div className="space-y-3">
+      <UserFilter
+        userId={userId}
+        onChange={(id) => {
+          setUserId(id);
+          setPage(0);
+        }}
+        users={users}
+      />
+
+      <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="border-b border-gray-100">{pager}</div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -287,7 +302,8 @@ export default function UsersPanel() {
           </tbody>
         </table>
       </div>
-      <div className="border-t border-gray-100">{pager}</div>
+        <div className="border-t border-gray-100">{pager}</div>
+      </div>
     </div>
   );
 }

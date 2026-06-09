@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchPaintedLog, type PaintedLog } from './api';
 import Pager from './Pager';
+import UserFilter from './UserFilter';
 
 const PAGE_SIZE = 100;
 
@@ -38,34 +39,93 @@ export default function PaintedLogPanel() {
   const [page, setPage] = useState(0);
   const [hasNext, setHasNext] = useState(false);
   const [total, setTotal] = useState(0);
+  // ユーザー絞り込み：選択中の userId。
+  const [userId, setUserId] = useState('');
+  // モード絞り込み：''（すべて）／'gps'／'manual'。
+  const [mode, setMode] = useState<'' | 'gps' | 'manual'>('');
   // cursorsRef[i] = ページ i の beforeId（先頭は undefined）。次へ進むたびに末尾 id を覚える。
   const cursorsRef = useRef<(number | undefined)[]>([undefined]);
 
-  const loadPage = useCallback((p: number) => {
-    setLoading(true);
-    setError('');
-    const beforeId = cursorsRef.current[p];
-    fetchPaintedLog({ beforeId, limit: PAGE_SIZE })
-      .then((r) => {
-        setRows(r.painted);
-        setTotal(r.total);
-        setHasNext(r.painted.length === PAGE_SIZE);
-        if (r.painted.length > 0) {
-          cursorsRef.current[p + 1] = r.painted[r.painted.length - 1].id;
-        }
-        setPage(p);
-      })
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, []);
+  const loadPage = useCallback(
+    (p: number) => {
+      setLoading(true);
+      setError('');
+      const beforeId = cursorsRef.current[p];
+      fetchPaintedLog({ userId: userId || undefined, mode: mode || undefined, beforeId, limit: PAGE_SIZE })
+        .then((r) => {
+          setRows(r.painted);
+          setTotal(r.total);
+          setHasNext(r.painted.length === PAGE_SIZE);
+          if (r.painted.length > 0) {
+            cursorsRef.current[p + 1] = r.painted[r.painted.length - 1].id;
+          }
+          setPage(p);
+        })
+        .catch((e: Error) => setError(e.message))
+        .finally(() => setLoading(false));
+    },
+    [userId, mode]
+  );
 
+  // 絞り込み（ユーザー・モード）が変わったらカーソルを捨てて先頭ページから読み直す。
   useEffect(() => {
+    cursorsRef.current = [undefined];
     loadPage(0);
   }, [loadPage]);
 
-  if (error) return <p className="text-sm text-red-600">読み込みに失敗しました：{error}</p>;
-  if (!rows) return <p className="text-sm text-gray-500">読み込み中…</p>;
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-4">
+        <UserFilter userId={userId} onChange={setUserId} />
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-gray-600">モード</label>
+          <select
+            value={mode}
+            onChange={(e) => setMode(e.target.value as '' | 'gps' | 'manual')}
+            className="rounded border border-gray-300 bg-white px-2 py-1 text-sm"
+          >
+            <option value="">すべて</option>
+            <option value="gps">GPS</option>
+            <option value="manual">手動</option>
+          </select>
+        </div>
+      </div>
 
+      {error && <p className="text-sm text-red-600">読み込みに失敗しました：{error}</p>}
+      {!rows && !error && <p className="text-sm text-gray-500">読み込み中…</p>}
+
+      {rows && (
+        <PaintedLogTable
+          rows={rows}
+          page={page}
+          hasNext={hasNext}
+          loading={loading}
+          total={total}
+          onPrev={() => loadPage(page - 1)}
+          onNext={() => loadPage(page + 1)}
+        />
+      )}
+    </div>
+  );
+}
+
+function PaintedLogTable({
+  rows,
+  page,
+  hasNext,
+  loading,
+  total,
+  onPrev,
+  onNext,
+}: {
+  rows: PaintedLog[];
+  page: number;
+  hasNext: boolean;
+  loading: boolean;
+  total: number;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
   return (
     <div className="space-y-3">
       <Pager
@@ -75,8 +135,8 @@ export default function PaintedLogPanel() {
         total={total}
         pageSize={PAGE_SIZE}
         count={rows.length}
-        onPrev={() => loadPage(page - 1)}
-        onNext={() => loadPage(page + 1)}
+        onPrev={onPrev}
+        onNext={onNext}
       />
 
       <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -131,8 +191,8 @@ export default function PaintedLogPanel() {
         total={total}
         pageSize={PAGE_SIZE}
         count={rows.length}
-        onPrev={() => loadPage(page - 1)}
-        onNext={() => loadPage(page + 1)}
+        onPrev={onPrev}
+        onNext={onNext}
       />
     </div>
   );

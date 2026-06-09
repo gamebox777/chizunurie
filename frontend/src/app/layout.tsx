@@ -4,6 +4,7 @@ import Script from "next/script";
 import "./globals.css";
 import { LocaleProvider } from "@/lib/i18n";
 import ServiceWorkerRegister from "./ServiceWorkerRegister";
+import { RUN_MODE } from "@/lib/runtime-env";
 
 const GA_MEASUREMENT_ID = "G-CLKCJXR6CN";
 
@@ -21,9 +22,12 @@ const SITE_URL = "https://chizunurie.gamebox777.org";
 const SITE_NAME = "ちずぬりえ";
 const SITE_DESC = "歩いた街が色になる、GPS白地図ぬりつぶしゲーム";
 
+// 本番以外（npm run dev・フル Docker）はタブのタイトルを「ちずぬりえ開発」にして見分ける
+const TAB_TITLE = RUN_MODE === "production" ? SITE_NAME : `${SITE_NAME}開発`;
+
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: "ちずぬりえ",
+  title: TAB_TITLE,
   description: SITE_DESC,
   icons: {
     // ファビコン（タブ等）は英語ロゴ版アイコン（icon-512-en.png を 48px に縮小）
