@@ -12,6 +12,9 @@ export type AdminUser = {
   role: string;
   // GPS で判定した所在国（adm0_a3。日本は "JPN"）。未取得なら null。
   country: string | null;
+  // 直近のアクション時に観測した IP / UserAgent（最新）。
+  lastIpAddress: string | null;
+  lastUserAgent: string | null;
   createdAt: string;
   painted: { total: number; gps: number; manual: number };
   points: { points: number; level: number; exp: number } | null;

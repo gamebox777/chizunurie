@@ -1,7 +1,8 @@
 import type { Context } from "hono";
+import { eq } from "drizzle-orm";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { db } from "../db/index.js";
-import { userLogs } from "../db/schema.js";
+import { user, userLogs } from "../db/schema.js";
 
 // リクエストから IP / UserAgent を取り出す。
 // IP は x-forwarded-for（プロキシ経由の本番が前提・先頭が実クライアント）→ x-real-ip →
@@ -51,6 +52,13 @@ export async function logEvent(c: Context, input: LogEventInput): Promise<void> 
       municipality: input.municipality ?? null,
       meta: input.meta ?? null,
     });
+    // ユーザーテーブルに「最新の接続元」を上書き保存する（アクションのたびに更新）。
+    if (input.userId) {
+      await db
+        .update(user)
+        .set({ lastIpAddress: ipAddress, lastUserAgent: userAgent })
+        .where(eq(user.id, input.userId));
+    }
   } catch (err) {
     console.warn("failed to write user log", err);
   }

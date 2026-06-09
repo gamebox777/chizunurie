@@ -57,6 +57,13 @@
       "when": 1780961900837,
       "tag": "0007_young_ultimatum",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1780982186019,
+      "tag": "0008_long_madame_hydra",
+      "breakpoints": true
     }
   ]
 }

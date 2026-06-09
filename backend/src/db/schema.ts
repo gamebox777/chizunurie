@@ -34,6 +34,11 @@ export const user = pgTable("user", {
   // ＝「国籍」的な所在国。初回 GPS 取得時に解決して入れ、別の国へ移動して値が変わったら更新する。
   // 未取得（GPS 前・位置情報不許可）の間は null。管理画面の一覧で表示する。
   country: text("country"),
+  // 直近のアクション時に観測した IP / UserAgent（管理画面で「最新の接続元」を見るため）。
+  // user_logs にも1アクション1行で残っているが、ここには常に最新値だけを上書き保存する
+  // （logEvent が userId つきで呼ばれるたびに更新）。閲覧は開発者向け管理画面のみ。
+  lastIpAddress: text("last_ip_address"),
+  lastUserAgent: text("last_user_agent"),
   // ユーザー設定（効果音・BGM・バイブ・地図オーバーレイ・言語など）を1つの JSON にまとめて保存する。
   // 設定項目は今後増減するため、項目ごとにカラム＝マイグレーションを増やすのを避け jsonb に全部入れる。
   settings: jsonb("settings").notNull().default({}),
