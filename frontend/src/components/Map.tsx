@@ -13,6 +13,7 @@ import { playPaint, playLevelUp, playConquer, unlockAudio } from '@/lib/sound';
 import { vibratePaint } from '@/lib/haptics';
 import { isBasemapEnabled, onBasemapChange, getBasemapOpacity, onBasemapOpacityChange } from '@/lib/basemap';
 import { isGpsAddressEnabled, onGpsAddressChange } from '@/lib/gpsAddress';
+import { getIconSize, onIconSizeChange } from '@/lib/iconSize';
 import { showRewardedAd } from '@/lib/rewardedAd';
 
 const PAINT_API = '/api/backend/painted';
@@ -1381,6 +1382,16 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         if (map.getLayer(id)) map.setPaintProperty(id, 'raster-opacity', v);
       }
     });
+  }, []);
+
+  // 右上の各種アイコンのサイズ（小／中／大）を設定メニューから受け取る。地図コンテナの
+  // data-icon-size 属性へ反映し、実寸の拡大は globals.css のセレクタが担当する。
+  useEffect(() => {
+    const apply = (size: string) => {
+      containerRef.current?.setAttribute('data-icon-size', size);
+    };
+    apply(getIconSize());
+    return onIconSizeChange(apply);
   }, []);
 
   // 現在地の住所ラベル ON/OFF を設定メニューから受け取る。初期値を同期し、

@@ -21,6 +21,7 @@ import {
   DEFAULT_BASEMAP_OPACITY,
 } from '@/lib/basemap';
 import { isGpsAddressEnabled, setGpsAddressEnabled } from '@/lib/gpsAddress';
+import { getIconSize, setIconSize, type IconSize } from '@/lib/iconSize';
 import { hydrateSettings, pushSettings } from '@/lib/userSettings';
 
 type Props = {
@@ -53,6 +54,8 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
   const [basemapOpacity, setBasemapOpacityState] = useState(DEFAULT_BASEMAP_OPACITY);
   // 現在地の住所ラベル表示（既定 ON）。
   const [gpsAddressOn, setGpsAddressOn] = useState(true);
+  // 右上の各種アイコンの大きさ（既定 小）。
+  const [iconSize, setIconSizeState] = useState<IconSize>('small');
   // localStorage 由来の現在値をローカル state に反映する（即描画用）。
   const syncFromLocal = () => {
     setSeOn(isSeEnabled());
@@ -61,6 +64,7 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
     setBasemapOn(isBasemapEnabled());
     setBasemapOpacityState(getBasemapOpacity());
     setGpsAddressOn(isGpsAddressEnabled());
+    setIconSizeState(getIconSize());
   };
   useEffect(() => {
     setHapticsSupported(isHapticsSupported());
@@ -97,6 +101,11 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
     const next = !gpsAddressOn;
     setGpsAddressOn(next);
     setGpsAddressEnabled(next); // Map.tsx が即座に住所ラベルの表示/非表示を切り替える
+    pushSettings(lang);
+  };
+  const selectIconSize = (size: IconSize) => {
+    setIconSizeState(size);
+    setIconSize(size); // Map.tsx が即座にコンテナの data-icon-size を更新する
     pushSettings(lang);
   };
   const selectBgm = (track: BgmTrack) => {
@@ -262,6 +271,31 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
                   />
                 </span>
               </button>
+              {/* 右上の各種アイコンの大きさ（小=既定 / 中 / 大） */}
+              <div>
+                <p className="text-sm text-gray-700 mb-1">{t('iconSize')}</p>
+                <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+                  {([
+                    { value: 'small', label: t('iconSizeSmall') },
+                    { value: 'medium', label: t('iconSizeMedium') },
+                    { value: 'large', label: t('iconSizeLarge') },
+                  ] as { value: IconSize; label: string }[]).map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => selectIconSize(opt.value)}
+                      aria-pressed={iconSize === opt.value}
+                      className={`flex-1 py-1.5 transition-colors ${
+                        iconSize === opt.value
+                          ? 'bg-blue-500 text-white font-medium'
+                          : 'bg-white text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
           {/* サウンド（効果音 / BGM） */}

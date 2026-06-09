@@ -18,6 +18,7 @@ import {
   setBasemapOpacity,
 } from './basemap';
 import { isGpsAddressEnabled, setGpsAddressEnabled } from './gpsAddress';
+import { getIconSize, setIconSize, type IconSize } from './iconSize';
 import type { Lang } from './i18n';
 import { fetchMySettings, saveMySettings } from './userApi';
 
@@ -28,6 +29,7 @@ export type UserSettings = {
   basemap?: boolean; // 地理院オーバーレイ ON/OFF
   basemapOpacity?: number; // 絵付きの地図（ラスター）の不透明度（0〜1）
   gpsAddress?: boolean; // 現在地の住所ラベル ON/OFF
+  iconSize?: IconSize; // 右上の各種アイコンの大きさ（small/medium/large）
   lang?: Lang; // 表示言語
 };
 
@@ -40,6 +42,7 @@ export function collectSettings(lang: Lang): UserSettings {
     basemap: isBasemapEnabled(),
     basemapOpacity: getBasemapOpacity(),
     gpsAddress: isGpsAddressEnabled(),
+    iconSize: getIconSize(),
     lang,
   };
 }
@@ -53,6 +56,8 @@ export function applyLocalSettings(s: UserSettings): void {
   if (typeof s.basemap === 'boolean') setBasemapEnabled(s.basemap);
   if (typeof s.basemapOpacity === 'number') setBasemapOpacity(s.basemapOpacity);
   if (typeof s.gpsAddress === 'boolean') setGpsAddressEnabled(s.gpsAddress);
+  if (s.iconSize === 'small' || s.iconSize === 'medium' || s.iconSize === 'large')
+    setIconSize(s.iconSize);
 }
 
 // 現在のクライアント設定をサーバーへ保存する（fire-and-forget）。

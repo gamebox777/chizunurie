@@ -27,6 +27,7 @@ const ja: Dict = {
   appTitle: 'ちずぬりえ',
   login: 'ログイン',
   register: '新規登録',
+  guestNotice: 'ゲストとして塗っています。登録すると別の端末でも続きを塗れます',
   shareOnX: 'Xでシェア',
   shareText: '歩いた街が色になる白地図ゲーム「ちずぬりえ」🗾📍 GPSで現在地を塗って、市区町村→都道府県と"制覇"していくやつ。ブラウザですぐ遊べます👇',
   copyLink: 'リンクをコピー',
@@ -54,6 +55,10 @@ const ja: Dict = {
   baseMapOverlay: '地図を薄く表示',
   baseMapOpacity: '地図の濃さ',
   gpsAddressLabel: '現在地の住所を表示',
+  iconSize: 'アイコンの大きさ',
+  iconSizeSmall: '小',
+  iconSizeMedium: '中',
+  iconSizeLarge: '大',
 
   // AuthModal
   googleLogin: 'Googleでログイン',
@@ -219,6 +224,7 @@ const en: Dict = {
   appTitle: 'Chizunurie',
   login: 'Log in',
   register: 'Sign up',
+  guestNotice: 'You are painting as a guest. Sign up to keep your progress on any device.',
   shareOnX: 'Share on X',
   shareText: 'Chizunurie — a paint-the-map game where the towns you walk turn into color 🗾📍 Use GPS to paint where you are and conquer Japan, city by city. Play free in your browser 👇',
   copyLink: 'Copy link',
@@ -246,6 +252,10 @@ const en: Dict = {
   baseMapOverlay: 'Show map faintly',
   baseMapOpacity: 'Map intensity',
   gpsAddressLabel: 'Show current address',
+  iconSize: 'Icon size',
+  iconSizeSmall: 'S',
+  iconSizeMedium: 'M',
+  iconSizeLarge: 'L',
 
   // AuthModal
   googleLogin: 'Sign in with Google',

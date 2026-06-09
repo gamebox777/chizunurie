@@ -26,6 +26,34 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* 右上の各種コントロール（ズーム・現在地・検索・データ詳細・ランキング等）のアイコンサイズ。
+   設定メニュー（SettingsMenu）の選択を Map.tsx が地図コンテナの data-icon-size 属性へ反映し、
+   ここで MapLibre 標準ボタン（29px）とその中の SVG を拡大する。small は標準のまま。 */
+[data-icon-size='medium'] .maplibregl-ctrl-top-right .maplibregl-ctrl-group button {
+  width: 36px;
+  height: 36px;
+}
+[data-icon-size='large'] .maplibregl-ctrl-top-right .maplibregl-ctrl-group button {
+  width: 44px;
+  height: 44px;
+}
+/* カスタムコントロール（検索・データ詳細・ランキング等）の SVG を箱に追従させる。
+   MapLibre 標準アイコン（ズーム・現在地）は background-image なので別途拡大する。 */
+[data-icon-size='medium'] .maplibregl-ctrl-top-right .maplibregl-ctrl-group button svg {
+  width: 26px;
+  height: 26px;
+}
+[data-icon-size='large'] .maplibregl-ctrl-top-right .maplibregl-ctrl-group button svg {
+  width: 32px;
+  height: 32px;
+}
+[data-icon-size='medium'] .maplibregl-ctrl-top-right .maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  background-size: 26px 26px;
+}
+[data-icon-size='large'] .maplibregl-ctrl-top-right .maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  background-size: 32px 32px;
+}
+
 /* レベルアップ演出：ポンと出てふわっと消える */
 @keyframes level-up-pop {
   0% {

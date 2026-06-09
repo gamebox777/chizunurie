@@ -25,6 +25,11 @@ export const user = pgTable("user", {
   // 権限。'user'=一般ユーザー（既定）/ 'developer'=開発者（デバッグメニュー表示）。
   // 新規登録時は必ず 'user'。開発者にするには DB で手動で 'developer' に変更する。
   role: text("role").notNull().default("user"),
+  // 匿名（ゲスト）ユーザーかどうか。better-auth の anonymous プラグインが管理する。
+  // ログインせずにアクセスした端末には起動時に匿名ユーザー＋セッションを発行し、
+  // 通常ユーザーと同じく塗り（painted_regions）・ポイントを DB に保存する。
+  // 本登録/ログインすると onLinkAccount で塗り・ポイントを本ユーザーへ移行し、この行は削除される。
+  isAnonymous: boolean("is_anonymous").notNull().default(false),
   // GPS で取得した現在地から判定した所在国（Natural Earth の adm0_a3 コード。日本は "JPN"）。
   // ＝「国籍」的な所在国。初回 GPS 取得時に解決して入れ、別の国へ移動して値が変わったら更新する。
   // 未取得（GPS 前・位置情報不許可）の間は null。管理画面の一覧で表示する。
