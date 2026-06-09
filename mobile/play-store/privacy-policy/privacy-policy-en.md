@@ -11,7 +11,7 @@ This policy describes how user information is handled in the mobile app
 ## 1. Operator
 
 - Operator: **[Enter operator name (individual or company)]**
-- Contact: **[Enter contact email]** (e.g. ryh-sato@jinjib-career.co.jp)
+- Contact: **[Enter contact email]** (e.g. rin7studio@gmail.com)
 
 ## 2. Information we collect
 

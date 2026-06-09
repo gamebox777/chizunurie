@@ -104,7 +104,7 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 | 項目 | 現在の仮値 | 置き換え先ファイル |
 |---|---|---|
 | 運営者名 | `[運営者名を記入]` | privacy-policy/*, policy/* |
-| 問い合わせメール | ryh-sato@jinjib-career.co.jp（公開される） | listing/*, privacy-policy/* |
+| 問い合わせメール | rin7studio@gmail.com（公開される） | listing/*, privacy-policy/* |
 | プライバシーポリシー URL | 例 .../privacy | listing/*, Play Console |
 | アプリID | `jp.chizunurie.app`（確定後は変更不可） | capacitor.config.ts, build.gradle |
 

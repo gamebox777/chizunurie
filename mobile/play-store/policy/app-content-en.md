@@ -10,7 +10,7 @@ is no banner unit, and the ad script gpt.js is never loaded in the app).
 
 ## 1. Privacy policy
 
-- URL: the hosted URL of `privacy-policy/` (e.g. https://chizunurie.gamebox777.org/privacy)
+- URL: https://unitygamebox.com/?p=2230
 
 ---
 

@@ -10,6 +10,7 @@
     "add:ios": "cap add ios",
     "add:android": "cap add android",
     "apk": "cap sync android && cd android && JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew assembleDebug",
+    "bundle": "cap sync android && cd android && JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew bundleRelease",
     "play": "npm run apk && bash run-emu.sh",
     "apk:dev": "CAP_DEV=1 npm run apk",
     "play:dev": "CAP_DEV=1 npm run play"
