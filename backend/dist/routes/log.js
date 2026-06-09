@@ -12,6 +12,8 @@ const ALLOWED_ACTIONS = new Set([
     "session_start",
     "search",
     "gps",
+    // 動画リワード広告の各段階（meta.event で start/granted/dismissed/… を区別）。
+    "video_reward",
 ]);
 // 緯度経度の妥当性チェック（範囲外・非数値は null にする）。
 function toCoord(v, max) {

@@ -6,6 +6,7 @@ import { paintedRegions } from "../db/schema.js";
 import {
   ALLOWED_COSTS,
   COST_ADJACENT,
+  EXP_FINE,
   EXP_PAINT,
   EXP_VISIT,
   REVISIT_EXP_COOLDOWN_MS,
@@ -30,6 +31,7 @@ type PaintBody = {
   mode?: unknown;
   cost?: unknown;
   bulk?: unknown;
+  subIndex?: unknown;
   lat?: unknown;
   lng?: unknown;
   municipality?: unknown;
@@ -60,6 +62,16 @@ function parseBody(body: PaintBody | null) {
   // bulk: 外国 10×10 まとめ塗りの「残り」セル。代表1セルだけが課金＆経験値を得て、
   // 残りはこのフラグで無料・経験値なしに塗る（manual の新規 insert のみ意味を持つ）。
   const bulk = body.bulk === true;
+  // subIndex: GPS歩き塗りで「1kmセル内のどの細セル（125m = 8×8=64 分割）を踏んだか」（0..63）。
+  // mode='gps' のときだけ意味を持つ。省略時（旧クライアント・まとめ塗り等）は null＝細セル指定なし
+  // で、その場合は1kmを「全面塗り」として扱う（walked_mask=0・従来の挙動）。
+  const subIndex =
+    typeof body.subIndex === "number" &&
+    Number.isInteger(body.subIndex) &&
+    body.subIndex >= 0 &&
+    body.subIndex < 64
+      ? body.subIndex
+      : null;
   // 塗った時点の文脈（任意）。新規 insert のときだけ保存する。
   const lat = toCoord(body.lat, 90);
   const lng = toCoord(body.lng, 180);
@@ -81,7 +93,7 @@ function parseBody(body: PaintBody | null) {
       : municipality
       ? "JPN"
       : null;
-  return { sourceLayer, keyCode, mode: resolvedMode, cost: resolvedCost, bulk, lat, lng, municipality, region, country };
+  return { sourceLayer, keyCode, mode: resolvedMode, cost: resolvedCost, bulk, subIndex, lat, lng, municipality, region, country };
 }
 
 paintedRouter.get("/", async (c) => {
@@ -94,11 +106,16 @@ paintedRouter.get("/", async (c) => {
       mode: paintedRegions.mode,
       municipality: paintedRegions.municipality,
       region: paintedRegions.region,
+      walkedMask: paintedRegions.walkedMask,
       paintedAt: paintedRegions.paintedAt,
     })
     .from(paintedRegions)
     .where(eq(paintedRegions.userId, user.id));
-  return c.json({ painted: rows });
+  // walked_mask は 64 ビット（bigint）。JSON 数値は安全に表せないので文字列で返す。
+  // クライアントは BigInt(walkedMask) で復元する。0（全面塗り）も "0" で返る。
+  return c.json({
+    painted: rows.map((r) => ({ ...r, walkedMask: r.walkedMask.toString() })),
+  });
 });
 
 paintedRouter.post("/", async (c) => {
@@ -125,14 +142,22 @@ paintedRouter.post("/", async (c) => {
 
   if (parsed.mode === "gps") {
     // GPS（実際の移動）はポイント無料。最優先なので既存（manual含む）があれば gps に昇格。
-    // 「実際に訪れる」と経験値 EXP_VISIT を獲得する。新規セル・となり塗りからの昇格に加え、
-    // 既に gps 済みのセルへ入り直した「再訪」も、前回訪問から REVISIT_EXP_COOLDOWN_MS 以上
-    // 経っていれば再付与する（lastVisitAt を上書き更新するので行は増えない＝DB は肥大化しない）。
+    // 「実際に訪れる」と経験値を獲得する。歩き塗りは1kmを 8×8=64 の細セル（125m）に分け、
+    // walked_mask に踏んだ細セル（subIndex）のビットを立てる：
+    //   ・新規1km（行の新規 insert）         … 1km初訪問 EXP_VISIT(+100) ＋ 細セル初 EXP_FINE(+5)
+    //   ・取得済み1km内で新しい細セルを踏む    … 細セル初 EXP_FINE(+5)（1kmは既に取得済みなので+100は無し）
+    //   ・全面セル(mask=0：手動/旧GPS/まとめ)  … 細分化しない。manual→gps昇格 or 再訪で従来どおり EXP_VISIT
+    //   ・既に踏んだ細セルへ入り直し          … 再訪扱い。クールダウン経過時のみ EXP_VISIT
+    // subIndex 無し（旧クライアント等）は bit=0 として「全面塗り」扱い（従来挙動）。
+    // ※ Postgres の bigint は符号付き64bit なので、subIndex=63（最上位ビット=2^63）は
+    //   そのままだと範囲外になる。マスクの計算は符号なし64bit（asUintN）で行い、DB へ書く
+    //   ときだけ符号付き64bit（asIntN）へ畳む。読み出した値も asUintN で符号なしに戻す。
     const cellWhere = and(
       eq(paintedRegions.userId, user.id),
       eq(paintedRegions.sourceLayer, parsed.sourceLayer),
       eq(paintedRegions.keyCode, parsed.keyCode)
     );
+    const bit = parsed.subIndex !== null ? 1n << BigInt(parsed.subIndex) : 0n; // 符号なし（0..2^63）
     const result = await db.transaction(async (tx) => {
       const inserted = await tx
         .insert(paintedRegions)
@@ -141,6 +166,7 @@ paintedRouter.post("/", async (c) => {
           sourceLayer: parsed.sourceLayer,
           keyCode: parsed.keyCode,
           mode: "gps",
+          walkedMask: BigInt.asIntN(64, bit), // 符号付き64bit へ畳んで保存
           lastVisitAt: new Date(now),
           ...context,
         })
@@ -148,22 +174,39 @@ paintedRouter.post("/", async (c) => {
         .returning({ id: paintedRegions.id });
 
       if (inserted.length > 0) {
-        // 新規セルを訪問 → 経験値付与
-        const state = await addExp(user.id, EXP_VISIT, now, tx);
-        return { ok: true as const, points: state, gainedExp: EXP_VISIT };
+        // 新規1kmを訪問 → 1km初訪問(+100) ＋ 細セルを踏んでいれば細セル初(+5)
+        const gained = EXP_VISIT + (bit !== 0n ? EXP_FINE : 0);
+        const state = await addExp(user.id, gained, now, tx);
+        return { ok: true as const, points: state, gainedExp: gained };
       }
 
-      // 既存セル：となり塗り（manual）なら gps に昇格して経験値付与。
-      // 既に gps 済みなら再訪扱い（クールダウン経過時のみ再付与）。
+      // 既存セル：現在のモード・最終訪問・歩いた細セルマスクを読む。
       const existing = await tx
         .select({
           mode: paintedRegions.mode,
           lastVisitAt: paintedRegions.lastVisitAt,
+          walkedMask: paintedRegions.walkedMask,
         })
         .from(paintedRegions)
         .where(cellWhere);
+      const curMask = BigInt.asUintN(64, existing[0]?.walkedMask ?? 0n); // 符号なしへ戻す
+
+      // 部分塗り（mask 非0）で、まだ踏んでいない細セルを踏んだ → ビットを立てて細セル初 EXP。
+      if (bit !== 0n && curMask !== 0n && (curMask & bit) === 0n) {
+        await tx
+          .update(paintedRegions)
+          .set({
+            walkedMask: BigInt.asIntN(64, curMask | bit),
+            lastVisitAt: new Date(now),
+          })
+          .where(cellWhere);
+        const state = await addExp(user.id, EXP_FINE, now, tx);
+        return { ok: true as const, points: state, gainedExp: EXP_FINE };
+      }
+
+      // 全面セル（mask=0）で manual → gps 昇格。訪問時刻も now に更新する。
+      // （部分塗りセルは既に gps なのでこの分岐には来ない）
       if (existing[0]?.mode !== "gps") {
-        // manual → gps 昇格。訪問時刻も now に更新する。
         await tx
           .update(paintedRegions)
           .set({ mode: "gps", lastVisitAt: new Date(now) })
@@ -172,8 +215,8 @@ paintedRouter.post("/", async (c) => {
         return { ok: true as const, points: state, gainedExp: EXP_VISIT };
       }
 
-      // 再訪：前回訪問から十分時間が経っていれば再び経験値を付与する。
-      // 履歴は残さず lastVisitAt を上書きするだけなので行数は増えない。
+      // 再訪（全面セルへ入り直し／既に踏んだ細セルへ入り直し）：前回訪問から十分時間が
+      // 経っていれば再び経験値を付与する。履歴は残さず lastVisitAt を上書きするだけ。
       const last = existing[0]?.lastVisitAt ?? null;
       const canReward =
         last === null || now - last.getTime() >= REVISIT_EXP_COOLDOWN_MS;

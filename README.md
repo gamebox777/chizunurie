@@ -54,6 +54,29 @@ npm run dev:docker  # フル Docker に寄せる（frontend/backend/db を全部
 
 ブラウザで http://localhost:3000 を開くと地図が表示されます。
 
+## 公開ページ
+
+| ページ | パス | 内容 |
+|---|---|---|
+| 地図（ゲーム本体） | `/` | 白地図塗りゲーム |
+| アカウント・データ削除 | `/delete-account` | ユーザーが自分でアカウントと関連データを削除できる公開ページ |
+
+### アカウント・データ削除ページ（`/delete-account`）
+
+Google Play「データセーフティ → アカウント削除用 URL」要件を満たす公開ページです。
+本番では https://chizunurie.gamebox777.org/delete-account に公開します。
+
+- **ログイン中**は、ページ内のカードから本人が **その場でアカウントを削除**できます
+  （確認のため `delete` または `削除` と入力 → `authClient.deleteUser()` で `user` 行を削除 →
+  cascade で塗りセル・ポイント・XP・ログ・セッションまで連鎖削除）。
+- **ログインできない場合**（アンインストール済みなど）は、問い合わせ先メール
+  （`rin7studio@gmail.com`）への削除依頼の手順を案内します。
+- ページには **削除されるデータの種類**と**保持されるデータ・保持期間**を明記しています
+  （Google Play の必須3条件：①アプリ/デベロッパー名 ②削除手順 ③削除・保持データの明記）。
+- 実装：[`frontend/src/app/delete-account/page.tsx`](frontend/src/app/delete-account/page.tsx)（公開文面）＋
+  [`DeleteAccountActions.tsx`](frontend/src/app/delete-account/DeleteAccountActions.tsx)（ログイン中の削除操作カード）。
+- サーバー側は better-auth の `deleteUser` を有効化（[`backend/src/lib/auth.ts`](backend/src/lib/auth.ts)）。
+
 > **`EADDRINUSE: address already in use :::3001` が出たら**
 > ローカル dev とフル Docker が二重起動しています。`npm run stop` で一度止めてから、上のどちらかのモードで起動し直してください。
 > （port を掴んでいる docker-proxy は誤って kill しないよう除外しているので、`npm run stop` で Docker 全体が落ちることはありません）

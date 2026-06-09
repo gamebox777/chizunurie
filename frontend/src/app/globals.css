@@ -90,6 +90,10 @@ body {
   height: 0;
   pointer-events: none;
   --size: 30px;
+  /* 波紋の演出パラメータ（管理画面で調整可）。spawnRipple がサーバー設定値で上書きする。
+     --dur=広がるスピード（リングの所要時間）, --scale=最大サイズ倍率。既定は従来挙動。 */
+  --dur: 0.8s;
+  --scale: 15;
 }
 .paint-ripple > span {
   position: absolute;
@@ -126,13 +130,15 @@ body {
   opacity: 0;
 }
 .paint-ripple-ring.r1 {
-  animation: ripple-ring 0.8s cubic-bezier(0.12, 0.85, 0.35, 1) forwards;
+  animation: ripple-ring var(--dur) cubic-bezier(0.12, 0.85, 0.35, 1) forwards;
 }
 .paint-ripple-ring.r2 {
-  animation: ripple-ring 0.8s cubic-bezier(0.12, 0.85, 0.35, 1) 0.09s forwards;
+  animation: ripple-ring var(--dur) cubic-bezier(0.12, 0.85, 0.35, 1)
+    calc(var(--dur) * 0.11) forwards;
 }
 .paint-ripple-ring.r3 {
-  animation: ripple-ring 0.8s cubic-bezier(0.12, 0.85, 0.35, 1) 0.18s forwards;
+  animation: ripple-ring var(--dur) cubic-bezier(0.12, 0.85, 0.35, 1)
+    calc(var(--dur) * 0.22) forwards;
 }
 @keyframes ripple-ring {
   0% {
@@ -144,7 +150,7 @@ body {
     opacity: 0.5;
   }
   100% {
-    transform: translate(-50%, -50%) scale(15);
+    transform: translate(-50%, -50%) scale(var(--scale));
     opacity: 0;
     border-width: 0.5px;
   }

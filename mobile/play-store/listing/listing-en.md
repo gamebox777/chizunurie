@@ -18,7 +18,7 @@ Color the Map
 ## Short description (max 80 chars)
 
 ```
-Paint all of Japan in ~1km tiles. Walk to log towns with GPS, rank by area painted.
+Paint Japan in ~1km tiles. Walk to log towns with GPS, rank by area painted.
 ```
 
 ---

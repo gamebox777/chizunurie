@@ -2,8 +2,9 @@ import { Hono } from "hono";
 import { and, desc, eq, lt, sql } from "drizzle-orm";
 import { getSessionUser, isDeveloper } from "../lib/auth.js";
 import { db } from "../db/index.js";
-import { paintedRegions, user, userLogs, userPoints } from "../db/schema.js";
+import { paintedRegions, siteVisits, user, userLogs, userPoints, } from "../db/schema.js";
 import { ensurePoints } from "../lib/points.js";
+import { jstDateKey } from "../lib/time.js";
 // 開発者専用の管理画面（フロントの /admin）向け API。
 // すべてのルートで isDeveloper を要求する。Next.js の rewrite 経由で
 // /api/backend/admin/* から到達する。
@@ -29,6 +30,9 @@ adminRouter.get("/users", async (c) => {
         realName: user.realName,
         email: user.email,
         role: user.role,
+        country: user.country,
+        lastIpAddress: user.lastIpAddress,
+        lastUserAgent: user.lastUserAgent,
         createdAt: user.createdAt,
     })
         .from(user);
@@ -55,6 +59,9 @@ adminRouter.get("/users", async (c) => {
             realName: u.realName,
             email: u.email,
             role: u.role,
+            country: u.country,
+            lastIpAddress: u.lastIpAddress,
+            lastUserAgent: u.lastUserAgent,
             createdAt: u.createdAt,
             painted: { total, gps, manual: total - gps },
             points: pt
@@ -89,6 +96,57 @@ adminRouter.get("/stats", async (c) => {
     return c.json({
         users: { total: users?.total ?? 0, byRole },
         painted: { total, gps, manual: total - gps },
+    });
+});
+// サイトへのアクセス数（site_visits）の集計。アクセス数（ページ表示・延べ）と
+// ユニークユーザー数の両方について、累計・今日・直近7日・日別を返す。
+adminRouter.get("/access-stats", async (c) => {
+    const guard = await requireDeveloper(c);
+    if (guard)
+        return guard;
+    // 直近30日ぶんの日別（新しい順）。views=その日の表示回数合計、
+    // uniques=その日のユニーク訪問者数（(date,visitor) が一意なので行数）。
+    const daily = await db
+        .select({
+        date: siteVisits.date,
+        views: sql `sum(${siteVisits.count})::int`,
+        uniques: sql `count(*)::int`,
+    })
+        .from(siteVisits)
+        .groupBy(siteVisits.date)
+        .orderBy(desc(siteVisits.date))
+        .limit(30);
+    // 全期間の累計（ユニークは訪問者の distinct 数）。
+    const [allTime] = await db
+        .select({
+        views: sql `coalesce(sum(${siteVisits.count}), 0)::int`,
+        uniques: sql `count(distinct ${siteVisits.visitor})::int`,
+    })
+        .from(siteVisits);
+    // 直近7日（今日を含む）の累計。ユニークは7日間にまたがる distinct なので
+    // 日別の単純合計では出せない（別クエリで distinct を取る）。
+    const since7 = jstDateKey(Date.now() - 6 * 86400000);
+    const [week] = await db
+        .select({
+        views: sql `coalesce(sum(${siteVisits.count}), 0)::int`,
+        uniques: sql `count(distinct ${siteVisits.visitor})::int`,
+    })
+        .from(siteVisits)
+        .where(sql `${siteVisits.date} >= ${since7}`);
+    const today = jstDateKey();
+    const todayRow = daily.find((d) => d.date === today);
+    return c.json({
+        views: {
+            total: allTime?.views ?? 0,
+            today: todayRow?.views ?? 0,
+            last7: week?.views ?? 0,
+        },
+        uniques: {
+            total: allTime?.uniques ?? 0,
+            today: todayRow?.uniques ?? 0,
+            last7: week?.uniques ?? 0,
+        },
+        daily, // 新しい順・最大30件（date, views, uniques）
     });
 });
 // 権限変更。role は 'user' | 'developer' のみ許可。
@@ -176,11 +234,13 @@ adminRouter.get("/logs", async (c) => {
     const { limit, beforeId } = parsePaging(c);
     const userId = c.req.query("userId");
     const action = c.req.query("action");
-    const conds = [];
+    // 絞り込み条件（カーソル beforeId を含まない）。総件数の集計にも使う。
+    const filterConds = [];
     if (userId)
-        conds.push(eq(userLogs.userId, userId));
+        filterConds.push(eq(userLogs.userId, userId));
     if (action)
-        conds.push(eq(userLogs.action, action));
+        filterConds.push(eq(userLogs.action, action));
+    const conds = [...filterConds];
     if (beforeId !== null)
         conds.push(lt(userLogs.id, beforeId));
     const rows = await db
@@ -203,7 +263,68 @@ adminRouter.get("/logs", async (c) => {
         .where(conds.length ? and(...conds) : undefined)
         .orderBy(desc(userLogs.id))
         .limit(limit);
-    return c.json({ logs: rows });
+    // 絞り込み後の総件数（カーソル非依存）。ページャーの「全N件」表示用。
+    const [{ total }] = await db
+        .select({ total: sql `count(*)::int` })
+        .from(userLogs)
+        .where(filterConds.length ? and(...filterConds) : undefined);
+    return c.json({ logs: rows, total });
+});
+// 動画リワード広告の集計。user_logs（action='video_reward'）を meta.event ごとに
+// 集計し、ボタン押下→視聴完了のファネルを返す。?days=N で直近 N 日に絞れる（既定は全期間）。
+adminRouter.get("/video-stats", async (c) => {
+    const guard = await requireDeveloper(c);
+    if (guard)
+        return guard;
+    const daysRaw = Number(c.req.query("days"));
+    const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(365, Math.floor(daysRaw)) : null;
+    const conds = [eq(userLogs.action, "video_reward")];
+    if (days !== null) {
+        conds.push(sql `${userLogs.createdAt} >= now() - (${days} * interval '1 day')`);
+    }
+    // meta->>'event' ごとの件数・ユニークユーザー数。
+    const rows = await db
+        .select({
+        event: sql `${userLogs.meta}->>'event'`,
+        count: sql `count(*)::int`,
+        users: sql `count(distinct ${userLogs.userId})::int`,
+    })
+        .from(userLogs)
+        .where(and(...conds))
+        .groupBy(sql `${userLogs.meta}->>'event'`);
+    // event → {count, users} のマップに整える（null event は "unknown" にまとめる）。
+    const byEvent = {};
+    for (const r of rows) {
+        const key = r.event ?? "unknown";
+        byEvent[key] = { count: r.count, users: r.users };
+    }
+    const cnt = (k) => byEvent[k]?.count ?? 0;
+    const start = cnt("start");
+    const granted = cnt("granted");
+    const dismissed = cnt("dismissed");
+    const unavailable = cnt("unavailable");
+    const error = cnt("error");
+    const cooldown = cnt("cooldown");
+    const dailyLimit = cnt("daily_limit");
+    const nonceError = cnt("nonce_error");
+    const claimFailed = cnt("claim_failed");
+    return c.json({
+        days,
+        byEvent,
+        funnel: {
+            start, // 「動画を見る」ボタン押下
+            granted, // 視聴完了＋報酬付与
+            dismissed, // 途中キャンセル
+            unavailable, // 在庫なし・非対応・タイムアウト
+            error, // 想定外エラー
+            cooldown, // クールダウンで弾かれた（広告未表示）
+            dailyLimit, // 1日上限で弾かれた（広告未表示）
+            nonceError, // nonce 発行のその他失敗
+            claimFailed, // 視聴後の報酬請求失敗
+            // 完了率＝報酬付与 / ボタン押下（押下が無ければ null）。
+            completionRate: start > 0 ? granted / start : null,
+        },
+    });
 });
 // 塗りログ（painted_regions）を新しい順で返す。塗りの文脈（ip/ua/位置/市町村）つき。
 adminRouter.get("/painted", async (c) => {
@@ -212,9 +333,11 @@ adminRouter.get("/painted", async (c) => {
         return guard;
     const { limit, beforeId } = parsePaging(c);
     const userId = c.req.query("userId");
-    const conds = [];
+    // 絞り込み条件（カーソル beforeId を含まない）。総件数の集計にも使う。
+    const filterConds = [];
     if (userId)
-        conds.push(eq(paintedRegions.userId, userId));
+        filterConds.push(eq(paintedRegions.userId, userId));
+    const conds = [...filterConds];
     if (beforeId !== null)
         conds.push(lt(paintedRegions.id, beforeId));
     const rows = await db
@@ -226,11 +349,10 @@ adminRouter.get("/painted", async (c) => {
         sourceLayer: paintedRegions.sourceLayer,
         keyCode: paintedRegions.keyCode,
         mode: paintedRegions.mode,
-        ipAddress: paintedRegions.ipAddress,
-        userAgent: paintedRegions.userAgent,
         lat: paintedRegions.lat,
         lng: paintedRegions.lng,
         municipality: paintedRegions.municipality,
+        country: paintedRegions.country,
         paintedAt: paintedRegions.paintedAt,
     })
         .from(paintedRegions)
@@ -238,5 +360,10 @@ adminRouter.get("/painted", async (c) => {
         .where(conds.length ? and(...conds) : undefined)
         .orderBy(desc(paintedRegions.id))
         .limit(limit);
-    return c.json({ painted: rows });
+    // 絞り込み後の総件数（カーソル非依存）。ページャーの「全N件」表示用。
+    const [{ total }] = await db
+        .select({ total: sql `count(*)::int` })
+        .from(paintedRegions)
+        .where(filterConds.length ? and(...filterConds) : undefined);
+    return c.json({ painted: rows, total });
 });

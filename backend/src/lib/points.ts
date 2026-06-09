@@ -22,8 +22,11 @@ const BASE_EXP_TO_NEXT = 500;
 const EXP_TO_NEXT_STEP = 100;
 
 // 塗りで得られる経験値
-export const EXP_VISIT = 100; // 実際に訪れる（GPS塗り・manual→gps 昇格・再訪）
+export const EXP_VISIT = 100; // 実際に訪れる（GPS塗り・manual→gps 昇格・再訪）＝1km初訪問ボーナス
 export const EXP_PAINT = 50; // となり塗り／離れた場所塗り（manual・有料）
+// GPS歩き塗りで、既に取得済み（gps）の1km内の「新しい細セル（125m）」を初めて踏んだとき。
+// 1km初訪問の EXP_VISIT(+100) とは別に、歩くたびに少しずつ伸びるよう小さめに与える。
+export const EXP_FINE = 5;
 
 // 再訪クールダウン：既に gps 済みのセルへ GPS で入り直した時、前回の訪問から
 // この時間が経過していれば再び EXP_VISIT を付与する。GPS は静止中も連続発火するため、

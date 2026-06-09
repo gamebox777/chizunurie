@@ -1,9 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { userPoints } from "../db/schema.js";
 // ── 塗りポイントの調整パラメータ（今後バランス調整予定） ──────────────
 export const INITIAL_POINTS = 10; // 登録時（初回）に付与される残高
-export const REGEN_INTERVAL_MS = 30 * 60 * 1000; // 30分で1ポイント回復
+export const REGEN_INTERVAL_MS = 10 * 60 * 1000; // 10分で1ポイント回復
 // 塗りのコスト（クライアントが隣接判定して送る。サーバーは残高のみ権威的に管理する）
 export const COST_ADJACENT = 1; // 塗り済みに隣接する場所
 export const COST_FAR = 10; // 離れた場所（確認ダイアログ付き）
@@ -13,12 +14,15 @@ export const ALLOWED_COSTS = new Set([0, COST_ADJACENT, COST_FAR]);
 // 塗りポイントの最大値（時間回復の上限）はレベルに応じて増える。
 //   level 1 = 10、以降レベルが上がるごとに +1。
 const BASE_MAX_POINTS = 10; // level 1 のときの最大塗りポイント
-// 次のレベルに必要な経験値。level 1→2 で 1000、以降レベルが上がるごとに +100。
-const BASE_EXP_TO_NEXT = 1000;
+// 次のレベルに必要な経験値。level 1→2 で 500、以降レベルが上がるごとに +100。
+const BASE_EXP_TO_NEXT = 500;
 const EXP_TO_NEXT_STEP = 100;
 // 塗りで得られる経験値
-export const EXP_VISIT = 100; // 実際に訪れる（GPS塗り・manual→gps 昇格・再訪）
+export const EXP_VISIT = 100; // 実際に訪れる（GPS塗り・manual→gps 昇格・再訪）＝1km初訪問ボーナス
 export const EXP_PAINT = 50; // となり塗り／離れた場所塗り（manual・有料）
+// GPS歩き塗りで、既に取得済み（gps）の1km内の「新しい細セル（125m）」を初めて踏んだとき。
+// 1km初訪問の EXP_VISIT(+100) とは別に、歩くたびに少しずつ伸びるよう小さめに与える。
+export const EXP_FINE = 5;
 // 再訪クールダウン：既に gps 済みのセルへ GPS で入り直した時、前回の訪問から
 // この時間が経過していれば再び EXP_VISIT を付与する。GPS は静止中も連続発火するため、
 // この間隔で「再訪あたり1回」に制限して無限獲得を防ぐ（painted_regions.lastVisitAt で判定）。
@@ -38,8 +42,10 @@ export const MAX_HEARTBEAT_DELTA_SEC = 120;
 // 動画を1本見ると「そのレベルの満タン分（= maxPointsForLevel(level)）」を残高に加算する。
 // 自然回復（REGEN_INTERVAL_MS で 1pt）と同等量を一気に得られる位置づけ。
 // 不正・乱用対策として「クールダウン」と「1日の上限回数」を併用する。
-export const VIDEO_REWARD_COOLDOWN_MS = 30 * 60 * 1000; // 前回視聴から30分は再視聴不可
-export const VIDEO_REWARD_MAX_PER_DAY = 5; // 1日（JST）に受け取れる上限回数
+export const VIDEO_REWARD_COOLDOWN_MS = 1 * 60 * 1000; // 前回視聴から1分は再視聴不可
+export const VIDEO_REWARD_MAX_PER_DAY = 100; // 1日（JST）に受け取れる上限回数
+// 視聴開始時に発行する nonce の有効期間。広告の表示〜視聴完了に十分な余裕を持たせる。
+export const VIDEO_REWARD_NONCE_TTL_MS = 10 * 60 * 1000;
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 // now（UTC ms epoch）が属する JST の日付文字列 "YYYY-MM-DD" を返す。
@@ -171,6 +177,24 @@ export async function setPoints(userId, points, now, tx = db) {
         .where(eq(userPoints.userId, userId));
     return toState(points, updatedAt, state.level, state.exp, state.playTimeSec, state.totalExp);
 }
+// デバッグ用：ユーザーのポイント状態を初期値（レベル1・経験値0・初期残高）に戻す。
+// 回復時計は now を基準に張り直す。塗りデータは別（painted ルーターの DELETE /all）で消す。
+export async function resetPoints(userId, now, tx = db) {
+    await ensurePoints(userId, now, tx); // 行が無ければ初期化しておく
+    const updatedAt = new Date(now);
+    await tx
+        .update(userPoints)
+        .set({
+        points: INITIAL_POINTS,
+        level: 1,
+        exp: 0,
+        totalExp: 0,
+        playTimeSec: 0,
+        updatedAt,
+    })
+        .where(eq(userPoints.userId, userId));
+    return toState(INITIAL_POINTS, updatedAt, 1, 0, 0, 0);
+}
 // cost ぶんポイントを消費する。残高不足なら null を返す（呼び出し側でロールバック）。
 // 満タンから消費する場合は回復時計を now から始める。
 export async function spendPoints(userId, cost, now, tx = db) {
@@ -231,10 +255,29 @@ async function selectRewardMeta(userId, tx) {
         lastVideoRewardAt: userPoints.lastVideoRewardAt,
         videoRewardCount: userPoints.videoRewardCount,
         videoRewardDay: userPoints.videoRewardDay,
+        rewardNonce: userPoints.rewardNonce,
+        rewardNonceAt: userPoints.rewardNonceAt,
     })
         .from(userPoints)
         .where(eq(userPoints.userId, userId));
     return rows.length === 0 ? null : rows[0];
+}
+// 視聴開始前に1回限りの nonce を発行して行に保存する。発行時点でクールダウン中・
+// 1日上限なら発行しない（早期に弾く）。発行した nonce は claimVideoReward で照合する。
+export async function issueVideoRewardNonce(userId, now, tx = db) {
+    const status = await getVideoRewardStatus(userId, now, tx);
+    if (status.nextAvailableAt !== null) {
+        return { ok: false, reason: "cooldown", status };
+    }
+    if (status.remainingToday <= 0) {
+        return { ok: false, reason: "daily_limit", status };
+    }
+    const nonce = randomUUID();
+    await tx
+        .update(userPoints)
+        .set({ rewardNonce: nonce, rewardNonceAt: new Date(now) })
+        .where(eq(userPoints.userId, userId));
+    return { ok: true, nonce, status };
 }
 // 動画リワードの現在の利用可否を返す（付与はしない）。行が無ければ初期状態を作る。
 export async function getVideoRewardStatus(userId, now, tx = db) {
@@ -245,7 +288,7 @@ export async function getVideoRewardStatus(userId, now, tx = db) {
 // 動画視聴の報酬を受け取る。「そのレベルの満タン分」を残高に加算する。
 // クールダウン中・1日上限到達なら ok:false を返して付与しない。
 // 付与後は残高が満タン以上になるため回復時計は now にそろえる（addExp の満タン時と同様）。
-export async function claimVideoReward(userId, now, tx = db) {
+export async function claimVideoReward(userId, now, nonce, tx = db) {
     const state = await ensurePoints(userId, now, tx); // 行を作成＋回復を確定
     const meta = await selectRewardMeta(userId, tx);
     const lastVideoRewardAt = meta?.lastVideoRewardAt ?? null;
@@ -258,6 +301,16 @@ export async function claimVideoReward(userId, now, tx = db) {
     }
     if (status.remainingToday <= 0) {
         return { ok: false, reason: "daily_limit", status };
+    }
+    // nonce 照合：視聴開始時に発行したもの（単回使用・未失効）であることを確認する。
+    // Web の GPT リワードは SSV ポストバックが無いため、これが直接POST乱用への最低限の歯止め。
+    const nonceOk = typeof nonce === "string" &&
+        nonce.length > 0 &&
+        meta?.rewardNonce === nonce &&
+        meta?.rewardNonceAt != null &&
+        now - meta.rewardNonceAt.getTime() <= VIDEO_REWARD_NONCE_TTL_MS;
+    if (!nonceOk) {
+        return { ok: false, reason: "invalid_nonce", status };
     }
     // 付与：そのレベルの満タン分（= 自然回復の上限と同量）を加算する。
     const granted = maxPointsForLevel(state.level);
@@ -272,6 +325,9 @@ export async function claimVideoReward(userId, now, tx = db) {
         lastVideoRewardAt: updatedAt,
         videoRewardCount: nextCount,
         videoRewardDay: today,
+        // 使った nonce は消す（単回使用＝同じ視聴で二重に受け取れない）。
+        rewardNonce: null,
+        rewardNonceAt: null,
     })
         .where(eq(userPoints.userId, userId));
     const nextState = toState(nextPoints, updatedAt, state.level, state.exp, state.playTimeSec, state.totalExp);

@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useState } from 'react';
 import { useSession } from '@/lib/auth-client';
 import { useLocale } from '@/lib/i18n';
@@ -11,7 +12,7 @@ type ModalTab = 'login' | 'register';
 
 export default function Header() {
   const { data: session, isPending, refetch } = useSession();
-  const { t } = useLocale();
+  const { t, lang } = useLocale();
   const [modal, setModal] = useState<ModalTab | null>(null);
   const [editingNickname, setEditingNickname] = useState(false);
   const [guestNoticeDismissed, setGuestNoticeDismissed] = useState(false);
@@ -24,7 +25,23 @@ export default function Header() {
   return (
     <>
       <header className="h-12 bg-white shadow-sm flex items-center px-4 z-10 shrink-0 gap-4">
-        <h1 className="text-base font-bold text-gray-800 shrink-0">{t('appTitle')}</h1>
+        {/* タイトルをクリックするとページをリロードする（GPS など状態を初期化する手段も兼ねる）。 */}
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="flex items-center gap-2 shrink-0 cursor-pointer"
+          aria-label={t('appTitle')}
+        >
+          <Image
+            src={lang === 'en' ? '/icons/header-icon-en.png' : '/icons/header-icon-ja.png'}
+            alt={t('appTitle')}
+            width={36}
+            height={36}
+            className="rounded-md"
+            priority
+          />
+          <h1 className="text-base font-bold text-gray-800">{t('appTitle')}</h1>
+        </button>
         <span className="flex-1 min-w-0" />
 
         {!isPending && (

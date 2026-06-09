@@ -26,8 +26,8 @@ export const metadata: Metadata = {
   title: "地図ぬりえ",
   description: SITE_DESC,
   icons: {
-    // ファビコン（タブ等の極小表示）は文字なしの方が潰れず視認しやすい
-    icon: "/promo/icon.png",
+    // ファビコン（タブ等）は英語ロゴ版アイコン（icon-512-en.png を 48px に縮小）
+    icon: "/icons/favicon-48.png",
     // iOS のホーム画面アイコンは文字入り版（180px相当で表示され文字も読める）
     apple: "/icons/icon-512.png",
   },

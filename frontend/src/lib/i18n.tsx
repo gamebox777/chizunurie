@@ -97,6 +97,8 @@ const ja: Dict = {
   modeNazori: 'なぞり塗り',
   nazoriHint:
     'なぞり塗り中\n・隣接した場所だけ塗れます\n・1マスにつき塗りポイントを1消費します\n・マウスオーバー（スマホは画面をスワイプ）で塗れます\n・地図はスクロールしません',
+  tonariHint:
+    'となり塗り中\n・クリックで1マス、ドラッグ（スマホはスワイプ）で連続して塗れます\n・隣接した場所は塗りポイント1、離れた場所は10消費（確認あり）\n・ドラッグ中は隣接した場所だけ塗ります\n・地図はスクロールしません（移動は移動モードで）',
 
   // Map: ポイント／レベルパネル
   expLabel: (a: number, b: number) => `経験値 ${a} / ${b}`,
@@ -212,6 +214,7 @@ const ja: Dict = {
   geoDenied: '位置情報の利用が許可されていません（ブラウザの設定を確認してください）',
   geoTimeout: '位置情報の取得がタイムアウトしました',
   geoFailed: '位置情報を取得できませんでした',
+  geoInsecure: '位置情報は https か localhost でしか使えません（IPアドレス等のhttp接続では取得できません）',
 
   // Map: ホバー中の市区町村塗り％
   hoverStat: (city: string, pct: string, p: number, total: number) =>
@@ -300,6 +303,8 @@ const en: Dict = {
   modeNazori: 'Trace',
   nazoriHint:
     'Trace painting\n・Only adjacent cells can be painted\n・Each cell costs 1 paint point\n・Paint by hovering (swipe on the screen on mobile)\n・The map will not scroll',
+  tonariHint:
+    'Adjacent painting\n・Click for one cell, or drag (swipe on mobile) to paint continuously\n・Adjacent cells cost 1 point; far cells cost 10 (with confirmation)\n・While dragging, only adjacent cells are painted\n・The map will not scroll (use move mode to pan)',
 
   // Map: points / level panel
   expLabel: (a: number, b: number) => `EXP ${a} / ${b}`,
@@ -417,6 +422,7 @@ const en: Dict = {
   geoDenied: 'Location access is not allowed (check your browser settings)',
   geoTimeout: 'Getting your location timed out',
   geoFailed: 'Could not get your location',
+  geoInsecure: 'Location works only over https or localhost (not over plain http such as an IP address)',
 
   // Map: hover municipality paint %
   hoverStat: (city: string, pct: string, p: number, total: number) =>

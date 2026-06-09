@@ -6,6 +6,15 @@ import { Protocol } from 'pmtiles';
 import { useSession } from '@/lib/auth-client';
 import { logEvent, setLastKnownLocation } from '@/lib/userlog';
 import { updateMyCountry } from '@/lib/userApi';
+import {
+  fetchGameSettings,
+  fetchPublicGameSettings,
+  saveGameSettings,
+  DEFAULT_RIPPLE,
+  resolveRipple,
+  rippleRgba,
+} from '@/lib/gameSettings';
+import type { ResolvedRipple } from '@/lib/gameSettings';
 import { RUN_MODE, RUN_MODE_LABEL, RUN_MODE_BADGE } from '@/lib/runtime-env';
 import { useLocale, type Lang, type TFunc } from '@/lib/i18n';
 import { kanaToRomaji, prefRomaji } from '@/lib/romaji';
@@ -114,8 +123,14 @@ function formatPlayTime(sec: number, t: TFunc): string {
 // 塗り方モード。gps = 実際に訪問（最優先・黄）、manual = マウスで隣接塗り（茶）
 type PaintMode = 'gps' | 'manual';
 
-const COLOR_GPS = '#facc15'; // 黄色（一番強い）
+const COLOR_GPS = '#facc15'; // 黄色（一番強い・1kmマス全体＝そのkmに入った印）
+const COLOR_GPS_FINE = '#ef4444'; // 赤っぽい（歩いた125m細セル＝より目立つ・黄色の上に重ねる）
 const COLOR_MANUAL = '#a0522d'; // 茶色
+
+// となり塗りモードのホバープレビュー色。塗り済みに隣接していて 1pt で塗れる時（=となり塗りに
+// なる）と、離れていて遠距離塗り（10pt・確認ダイアログ）になる時で半透明タイルの色を変える。
+const COLOR_HOVER_ADJACENT = '#22c55e'; // 緑＝そのまま塗れる（となり塗り・1pt）
+const COLOR_HOVER_FAR = '#ef4444'; // 赤＝離れている（遠距離塗り・10pt）
 
 // 制覇（市区町村100%塗り）した境界を強調する金枠の色
 const COLOR_CONQUER = '#f59e0b';
@@ -274,6 +289,52 @@ function meshCellRing(code: number): [number, number][] {
     [lng0, lat1],
     [lng0, lat0],
   ];
+}
+
+// ── 歩きGPS塗り用の細セル（約125m = 1kmを 8×8=64 分割）──────────────
+// となり塗りは1km単位で良いが、歩いて塗るには1kmは大きすぎる。そこで GPS 塗りだけは
+// 1kmセルをさらに 8×8 の細セルに割り、歩いた細セルだけを小四角で塗る。1km単位の塗り％・
+// ランキング・隣接判定は従来どおり（その1kmを1つでも踏めば「取った」）で、細セルは見た目
+// （どの小四角を描くか）と細セルEXPにだけ効く。細セルは親 CELLID 内の subIndex(0..63) で表す。
+const MESH_SUB_DIV = 8; // 1km の一辺の分割数（8×8=64・約125m）
+const FULL_MASK = (1n << 64n) - 1n; // 全64細セルを踏破＝全面（描画は1km全体に戻す）
+
+// 経緯度 → その点が属する1kmセル内の細セル番号 subIndex（0..63, = sr*MESH_SUB_DIV + sc）。
+// sr=セル内の行（緯度方向 0..7）・sc=セル内の列（経度方向 0..7）。
+function subIndexAt(lng: number, lat: number): number {
+  const fr = lat * MESH_LAT_DIV;
+  const fc = lng * MESH_LON_DIV;
+  const sr = Math.min(MESH_SUB_DIV - 1, Math.floor((fr - Math.floor(fr)) * MESH_SUB_DIV));
+  const sc = Math.min(MESH_SUB_DIV - 1, Math.floor((fc - Math.floor(fc)) * MESH_SUB_DIV));
+  return sr * MESH_SUB_DIV + sc;
+}
+
+// 細セル（親 CELLID + subIndex）の矩形ポリゴンの外周リング（[lng,lat] の5点）。
+function subCellRing(code: number, subIndex: number): [number, number][] {
+  const [ri, ci] = gridFromMeshCode(code);
+  const sr = Math.floor(subIndex / MESH_SUB_DIV);
+  const sc = subIndex % MESH_SUB_DIV;
+  const lat0 = (ri + sr / MESH_SUB_DIV) / MESH_LAT_DIV;
+  const lat1 = (ri + (sr + 1) / MESH_SUB_DIV) / MESH_LAT_DIV;
+  const lng0 = (ci + sc / MESH_SUB_DIV) / MESH_LON_DIV;
+  const lng1 = (ci + (sc + 1) / MESH_SUB_DIV) / MESH_LON_DIV;
+  return [
+    [lng0, lat0],
+    [lng1, lat0],
+    [lng1, lat1],
+    [lng0, lat1],
+    [lng0, lat0],
+  ];
+}
+
+// 細セルの中心の経緯度（演出＝波紋の位置用）。
+function subCellCenter(code: number, subIndex: number): [number, number] {
+  const [ri, ci] = gridFromMeshCode(code);
+  const sr = Math.floor(subIndex / MESH_SUB_DIV);
+  const sc = subIndex % MESH_SUB_DIV;
+  const lng = (ci + (sc + 0.5) / MESH_SUB_DIV) / MESH_LON_DIV;
+  const lat = (ri + (sr + 0.5) / MESH_SUB_DIV) / MESH_LAT_DIV;
+  return [lng, lat];
 }
 
 // ── 市区町村の帰属判定（セル中心 point-in-polygon）──────────────────
@@ -616,18 +677,41 @@ type RegionRankingsResponse = {
 // 塗った全セルを矩形ポリゴンの FeatureCollection に変換（低ズーム用オーバーレイ）。
 // メッシュコードから数式でセル範囲を復元するので PMTiles 側にメッシュが無い
 // 低ズームでも塗りを描画できる。
-function buildPaintedOverlay(painted: PaintedState): GeoJSON.FeatureCollection {
+// masks: CELLID → 歩いた細セルのビットマスク（部分塗りの1kmだけ持つ）。
+// 描画は2段重ね：
+//  - kind:'full'  …塗った1kmセルは必ず1km全体の矩形を描く（黄色＝そのkmに入った印）。
+//  - kind:'fine'  …部分的に歩いた1km（マスクが 0 でも FULL_MASK でもない）は、立っている
+//                  ビットの125m細セルだけを小四角で「黄色の上に」赤っぽく重ねて目立たせる。
+// 全ビット(FULL_MASK)＝そのkmを歩き尽くした時は full（黄色）だけにし、細セルは描かない。
+function buildPaintedOverlay(
+  painted: PaintedState,
+  masks: Map<number, bigint>
+): GeoJSON.FeatureCollection {
   const features: GeoJSON.Feature[] = [];
   for (const [key, mode] of Object.entries(painted)) {
     const [sourceLayer, idStr] = key.split(':');
     if (sourceLayer !== 'mesh') continue;
     const code = Number(idStr);
     if (!Number.isFinite(code)) continue;
+    // 1kmセル全体（黄色／茶色のベース）。塗った全セルに必ず描く。
     features.push({
       type: 'Feature',
-      properties: { mode },
+      properties: { mode, kind: 'full' },
       geometry: { type: 'Polygon', coordinates: [meshCellRing(code)] },
     });
+    // 部分的に歩いた1km：歩いた125m細セルを赤っぽく上に重ねる。
+    const mask = masks.get(code);
+    if (mask !== undefined && mask !== 0n && mask !== FULL_MASK) {
+      for (let s = 0; s < 64; s++) {
+        if ((mask & (1n << BigInt(s))) !== 0n) {
+          features.push({
+            type: 'Feature',
+            properties: { mode, kind: 'fine' },
+            geometry: { type: 'Polygon', coordinates: [subCellRing(code, s)] },
+          });
+        }
+      }
+    }
   }
   return { type: 'FeatureCollection', features };
 }
@@ -717,6 +801,9 @@ export default function MapView() {
   const [mapReady, setMapReady] = useState(false);
   const [painted, setPainted] = useState<PaintedState>({});
   const paintedRef = useRef<PaintedState>({});
+  // 歩きGPS塗りの細セル進捗。CELLID → 踏んだ細セルのビットマスク（部分塗りの1kmだけ持つ）。
+  // 1km単位の塗り（paintedRef）とは独立。描画（buildPaintedOverlay）で全面 or 小四角を切り替える。
+  const maskRef = useRef<Map<number, bigint>>(new Map());
   const zoomLabelRef = useRef<HTMLSpanElement>(null);
   // 塗りポイント／レベル（ログインユーザーのみ）。ref は塗りハンドラ内から同期参照する。
   const [points, setPoints] = useState(0);
@@ -817,6 +904,14 @@ export default function MapView() {
   // requestAnimationFrame でセルの実ピクセル幅（--size）に追従させ、ズームと一緒に拡大させる。
   const fxItemsRef = useRef<Array<{ el: HTMLDivElement; lng: number; marker: maplibregl.Marker }>>([]);
   const fxRafRef = useRef<number | null>(null);
+  // 波紋の演出パラメータ（広がるスピード・サイズ・表示時間・色・半透明値）。塗り方
+  // （隣塗り＝manual／GPS塗り＝gps）ごとに別設定。管理画面（app_settings）で調整できる。
+  // 起動時に公開エンドポイントから1回だけ取得してここにキャッシュし、波紋を出すたびに
+  // DB を読みにこない（spawnRipple はこの ref だけを見る）。既定は従来挙動。
+  const rippleCfgRef = useRef<ResolvedRipple>({
+    manual: { ...DEFAULT_RIPPLE.manual },
+    gps: { ...DEFAULT_RIPPLE.gps },
+  });
 
   // 生きている波紋のサイズをセル幅に合わせて毎フレーム更新（空になったら自動で止まる）。
   const tickRipples = useCallback(() => {
@@ -835,14 +930,19 @@ export default function MapView() {
     fxRafRef.current = requestAnimationFrame(tickRipples);
   }, []);
 
-  // 塗ったセル中心（地理座標）に派手な波紋を出す。
+  // 塗ったセル中心（地理座標）に派手な波紋を出す。mode（隣塗り＝manual／GPS塗り＝gps）で
+  // 演出パラメータ（色・半透明値・スピード・サイズ・表示時間）を出し分ける。
   const spawnRipple = useCallback(
-    (lng: number, lat: number, color: string) => {
+    (lng: number, lat: number, mode: PaintMode) => {
       const map = mapRef.current;
       if (!map) return;
+      const cfg = rippleCfgRef.current[mode]; // 管理画面で調整した塗り方別パラメータ（キャッシュ済み）
       const el = document.createElement('div');
       el.className = 'paint-ripple';
-      el.style.setProperty('--c', color);
+      el.style.setProperty('--c', rippleRgba(cfg.color, cfg.alpha));
+      // 広がるスピード（リング所要時間）と最大サイズ倍率を CSS 変数で渡す（CSS 側がこれで広がる）。
+      el.style.setProperty('--dur', `${cfg.durationMs}ms`);
+      el.style.setProperty('--scale', `${cfg.maxScale}`);
       // セル横幅 px を初期サイズに（rAF が来る前から正しい大きさで出す）
       const c = map.project([lng, lat]);
       const e = map.project([lng + 1 / MESH_LON_DIV, lat]);
@@ -859,7 +959,7 @@ export default function MapView() {
       window.setTimeout(() => {
         marker.remove();
         fxItemsRef.current = fxItemsRef.current.filter((i) => i !== item);
-      }, 1100);
+      }, cfg.lifetimeMs);
     },
     [tickRipples]
   );
@@ -909,6 +1009,24 @@ export default function MapView() {
   >(() => {});
 
   const [debugMoving, setDebugMoving] = useState(false);
+  // デバッグ用：十字キー移動モードの速度[m/s]。通常移動と Shift 併用（加速）で別々に持つ。
+  // 移動ループ（requestAnimationFrame）から同期参照するため ref も持ち、スライダーで両方更新する。
+  const [moveSpeed, setMoveSpeed] = useState(20); // 通常移動 m/s
+  const [sprintSpeed, setSprintSpeed] = useState(200); // Shift 押下時 m/s
+  const moveSpeedRef = useRef(20);
+  const sprintSpeedRef = useRef(200);
+  // 十字キー移動スピードはゲーム共通設定（サーバーの app_settings）に永続化する。
+  // スライダー操作のたびに PUT すると多すぎるので、最後の操作から少し待って1回だけ保存する。
+  const gameSettingsSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveMoveSpeeds = useCallback(() => {
+    if (gameSettingsSaveTimer.current) clearTimeout(gameSettingsSaveTimer.current);
+    gameSettingsSaveTimer.current = setTimeout(() => {
+      void saveGameSettings({
+        moveSpeed: moveSpeedRef.current,
+        sprintSpeed: sprintSpeedRef.current,
+      });
+    }, 500);
+  }, []);
   // デバッグ用：マウスで塗った場所を消すモード。ON の間はクリックで塗らずに消す
   // （現地塗り・となり塗り問わず消せる）。クリックハンドラから同期参照するため ref も持つ。
   const [eraseMode, setEraseMode] = useState(false);
@@ -1510,11 +1628,12 @@ export default function MapView() {
       addressMarkerRef.current?.remove();
       addressMarkerRef.current = null;
     }
-    // なぞり塗り中は地図をスクロールさせない（スワイプ＝塗り操作にする）。
-    // 1本指パン（マウスドラッグ＋タッチパン）を止める。ピンチズームは残す。
+    // なぞり塗り・となり塗り中は地図をスクロールさせない（ドラッグ＝塗り操作にする）。
+    // 1本指パン（マウスドラッグ＋タッチパン）を止める。ピンチズームは残す。パンは
+    // 「移動モード（十字キー）」で行う。現地塗りはドラッグ＝パンのまま。
     const map = mapRef.current;
     if (map) {
-      if (paintMode === 'nazori') map.dragPan.disable();
+      if (paintMode === 'nazori' || paintMode === 'tonari') map.dragPan.disable();
       else map.dragPan.enable();
     }
   }, [paintMode]);
@@ -1771,8 +1890,9 @@ export default function MapView() {
       const [ri, ci] = gridFromMeshCode(id);
       const lng = (ci + 0.5) / MESH_LON_DIV;
       const lat = (ri + 0.5) / MESH_LAT_DIV;
-      // 波紋：塗ったセル中心（地理座標）に地図追従の波紋を出す（赤半透明・派手に大きく広げる）
-      spawnRipple(lng, lat, 'rgba(239, 68, 68, 0.6)');
+      // 波紋：塗ったセル中心（地理座標）に地図追従の波紋を出す。色・スピード等は塗り方
+      //（隣塗り／GPS塗り）ごとに管理画面で設定した値を使う。
+      spawnRipple(lng, lat, mode);
       // 地名＋経験値を画面 UI としてふわっと上に出す。まず手元の市区町村名で即出し、日本では
       // 逆ジオコーダ（町丁目まで）で詳しい住所に差し替える（キャッシュ済みなら最初から詳しく出す）。
       {
@@ -2087,12 +2207,20 @@ export default function MapView() {
       style: BLANK_STYLE,
       center: [136.5, 37],
       zoom: 4.5,
+      // クリックと判定する許容移動量を既定(3px)より緩める。となり塗りで素早く連打すると、
+      // mousedown→mouseup の間の手ブレが 3px を超えて「ドラッグ」扱いになり click が捨てられ、
+      // セルが塗られず穴になっていた。少し緩めて意図したタップを取りこぼさないようにする。
+      clickTolerance: 6,
       localIdeographFontFamily: "'Hiragino Sans', 'Yu Gothic', 'Noto Sans JP', sans-serif",
       attributionControl: false,
     });
 
     // Shift+ドラッグの矩形ズームを無効化（Shift+クリックのデバッグ塗りと競合するため）
     map.boxZoom.disable();
+
+    // 十字キーでのカメラ回転・ピッチ（MapLibre 既定の Shift+矢印）を無効化する。
+    // 移動モードの「Shiftで加速」と競合してカメラが勝手に回転していたのを止める。
+    map.keyboard.disableRotation();
 
     // ダブルクリック／スマホのダブルタップでのズームインを無効化（塗り操作と競合するため）
     map.doubleClickZoom.disable();
@@ -2305,16 +2433,36 @@ export default function MapView() {
       // mesh は PMTiles に焼かず数式生成するので、塗りの色付けはこのオーバーレイが一手に担う。
       map.addSource('painted-overlay', {
         type: 'geojson',
-        data: buildPaintedOverlay(paintedRef.current),
+        data: buildPaintedOverlay(paintedRef.current, maskRef.current),
       });
+      // マスクだけが変わった（既に塗り済みの1km内で新しい細セルを歩いた）ときは painted state が
+      // 変化せず上の useEffect が走らないので、塗りオーバーレイを直接張り替えるヘルパを用意する。
+      const refreshPaintedOverlay = () => {
+        (map.getSource('painted-overlay') as maplibregl.GeoJSONSource | undefined)?.setData(
+          buildPaintedOverlay(paintedRef.current, maskRef.current)
+        );
+      };
       map.addLayer({
         id: 'painted-overlay-fill',
         type: 'fill',
         source: 'painted-overlay',
         minzoom: PAINTED_OVERLAY_MIN_ZOOM,
+        filter: ['==', ['get', 'kind'], 'full'],
         paint: {
           'fill-color': ['match', ['get', 'mode'], 'gps', COLOR_GPS, 'manual', COLOR_MANUAL, '#ffffff'],
           'fill-opacity': 0.55,
+        },
+      });
+      // 歩いた125m細セルを1kmの黄色の上に赤っぽく重ねる層（より目立たせる）。
+      map.addLayer({
+        id: 'painted-fine-fill',
+        type: 'fill',
+        source: 'painted-overlay',
+        minzoom: PAINTED_OVERLAY_MIN_ZOOM,
+        filter: ['==', ['get', 'kind'], 'fine'],
+        paint: {
+          'fill-color': COLOR_GPS_FINE,
+          'fill-opacity': 0.5,
         },
       });
 
@@ -2397,7 +2545,24 @@ export default function MapView() {
         type: 'fill',
         source: 'mesh-hover',
         minzoom: MESH_MIN_ZOOM,
-        paint: { 'fill-color': '#000000', 'fill-opacity': 0.12 },
+        // 'hl' プロパティ（setHover が付与）で色を切り替える。となり塗りで隣接して塗れる時は
+        // 緑、離れていて遠距離塗りになる時は赤、それ以外（現地・なぞり・消す・通常ホバー）は黒。
+        paint: {
+          'fill-color': [
+            'match',
+            ['get', 'hl'],
+            'adjacent', COLOR_HOVER_ADJACENT,
+            'far', COLOR_HOVER_FAR,
+            '#000000',
+          ],
+          'fill-opacity': [
+            'match',
+            ['get', 'hl'],
+            'adjacent', 0.3,
+            'far', 0.3,
+            0.12,
+          ],
+        },
       });
 
       // 表示中の「陸」セル（CELLID）の集合。mesh をベイクしなくなったので、表示中の
@@ -2526,6 +2691,9 @@ export default function MapView() {
       const hoverAddrCache = revGeoCacheRef.current;
       let hoverGeocodeTimer: number | null = null;
       let hoverId: number | null = null;
+      // となり塗りでマウス左ボタンを押したままドラッグしている間 true。なぞり塗りと同じく
+      // ドラッグで通った隣接セルを連続で塗る（dragPan は無効化済み）。
+      let tonariDragging = false;
 
       const clearHover = () => {
         if (hoverId === null) return;
@@ -2553,10 +2721,21 @@ export default function MapView() {
         hoverId = id;
         // 外国は 10×10 ブロックを半透明プレビュー、自国は1マス。
         const foreign = isForeign(region?.a3);
-        meshHoverSrc()?.setData({
-          type: 'FeatureCollection',
-          features: foreign ? blockCellFeatures(id) : [cellFeature(id)],
-        });
+        const features = foreign ? blockCellFeatures(id) : [cellFeature(id)];
+        // となり塗りモードのプレビュー：未塗りセルが塗り済みに隣接（or 最初の1セル）なら 1pt の
+        // となり塗り（緑）、離れていれば遠距離塗り（赤）。クリック時のコスト判定（isAdjacent）と
+        // 同じなので、色＝これから払うコストの予告になる。外国まとめ塗り・消すモードは対象外。
+        if (
+          !foreign &&
+          paintModeRef.current === 'tonari' &&
+          !eraseModeRef.current &&
+          !paintedRef.current[`mesh:${id}`]
+        ) {
+          const isFirstPaint = Object.keys(paintedRef.current).length === 0;
+          const hl = isAdjacent(id) || isFirstPaint ? 'adjacent' : 'far';
+          for (const f of features) f.properties = { ...(f.properties ?? {}), hl };
+        }
+        meshHoverSrc()?.setData({ type: 'FeatureCollection', features });
         setForeignHover(foreign);
         map.getCanvas().style.cursor = 'pointer';
         hoverKeyRef.current = muniKey;
@@ -2606,6 +2785,14 @@ export default function MapView() {
             } else if (paintModeRef.current === 'nazori' && !eraseModeRef.current) {
               // なぞり塗り：マウスオーバーで隣接セルを 1pt 消費しながら塗る。
               nazoriPaintAt(e);
+            } else if (
+              paintModeRef.current === 'tonari' &&
+              tonariDragging &&
+              !eraseModeRef.current
+            ) {
+              // となり塗りのドラッグ連続塗り：左ボタンを押したまま通った隣接セルを塗る。
+              // なぞり塗りと同じ判定（隣接のみ・1pt・非隣接や残高不足は静かにスキップ）。
+              nazoriPaintAt(e);
             }
             return;
           }
@@ -2616,7 +2803,27 @@ export default function MapView() {
 
       map.on('mouseleave', () => {
         clearHover();
+        tonariDragging = false;
         map.getCanvas().style.cursor = '';
+      });
+
+      // となり塗りのドラッグ塗り開始。左ボタン押下で開始セルを1つ塗り（取りこぼし防止）、
+      // 以降は mousemove が通ったセルを連続で塗る。デバッグのホバー塗り中は対象外。
+      // 開始セルの塗りは nazoriPaintAt 任せ（隣接のみ・非隣接は塗らない）なので、非隣接セルの
+      // 単発クリックは従来どおり click ハンドラの確認ダイアログ（10pt）に回る。
+      map.on('mousedown', (e) => {
+        if ((e.originalEvent as MouseEvent).button !== 0) return; // 左ボタンのみ
+        if (
+          paintModeRef.current === 'tonari' &&
+          !eraseModeRef.current &&
+          !hoverPaintModeRef.current
+        ) {
+          tonariDragging = true;
+          nazoriPaintAt(e);
+        }
+      });
+      map.on('mouseup', () => {
+        tonariDragging = false;
       });
 
       const syncPaint = (
@@ -2625,7 +2832,9 @@ export default function MapView() {
         mode?: PaintMode,
         region?: { key: string; a3: string } | null,
         revisit = false,
-        bulk = false
+        bulk = false,
+        // GPS歩き塗りで踏んだ細セル番号（0..63）。サーバーが walked_mask の該当ビットを立てる。
+        subIndex: number | null = null
       ) => {
         if (!userIdRef.current) return;
         // POST のときは塗った位置の文脈（セル中心の緯度経度・市区町村・州県コード）を添える。
@@ -2656,7 +2865,7 @@ export default function MapView() {
           method,
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sourceLayer: 'mesh', keyCode: String(id), mode, ...(bulk ? { bulk: true } : {}), ...ctx }),
+          body: JSON.stringify({ sourceLayer: 'mesh', keyCode: String(id), mode, ...(bulk ? { bulk: true } : {}), ...(subIndex !== null ? { subIndex } : {}), ...ctx }),
         })
           .then(async (res) => {
             // POST（GPS塗り・なぞり塗り）はサーバーが経験値・レベルを返す。反映してレベルアップ演出も出す。
@@ -2678,10 +2887,11 @@ export default function MapView() {
             if (revisit && data?.gainedExp && data.gainedExp > 0) {
               showToast(tRef.current('expRevisit', data.gainedExp as never));
               const [ri, ci] = gridFromMeshCode(id);
+              // 再訪は GPS で既訪セルへ入り直したとき → GPS塗りの波紋設定で出す。
               spawnRippleRef.current(
                 (ci + 0.5) / MESH_LON_DIV,
                 (ri + 0.5) / MESH_LAT_DIV,
-                'rgba(239, 68, 68, 0.6)'
+                'gps'
               );
             }
           })
@@ -2742,14 +2952,16 @@ export default function MapView() {
       };
 
       // GPS（実際の移動）塗り。無料なのでローカル反映＋同期のみ。
+      // subIndex を渡すと、その細セル（125m）を踏んだ情報をサーバーへ送る（新規1km の初回）。
       const applyPaint = (
         id: number,
         mode: PaintMode,
         muniKey: string | null,
-        region: { key: string; a3: string } | null
+        region: { key: string; a3: string } | null,
+        subIndex: number | null = null
       ) => {
         const result = commitLocalPaint(id, mode, muniKey, region);
-        if (result !== 'skip') syncPaint('POST', id, mode, region);
+        if (result !== 'skip') syncPaint('POST', id, mode, region, false, false, subIndex);
       };
 
       // ローカルの塗りを取り消す（state のみ。サーバー同期はしない）
@@ -2762,6 +2974,7 @@ export default function MapView() {
         paintedRef.current = next;
         setPainted(next);
         paintedAtRef.current.delete(id);
+        maskRef.current.delete(id); // 歩いた細セルの記録も一緒に消す
         let changed = false;
         const muni = muniByPaintedCellRef.current.get(id);
         if (muni) {
@@ -2949,9 +3162,10 @@ export default function MapView() {
         doManualPaint(id, muniKey, region, address, COST_ADJACENT);
       };
 
-      // スマホはスワイプ（touchmove）で塗る。なぞり塗り中のみ・1本指のみ（ピンチは塗らない）。
+      // スマホはスワイプ（touchmove）で塗る。なぞり塗り・となり塗り中のみ・1本指のみ
+      // （ピンチは塗らない）。となり塗りも dragPan を無効化済みなのでスワイプ＝塗りになる。
       map.on('touchmove', (e) => {
-        if (paintModeRef.current !== 'nazori') return;
+        if (paintModeRef.current !== 'nazori' && paintModeRef.current !== 'tonari') return;
         if (e.points && e.points.length > 1) return; // 2本指（ズーム）は塗り対象外
         nazoriPaintAt(e);
       });
@@ -3214,11 +3428,17 @@ export default function MapView() {
       // メッシュコードは座標から数式で求まるので、タイル未ロードでも塗れる。
       let lastGeocodedId: number | null = null; // 逆ジオコーダの連打防止（セルが変わった時だけ）
       let lastGpsCellId: number | null = null; // 直前にGPSで居たセル（再訪検出・静止中の連投防止）
+      let lastGpsSubIndex: number | null = null; // 直前にGPSで居た細セル（同一細セル内の連投防止）
       const paintGpsAt = (lngLat: [number, number]) => {
         const id = meshCodeAt(lngLat[0], lngLat[1]);
+        const sub = subIndexAt(lngLat[0], lngLat[1]); // 1km内の細セル（125m）番号 0..63
+        const bit = 1n << BigInt(sub);
         // 別セルから入り直したか（静止中は同じセルなので false → 再訪POSTを連投しない）。
         const enteredNewCell = id !== lastGpsCellId;
+        // 細セルまで見て「別の細セルへ移ったか」（静止中の同一細セル連投も防ぐ）。
+        const enteredNewSubCell = enteredNewCell || sub !== lastGpsSubIndex;
         lastGpsCellId = id;
+        lastGpsSubIndex = sub;
         // 市区町村キー（塗り％用）は表示中なら municipalities から拾う。ズームが浅い／
         // 画面外なら null（GPS塗り自体は数式で成立するのでセルは塗れる）。
         let muniKey: string | null = null;
@@ -3230,13 +3450,39 @@ export default function MapView() {
           const st = stateInfoAt(pt);
           region = st ? { key: st.key, a3: st.a3 } : null;
         }
-        if (paintedRef.current[`mesh:${id}`] === 'gps') {
-          // 既に訪問済み（黄）のセル。別セルから入り直した時だけ再訪EXPをサーバーに問い合わせる。
-          // サーバーが前回訪問からのクールダウン（1時間）を判定し、満たせば +100 を返す。
-          if (enteredNewCell) syncPaint('POST', id, 'gps', region, true);
+        const existingMode = paintedRef.current[`mesh:${id}`];
+        if (!existingMode) {
+          // 新規1km：ローカルに gps 塗り＋踏んだ細セルのビットを立てる。サーバーへ subIndex を送る。
+          // 1km初訪問なので従来の新規セル演出（波紋・地名＋EXP・制覇判定）はそのまま出る。
+          maskRef.current.set(id, bit);
+          applyPaint(id, 'gps', muniKey, region, sub);
+          refreshPaintedOverlay(); // マスクを即時反映（small square で描く）
         } else {
-          // 新規セル or となり塗り→gps 昇格：従来どおりローカル反映＋サーバー同期。
-          applyPaint(id, 'gps', muniKey, region);
+          const curMask = maskRef.current.get(id) ?? 0n;
+          if (curMask === 0n) {
+            // 全面セル（手動塗り／旧GPS全面）：細分化しない。従来どおりの昇格／再訪。
+            if (existingMode === 'gps') {
+              // 別セルから入り直した時だけ再訪EXPをサーバーへ問い合わせる（クールダウン1h）。
+              if (enteredNewCell) syncPaint('POST', id, 'gps', region, true);
+            } else {
+              // となり塗り(manual)→gps 昇格。1kmは黄色のベタ塗りにしつつ、踏んだ125m細セルの
+              // ビットを立てて黄色の上に赤い細セルを重ねる（新規1kmと同じ見た目になる）。
+              maskRef.current.set(id, bit);
+              applyPaint(id, 'gps', muniKey, region, sub);
+              refreshPaintedOverlay();
+            }
+          } else if ((curMask & bit) === 0n) {
+            // 取得済み1km内で、まだ歩いていない細セルを踏んだ → ビットを立てて小四角を追加。
+            // 1kmは既に取得済みなので％・カウントは動かさず、サーバーが細セルEXP(+5)を付ける。
+            maskRef.current.set(id, curMask | bit);
+            refreshPaintedOverlay();
+            syncPaint('POST', id, 'gps', region, false, false, sub);
+            const [clng, clat] = subCellCenter(id, sub);
+            spawnRippleRef.current(clng, clat, 'gps'); // 細セル塗り（GPS）の波紋
+          } else if (enteredNewSubCell) {
+            // 既に歩いた細セルへ入り直し → 再訪（サーバーがクールダウンを判定）。
+            syncPaint('POST', id, 'gps', region, true, false, sub);
+          }
         }
         // 現地塗り（GPS主導）では左下パネルにも現在地セルの市区町村％を出す。スマホは
         // マウスホバーが無く、ホバー由来の hoverStat が立たないため、これが無いと％が出ない。
@@ -3308,15 +3554,43 @@ export default function MapView() {
           logEvent('gps', { lat, lng, municipality });
         }
       });
+      // 同じ位置情報エラーが連続で飛んでくる（watch がエラーを吐き続ける）ので、
+      // トーストはコードが変わったとき or 15秒経過後にだけ出して連発を防ぐ。
+      let lastGeoErrCode: number | null = null;
+      let lastGeoErrAt = 0;
       geolocate.on('error', (err: GeolocationPositionError) => {
-        const msg =
-          err?.code === 1
-            ? tRef.current('geoDenied')
-            : err?.code === 3
-              ? tRef.current('geoTimeout')
-              : tRef.current('geoFailed');
-        showToast(msg);
-        console.warn('geolocation error', { code: err?.code, message: err?.message });
+        const code = err?.code ?? 0;
+        console.warn('geolocation error', { code, message: err?.message });
+        const now = Date.now();
+        const repeat = code === lastGeoErrCode && now - lastGeoErrAt < 15000;
+        lastGeoErrCode = code;
+        lastGeoErrAt = now;
+        if (!repeat) {
+          // localhost 以外の http など非セキュアコンテキストでは位置情報 API 自体が無効。
+          // この場合いくらリロードしても取得できないので、原因をはっきり伝える。
+          const msg = !window.isSecureContext
+            ? tRef.current('geoInsecure')
+            : code === 1
+              ? tRef.current('geoDenied')
+              : code === 3
+                ? tRef.current('geoTimeout')
+                : tRef.current('geoFailed');
+          showToast(msg);
+        }
+        if (cancelled) return;
+        // maplibre は権限拒否（code 1）で GPS ボタンを無効化し watch も止めてしまうため、
+        // 一度失敗すると「GPSアイコンを押しても二度と取得できない」状態に固まる。ボタンを
+        // 再有効化し watchState を OFF に戻して、アイコンを1回タップすれば取り直せるようにする
+        // （＝GPS 状態を初期化）。code 2/3（一時的な取得不可・タイムアウト）は watch が生きたまま
+        // で、現在地が取れ次第 maplibre 側が自動復帰するので触らない。
+        if (code === 1) {
+          const gci = geolocate as unknown as {
+            _watchState?: string;
+            _geolocateButton?: HTMLButtonElement;
+          };
+          if (gci._geolocateButton) gci._geolocateButton.disabled = false;
+          gci._watchState = 'OFF';
+        }
       });
 
       // ── 画面スリープ防止（Screen Wake Lock）──────────────────────
@@ -3362,81 +3636,213 @@ export default function MapView() {
         releaseWakeLock();
       };
 
-      // ── デバッグ用：十字キーで現在地を動かして塗る ──────────────
-      // 十字キーで仮想の現在地を移動（GPS と同じ黄色で塗る）。スペースで移動モード解除。
-      let debugMarker: maplibregl.Marker | null = null;
+      // ── デバッグ用：十字キーで現在地を「走る速さ」で連続移動して塗る ──────────────
+      // 開発者のみ。十字キーを押すとデバッグモードに入り、実GPSの追跡を止めて GPS 値そのものを
+      // 乗っ取る（本物の位置がマーカーを引き戻さない）。仮想の現在地が滑らかに走って動き、
+      // 実GPSと同じパイプライン（塗り・住所表示・国判定）を通すので実際の移動に近い挙動になる。
+      // Shift で加速・スペースで解除して実GPS取得へ復帰。requestAnimationFrame の連続移動。
       let debugPos: [number, number] | null = null;
+      const debugKeys = new Set<string>(); // 現在押されている十字キー
+      let debugShift = false; // Shift 押下中＝加速
+      let debugRaf = 0; // requestAnimationFrame のID（0=停止中）
+      let debugLastTs = 0; // 前フレームのタイムスタンプ（dt 計算用）
+      let debugLastCell = -1; // 直近に塗った1kmセル（同一セル内の塗り処理連打を避ける）
+      let debugLastSub = -1; // 直近に塗った125m細セル
+      let debugSavedWatchState: string | null = null; // デバッグ前の GPS 追跡状態（復帰用）
+      // 移動速度[m/s]はデバッグメニューのスライダーで可変（moveSpeedRef＝通常／sprintSpeedRef＝Shift時）。
+      const ARROWS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
 
-      const createDebugMarkerEl = () => {
-        const el = document.createElement('div');
-        el.style.width = '18px';
-        el.style.height = '18px';
-        el.style.borderRadius = '50%';
-        el.style.background = '#2563eb';
-        el.style.border = '3px solid #ffffff';
-        el.style.boxShadow = '0 0 0 2px rgba(37,99,235,0.4)';
-        return el;
+      // GeolocateControl の内部にアクセスして実GPSの追跡を止め／GPS値を流し込む。
+      const gc = geolocate as unknown as {
+        _userLocationDotMarker?: maplibregl.Marker & { _map?: maplibregl.Map };
+        _onSuccess?: (pos: GeolocationPosition) => void;
+        _watchState?: string;
+        _geolocationWatchID?: number;
+        _clearWatch?: () => void;
+        _geolocateButton?: HTMLButtonElement;
       };
 
-      const moveDebugPosition = (pos: [number, number]) => {
-        debugPos = pos;
-        if (!debugMarker) {
-          debugMarker = new maplibregl.Marker({ element: createDebugMarkerEl() })
-            .setLngLat(pos)
-            .addTo(map);
-        } else {
-          debugMarker.setLngLat(pos);
+      // デバッグ開始：実GPSのウォッチを止め（本物の位置がマーカーを引き戻すのを防ぐ）、
+      // 状態を BACKGROUND にしてフィード時にカメラ自動移動(fitBounds)を起こさないようにする。
+      const enterDebugGps = () => {
+        if (debugSavedWatchState != null) return;
+        debugSavedWatchState = gc._watchState ?? 'OFF';
+        if (gc._geolocationWatchID != null) gc._clearWatch?.();
+        gc._watchState = 'BACKGROUND';
+      };
+
+      // デバッグ終了：GPS追跡状態をクリーンな OFF に戻す（壊れた BACKGROUND 状態を解消）。
+      // resume=true（スペース解除）なら元が追跡中だった時だけ trigger() で取得し直し、
+      // 本物の現在地へマーカー・カメラを復帰させる。resume=false（GPSボタン横取り）なら
+      // ここでは trigger せず、この後に走る GeolocateControl 本来の trigger() に任せる。
+      const exitDebugGps = (resume: boolean) => {
+        if (debugSavedWatchState == null) return;
+        const wasActive = debugSavedWatchState !== 'OFF';
+        debugSavedWatchState = null;
+        gc._watchState = 'OFF';
+        if (resume && wasActive) geolocate.trigger();
+      };
+
+      // 仮想の現在地を「GPS の成功イベント」として GeolocateControl に流し込む。
+      // これで本物の GPS と同じく現在地マーカーが動き、geolocate イベント経由で
+      // 塗り・住所表示・国判定まで一括で走る（＝実際の移動に近い挙動）。
+      const feedGps = (pos: [number, number]) => {
+        gc._onSuccess?.({
+          coords: {
+            longitude: pos[0],
+            latitude: pos[1],
+            accuracy: 5,
+            altitude: null,
+            altitudeAccuracy: null,
+            heading: null,
+            speed: null,
+          },
+          timestamp: Date.now(),
+        } as GeolocationPosition);
+      };
+
+      // フレーム間はマーカーだけ滑らかに動かす（GPS が未取得で点が未表示なら addTo で出す）。
+      const moveMainMarker = (pos: [number, number]) => {
+        const dot = gc._userLocationDotMarker;
+        if (!dot) return;
+        dot.setLngLat(pos);
+        if (!dot._map) dot.addTo(map); // 毎フレーム addTo すると remove→再追加で点滅するので未追加時のみ
+      };
+
+      // 細セルが変わった時だけ GPS 値を流す（PiP・逆ジオの連打を避ける）。
+      const paintDebugCell = (pos: [number, number]) => {
+        const cell = meshCodeAt(pos[0], pos[1]);
+        const sub = subIndexAt(pos[0], pos[1]);
+        if (cell === debugLastCell && sub === debugLastSub) return;
+        debugLastCell = cell;
+        debugLastSub = sub;
+        feedGps(pos);
+      };
+
+      const debugStep = (ts: number) => {
+        if (!debugPos) {
+          debugRaf = 0;
+          return;
         }
-        map.easeTo({ center: pos, duration: 200 });
-        paintGpsAt(pos); // 現在地として黄色く塗る
+        const dt = debugLastTs ? Math.min((ts - debugLastTs) / 1000, 0.1) : 0;
+        debugLastTs = ts;
+        let vx = 0;
+        let vy = 0;
+        if (debugKeys.has('ArrowUp')) vy += 1;
+        if (debugKeys.has('ArrowDown')) vy -= 1;
+        if (debugKeys.has('ArrowLeft')) vx -= 1;
+        if (debugKeys.has('ArrowRight')) vx += 1;
+        if ((vx !== 0 || vy !== 0) && dt > 0) {
+          const len = Math.hypot(vx, vy); // 斜め移動も同じ速さに正規化
+          vx /= len;
+          vy /= len;
+          const speed = debugShift ? sprintSpeedRef.current : moveSpeedRef.current; // m/s
+          const dist = speed * dt; // 進む距離[m]
+          const [lng, lat] = debugPos;
+          const dLat = (vy * dist) / 111320;
+          const dLng = (vx * dist) / (111320 * Math.cos((lat * Math.PI) / 180));
+          const next: [number, number] = [lng + dLng, lat + dLat];
+          debugPos = next;
+          moveMainMarker(next);
+          map.setCenter(next); // フレームごとに追従（easeTo はカクつくので setCenter）
+          paintDebugCell(next);
+        }
+        // 十字キーが押されている限りループ継続
+        debugRaf = debugKeys.size > 0 ? requestAnimationFrame(debugStep) : 0;
       };
 
+      const startDebugLoop = () => {
+        if (debugRaf) return;
+        debugLastTs = 0;
+        debugRaf = requestAnimationFrame(debugStep);
+      };
+
+      // 移動ループの後始末（マーカーは乗っ取っただけなので消さずその場に残す）。
+      const stopDebugLoop = () => {
+        debugKeys.clear();
+        debugShift = false;
+        if (debugRaf) {
+          cancelAnimationFrame(debugRaf);
+          debugRaf = 0;
+        }
+        debugPos = null;
+        debugLastCell = -1;
+        debugLastSub = -1;
+        setDebugMoving(false);
+      };
+
+      // スペースで移動モード解除 → 実GPS取得へ復帰する。
       const exitDebugMove = () => {
         if (!debugPos) return;
-        debugMarker?.remove();
-        debugMarker = null;
-        debugPos = null;
-        setDebugMoving(false);
-        showToast('移動モードを解除しました');
+        stopDebugLoop();
+        exitDebugGps(true);
+        showToast('移動モードを解除しました（GPS取得を再開）');
+      };
+
+      // GPSアイコン（GeolocateControl.trigger）をラップする。デバッグ中に押されたら、まず移動
+      // モードを解除して壊れた追跡状態をクリーンな OFF に戻してから本来の trigger を呼ぶ。こうすると
+      // 「GPSアイコンを何度押しても取得しない」状態に陥らず、押下で必ず通常のGPS取得へ戻る。
+      // （ボタンの click リスナーはターゲット上だと登録順で先に走ってしまうため、確実な trigger 横取り）
+      const origTrigger = geolocate.trigger.bind(geolocate);
+      geolocate.trigger = () => {
+        if (debugSavedWatchState != null) {
+          stopDebugLoop();
+          exitDebugGps(false); // 状態を OFF に戻すだけ。実取得は直後の origTrigger に任せる
+          showToast('移動モードを解除してGPS取得に戻ります');
+        }
+        return origTrigger();
       };
 
       const onDebugKeyDown = (e: KeyboardEvent) => {
         // 十字キーの疑似GPS移動は開発者だけのデバッグ機能。
         if (!isDeveloperRef.current) return;
+        if (e.key === 'Shift') debugShift = true;
         if (e.code === 'Space') {
           if (!debugPos) return;
           e.preventDefault();
           exitDebugMove();
           return;
         }
-        const arrows = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
-        if (!arrows.includes(e.key)) return;
+        if (!ARROWS.includes(e.key)) return;
         e.preventDefault();
-
         // 初回は地図中心から開始
-        let start = debugPos;
-        if (!start) {
+        if (!debugPos) {
           const c = map.getCenter();
-          start = [c.lng, c.lat];
+          debugPos = [c.lng, c.lat];
+          debugLastCell = -1;
+          debugLastSub = -1;
+          enterDebugGps(); // 実GPSを止めてGPS値を乗っ取る（本物の位置に引き戻されない）
+          moveMainMarker(debugPos);
           setDebugMoving(true);
-          showToast('移動モード：十字キーで移動 / スペースで解除');
+          showToast('移動モード：十字キーで走る / Shiftで加速 / スペースでGPSに戻る');
+          paintDebugCell(debugPos); // 開始地点を塗る
         }
-        const bounds = map.getBounds();
-        const stepLng = (bounds.getEast() - bounds.getWest()) * 0.15;
-        const stepLat = (bounds.getNorth() - bounds.getSouth()) * 0.15;
-        let [lng, lat] = start;
-        if (e.key === 'ArrowUp') lat += stepLat;
-        else if (e.key === 'ArrowDown') lat -= stepLat;
-        else if (e.key === 'ArrowLeft') lng -= stepLng;
-        else if (e.key === 'ArrowRight') lng += stepLng;
-        moveDebugPosition([lng, lat]);
+        debugKeys.add(e.key);
+        startDebugLoop();
+      };
+
+      const onDebugKeyUp = (e: KeyboardEvent) => {
+        if (e.key === 'Shift') debugShift = false;
+        if (ARROWS.includes(e.key)) debugKeys.delete(e.key);
+      };
+
+      // ウィンドウのフォーカスが外れるとキーアップを取りこぼすので、押下状態をリセットする。
+      const onDebugBlur = () => {
+        debugKeys.clear();
+        debugShift = false;
       };
 
       window.addEventListener('keydown', onDebugKeyDown);
+      window.addEventListener('keyup', onDebugKeyUp);
+      window.addEventListener('blur', onDebugBlur);
       debugCleanupRef.current = () => {
         window.removeEventListener('keydown', onDebugKeyDown);
-        debugMarker?.remove();
-        debugMarker = null;
+        window.removeEventListener('keyup', onDebugKeyUp);
+        window.removeEventListener('blur', onDebugBlur);
+        geolocate.trigger = origTrigger; // ラップを解除
+        if (debugRaf) cancelAnimationFrame(debugRaf);
+        debugRaf = 0;
+        debugKeys.clear();
         debugPos = null;
         addressMarkerRef.current?.remove();
         addressMarkerRef.current = null;
@@ -3499,6 +3905,42 @@ export default function MapView() {
     }
   }, [isDeveloper, mapReady]);
 
+  // 起動時に1回だけ、波紋など全員に効くゲーム共通設定を公開エンドポイントから取得してキャッシュする。
+  // 波紋は開発者以外の画面でも出るので開発者専用 GET ではなく公開 GET を使う。以降 spawnRipple は
+  // この rippleCfgRef だけを見て描画するので、波紋を出すたびに DB へアクセスしない。
+  useEffect(() => {
+    let cancelled = false;
+    void fetchPublicGameSettings().then((s) => {
+      if (cancelled) return;
+      // 未設定キーは既定値で埋めて確定する（隣塗り／GPS塗りそれぞれ）。
+      rippleCfgRef.current = resolveRipple(s.ripple);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 開発者になったら、ゲーム共通設定（十字キー移動スピード）をサーバーから読み込んで反映する。
+  // 設定はゲーム全体で1つ（app_settings）。state と参照用 ref の両方を更新する。
+  useEffect(() => {
+    if (!isDeveloper) return;
+    let cancelled = false;
+    void fetchGameSettings().then((s) => {
+      if (cancelled) return;
+      if (typeof s.moveSpeed === 'number') {
+        setMoveSpeed(s.moveSpeed);
+        moveSpeedRef.current = s.moveSpeed;
+      }
+      if (typeof s.sprintSpeed === 'number') {
+        setSprintSpeed(s.sprintSpeed);
+        sprintSpeedRef.current = s.sprintSpeed;
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isDeveloper]);
+
   // ログイン状態に応じて DB から復元 / ログアウト時にクリア
   useEffect(() => {
     if (isPending || !mapReady) return;
@@ -3510,6 +3952,7 @@ export default function MapView() {
       paintedRef.current = {};
       setPainted({});
       paintedAtRef.current = new Map();
+      maskRef.current = new Map();
       muniByPaintedCellRef.current = new Map();
       paintedByMuniRef.current = new Map();
       regionByPaintedCellRef.current = new Map();
@@ -3535,6 +3978,7 @@ export default function MapView() {
             mode?: string;
             municipality?: string | null;
             region?: string | null;
+            walkedMask?: string | null;
             paintedAt?: string | null;
           }[];
         };
@@ -3552,6 +3996,16 @@ export default function MapView() {
           if (row.municipality) muniByPaintedCellRef.current.set(id, row.municipality);
           if (row.region) regionByPaintedCellRef.current.set(id, row.region);
           if (row.paintedAt) paintedAtRef.current.set(id, row.paintedAt);
+          // 歩いた細セルのビットマスク（部分塗りの1kmだけ）。0＝全面塗りは持たない。
+          // DB は符号付き64bit なので asUintN で符号なしに戻してから保持する。
+          if (row.walkedMask) {
+            try {
+              const m = BigInt.asUintN(64, BigInt(row.walkedMask));
+              if (m !== 0n) maskRef.current.set(id, m);
+            } catch {
+              /* 数値化できない値は無視（全面塗り扱い） */
+            }
+          }
         }
         paintedRef.current = next;
         setPainted(next);
@@ -3576,7 +4030,7 @@ export default function MapView() {
     const map = mapRef.current;
     if (!map) return;
     const src = map.getSource('painted-overlay') as maplibregl.GeoJSONSource | undefined;
-    src?.setData(buildPaintedOverlay(painted));
+    src?.setData(buildPaintedOverlay(painted, maskRef.current));
     scheduleLabelRefresh(); // 塗りが変わったらラベルの％も更新（デバウンス）
   }, [painted, mapReady, scheduleLabelRefresh]);
 
@@ -4077,10 +4531,11 @@ export default function MapView() {
             )}
           </div>
         )}
-        {/* なぞり塗り中の注意点（塗りポイント表示の下・なぞり塗りモード時のみ）。 */}
-        {paintMode === 'nazori' && (
+        {/* となり塗り・なぞり塗り中の注意点（塗りポイント表示の下・各モード時のみ）。
+            どちらもドラッグ＝塗りで地図はスクロールしない旨を伝える。 */}
+        {(paintMode === 'nazori' || paintMode === 'tonari') && (
           <div className="max-w-[15rem] whitespace-pre-line rounded-lg bg-white/90 px-3 py-2 text-xs font-medium leading-relaxed text-gray-700 shadow">
-            {t('nazoriHint')}
+            {t(paintMode === 'nazori' ? 'nazoriHint' : 'tonariHint')}
           </div>
         )}
       </div>
@@ -4430,6 +4885,51 @@ export default function MapView() {
               <div className="mt-1 text-[11px] text-gray-400">
                 {typeof window !== 'undefined' ? window.location.host : ''}
               </div>
+            </div>
+            <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 px-3 py-3">
+              <div className="text-xs font-semibold text-gray-600 mb-2">
+                十字キー移動スピード
+              </div>
+              <label className="block">
+                <div className="flex items-center justify-between text-[11px] text-gray-500">
+                  <span>通常移動</span>
+                  <span className="font-mono text-gray-700">{moveSpeed} m/s</span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={1000}
+                  step={1}
+                  value={moveSpeed}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setMoveSpeed(v);
+                    moveSpeedRef.current = v;
+                    saveMoveSpeeds();
+                  }}
+                  className="w-full"
+                />
+              </label>
+              <label className="block mt-2">
+                <div className="flex items-center justify-between text-[11px] text-gray-500">
+                  <span>Shift（加速）</span>
+                  <span className="font-mono text-gray-700">{sprintSpeed} m/s</span>
+                </div>
+                <input
+                  type="range"
+                  min={10}
+                  max={5000}
+                  step={10}
+                  value={sprintSpeed}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setSprintSpeed(v);
+                    sprintSpeedRef.current = v;
+                    saveMoveSpeeds();
+                  }}
+                  className="w-full"
+                />
+              </label>
             </div>
             <div className="space-y-2">
               <a

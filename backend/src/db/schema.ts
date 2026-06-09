@@ -1,4 +1,6 @@
+import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   doublePrecision,
   index,
@@ -114,6 +116,17 @@ export const paintedRegions = pgTable(
     // 塗った国（Natural Earth の adm0_a3 コード。日本は "JPN"）。塗った時点で
     // クライアントが解決して送る。管理画面の塗りログ表示用。
     country: text("country"),
+    // GPS で「歩いて」塗った細セル（125m = 1kmを 8×8=64 分割）の進捗ビットマスク。
+    // bit s（s = sr*8 + sc, sr/sc は 0..7 の細セル行・列）が立っていれば、その1kmセル
+    // 内の細セル(sr,sc)を実際に歩いた。となり塗りは1km大きすぎるが歩き塗りは細かくしたい、
+    // という要望のための仕組み。1km単位の塗り％・ランキング・隣接判定は従来どおり（この行が
+    // 在れば「その1kmを取った」）で、マスクは見た目（どの小四角を描くか）と細セルEXPだけに効く。
+    //   0     = この1kmは「全面塗り」（手動塗り・旧GPS塗り・まとめ塗り・全64細セル踏破）として
+    //           セル全体を描画する（細分化しない）。既存行は default 0 なのでデータ移行不要。
+    //   非0   = GPSで歩いた細セルだけを小四角で描画する（部分塗り）。
+    walkedMask: bigint("walked_mask", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
     paintedAt: timestamp("painted_at", { withTimezone: true }).defaultNow(),
     // 直近に GPS で実際に訪れた時刻。再訪（既に gps 済みのセルへ GPS で入り直す）で
     // 経験値を再付与する際のクールダウン判定に使う。訪問のたびに同じ行を上書き更新する
@@ -123,6 +136,18 @@ export const paintedRegions = pgTable(
   },
   (t) => [unique().on(t.userId, t.sourceLayer, t.keyCode)]
 );
+
+// ゲーム全体で共有する共通設定。ユーザーごとの user.settings とは別で、ゲーム全体に1行だけ持つ。
+// デバッグ用の十字キー移動スピードなど「開発者がゲーム全体に効かせたい設定」をここに入れる。
+// 設定項目は今後増えるため、項目ごとにカラム＝マイグレーションを増やさず jsonb に全部入れる
+// （user.settings と同じ方針だが、こちらは全ユーザー共通で常に id=1 の1行だけを使う）。
+export const appSettings = pgTable("app_settings", {
+  id: integer("id").primaryKey().default(1),
+  settings: jsonb("settings").notNull().default({}),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
 
 // 開発者確認用のユーザー行動ログ。塗り以外の主要アクション（ログイン/ログアウト/
 // 新規登録/セッション開始/検索/現在地取得）を1アクション1行で記録する。

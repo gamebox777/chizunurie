@@ -84,6 +84,18 @@ export const auth = betterAuth({
         input: false,
       },
     },
+    // 本人によるセルフ削除（アカウント削除ページの「今すぐ削除」ボタンから実行）。
+    // メール検証コールバックは設けず即時削除する（確認は UI の入力で取る）。user 行を
+    // 1 つ消すと session/account/painted_regions/user_logs/user_points が schema の
+    // onDelete:"cascade" で連鎖削除される。匿名（ゲスト）ユーザーもそのまま削除できる。
+    deleteUser: {
+      enabled: true,
+    },
+  },
+  // 削除など要注意操作に必要なセッションの鮮度。0 にして、ログイン直後でなくても
+  // 本人セッションさえあれば（Google/メール/ゲストいずれでも）削除できるようにする。
+  session: {
+    freshAge: 0,
   },
   emailAndPassword: {
     enabled: true,

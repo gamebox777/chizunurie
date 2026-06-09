@@ -64,6 +64,20 @@
       "when": 1780982186019,
       "tag": "0008_long_madame_hydra",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1781011423956,
+      "tag": "0009_warm_slyde",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1781016896182,
+      "tag": "0010_steady_norrin_radd",
+      "breakpoints": true
     }
   ]
 }
