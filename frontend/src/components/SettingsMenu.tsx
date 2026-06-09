@@ -33,10 +33,14 @@ type Props = {
   onEditNickname: () => void;
   // ログアウト完了後（セッション再取得など）
   onSignedOut: () => void;
+  // ゲスト（匿名）／未ログイン時。アカウント関連（名前・ロール表示・ニックネーム変更・
+  // ログアウト）を隠し、言語・地図表示・サウンドの設定だけ出す。
+  isGuest?: boolean;
 };
 
 // 右側の歯車ボタン。押すと各種設定メニュー（言語切替・ニックネーム変更・ログアウト）が出る。
-export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }: Props) {
+// ゲスト時はアカウント項目を隠し、設定（言語・地図・サウンド）のみ表示する。
+export default function SettingsMenu({ name, role, onEditNickname, onSignedOut, isGuest = false }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const { lang, setLang, t } = useLocale();
@@ -161,7 +165,7 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
         onClick={() => setOpen((v) => !v)}
         aria-label={t('settings')}
         aria-expanded={open}
-        className="flex items-center justify-center w-8 h-8 rounded-full text-gray-600 hover:bg-gray-100 hover:text-gray-800 transition-colors"
+        className="flex items-center justify-center w-9 h-9 rounded-full bg-white shadow text-gray-600 hover:bg-gray-100 hover:text-gray-800 transition-colors"
       >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <circle cx="12" cy="12" r="3" />
@@ -170,12 +174,14 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-2 w-52 bg-white rounded-xl shadow-lg border border-gray-100 py-1 z-20">
-          <div className="px-4 py-2 border-b border-gray-100">
-            <p className="text-xs text-gray-400">{t('loggedIn')}</p>
-            <p className="text-sm font-medium text-gray-800 truncate">{name}</p>
-            <p className="text-xs text-gray-500 mt-0.5">{t('role')}：{roleLabel(role)}</p>
-          </div>
+        <div className="absolute right-0 top-full mt-2 w-52 max-h-[70vh] overflow-y-auto bg-white rounded-xl shadow-lg border border-gray-100 py-1 z-50">
+          {!isGuest && (
+            <div className="px-4 py-2 border-b border-gray-100">
+              <p className="text-xs text-gray-400">{t('loggedIn')}</p>
+              <p className="text-sm font-medium text-gray-800 truncate">{name}</p>
+              <p className="text-xs text-gray-500 mt-0.5">{t('role')}：{roleLabel(role)}</p>
+            </div>
+          )}
           {/* 言語切替（日本語 / English） */}
           <div className="px-4 py-2 border-b border-gray-100">
             <p className="text-xs text-gray-400 mb-1.5">{t('language')}</p>
@@ -364,17 +370,20 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
               </div>
             </div>
           </div>
-          <button
-            onClick={() => {
-              setOpen(false);
-              onEditNickname();
-            }}
-            className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-          >
-            {t('editNickname')}
-          </button>
+          {/* アカウント関連はログイン済みのみ。ゲストには出さない。 */}
+          {!isGuest && (
+            <button
+              onClick={() => {
+                setOpen(false);
+                onEditNickname();
+              }}
+              className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              {t('editNickname')}
+            </button>
+          )}
           {/* 開発者のみ：地図とは別の管理画面へ */}
-          {role === 'developer' && (
+          {!isGuest && role === 'developer' && (
             <Link
               href="/admin"
               onClick={() => setOpen(false)}
@@ -383,12 +392,14 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut }
               {t('adminPanel')}
             </Link>
           )}
-          <button
-            onClick={handleSignOut}
-            className="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
-          >
-            {t('logout')}
-          </button>
+          {!isGuest && (
+            <button
+              onClick={handleSignOut}
+              className="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
+            >
+              {t('logout')}
+            </button>
+          )}
         </div>
       )}
     </div>

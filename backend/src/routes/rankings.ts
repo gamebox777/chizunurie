@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, ne, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { getSessionUser } from "../lib/auth.js";
 import { db } from "../db/index.js";
 import { paintedRegions, user, userPoints } from "../db/schema.js";
@@ -38,7 +38,8 @@ function buildBoard(
     const value = display(u);
     const entry: Entry = { rank: i + 1, userId: u.id, name: u.name, value };
     if (i < LIMIT && value >= minValue) top.push(entry);
-    if (meId && u.id === meId && value >= minValue) me = entry;
+    // 自分はランキング外（top 100 外・値0）でも順位を返す（パネル最下部に表示するため）。
+    if (meId && u.id === meId) me = entry;
   }
   return { top, me };
 }
@@ -98,4 +99,94 @@ rankingsRouter.get("/", async (c) => {
       level: buildBoard(users, levelKey, level, meId),
     },
   });
+});
+
+// 地域（都道府県／国）を1つ選び、その地域内で塗ったマス数のユーザーランキングを返す。
+// type=pref … municipality "PREF|CITY" の PREF 部分でグルーピング（key は都道府県名）。
+// type=country … country（Natural Earth の adm0_a3）でグルーピング（key は国コード）。
+// regions … 選択用ドロップダウン向けに、塗りのある地域を総マス数の多い順で返す。
+// key … 集計対象の地域。未指定なら regions の先頭（最も塗られた地域）を既定にする。
+// period … "/" と同じく week=直近7日 / month=直近30日 / それ以外=全期間。
+rankingsRouter.get("/region", async (c) => {
+  const sessionUser = await getSessionUser(c.req.raw);
+  const meId = sessionUser?.id ?? null;
+
+  const type = c.req.query("type") === "country" ? "country" : "pref";
+  const period = c.req.query("period");
+  const sinceCond =
+    period === "week"
+      ? sql`${paintedRegions.paintedAt} >= now() - interval '7 days'`
+      : period === "month"
+        ? sql`${paintedRegions.paintedAt} >= now() - interval '30 days'`
+        : undefined;
+
+  // 地域キー（都道府県名 or 国コード）を取り出す式と、その値が有効である条件。
+  const regionExpr =
+    type === "country"
+      ? sql<string>`${paintedRegions.country}`
+      : sql<string>`split_part(${paintedRegions.municipality}, '|', 1)`;
+  const regionValid =
+    type === "country"
+      ? sql`${paintedRegions.country} is not null and ${paintedRegions.country} <> ''`
+      : sql`${paintedRegions.municipality} is not null and split_part(${paintedRegions.municipality}, '|', 1) <> ''`;
+
+  // 選択用の地域一覧（開発者を除く塗りの総マス数が多い順）。
+  const regionRows = await db
+    .select({
+      key: sql<string>`${regionExpr}`.as("key"),
+      count: sql<number>`count(*)::int`,
+    })
+    .from(paintedRegions)
+    .innerJoin(user, eq(user.id, paintedRegions.userId))
+    .where(and(regionValid, ne(user.role, "developer")))
+    .groupBy(regionExpr)
+    .orderBy(sql`count(*) desc`);
+
+  const selectedKey = c.req.query("key") || regionRows[0]?.key || null;
+  if (!selectedKey) {
+    return c.json({ key: null, regions: regionRows, board: { top: [], me: null } });
+  }
+
+  // 選択地域内・期間内のユーザーごとの塗りマス数（開発者を除く）。
+  const rows = await db
+    .select({
+      userId: paintedRegions.userId,
+      name: user.name,
+      value: sql<number>`count(*)::int`,
+    })
+    .from(paintedRegions)
+    .innerJoin(user, eq(user.id, paintedRegions.userId))
+    .where(
+      and(
+        regionValid,
+        sql`${regionExpr} = ${selectedKey}`,
+        ne(user.role, "developer"),
+        sinceCond
+      )
+    )
+    .groupBy(paintedRegions.userId, user.name);
+
+  rows.sort((a, b) => b.value - a.value);
+  const top: Entry[] = [];
+  let me: Entry | null = null;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const entry: Entry = { rank: i + 1, userId: r.userId, name: r.name, value: r.value };
+    if (i < LIMIT) top.push(entry);
+    if (meId && r.userId === meId) me = entry;
+  }
+
+  // この地域を1マスも塗っていない自分も最下部に順位を出す（値0・塗った人の次の順位）。
+  // 開発者はランキング対象外なので me も付けない。
+  if (meId && !me) {
+    const [self] = await db
+      .select({ name: user.name, role: user.role })
+      .from(user)
+      .where(eq(user.id, meId));
+    if (self && self.role !== "developer") {
+      me = { rank: rows.length + 1, userId: meId, name: self.name, value: 0 };
+    }
+  }
+
+  return c.json({ key: selectedKey, regions: regionRows, board: { top, me } });
 });

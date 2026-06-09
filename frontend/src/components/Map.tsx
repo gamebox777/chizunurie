@@ -9,12 +9,20 @@ import { updateMyCountry } from '@/lib/userApi';
 import { RUN_MODE, RUN_MODE_LABEL, RUN_MODE_BADGE } from '@/lib/runtime-env';
 import { useLocale, type Lang, type TFunc } from '@/lib/i18n';
 import { kanaToRomaji, prefRomaji } from '@/lib/romaji';
-import { playPaint, playLevelUp, playConquer, unlockAudio } from '@/lib/sound';
+import {
+  playPaint,
+  playLevelUp,
+  playConquer,
+  unlockAudio,
+  suspendAudioForHidden,
+  resumeAudioFromHidden,
+} from '@/lib/sound';
 import { vibratePaint } from '@/lib/haptics';
 import { isBasemapEnabled, onBasemapChange, getBasemapOpacity, onBasemapOpacityChange } from '@/lib/basemap';
 import { isGpsAddressEnabled, onGpsAddressChange } from '@/lib/gpsAddress';
 import { getIconSize, onIconSizeChange } from '@/lib/iconSize';
 import { showRewardedAd } from '@/lib/rewardedAd';
+import ShareIcons from './ShareIcons';
 
 const PAINT_API = '/api/backend/painted';
 const POINTS_API = '/api/backend/points';
@@ -586,13 +594,23 @@ class RankingsControl implements maplibregl.IControl {
 
 type PaintedState = Record<string, PaintMode>;
 
-// ランキングの種類（塗ったマス数・GPS訪問・市区町村数・レベル）
+// ユーザー対戦ランキングの種類。前半4種は /rankings、後半2種（都道府県毎・国毎の
+// 地域別ユーザーランキング）は /rankings/region から取得する。
 type RankingMetric = 'painted' | 'gps' | 'muni' | 'level';
+type RankingRegionMetric = 'pref' | 'country';
+type RankingTab = RankingMetric | RankingRegionMetric;
 // 集計期間（全期間・月間・週間）。塗り由来のランキングにだけ効く。
 type RankingPeriod = 'all' | 'month' | 'week';
 type RankingEntry = { rank: number; userId: string; name: string; value: number };
 type RankingBoard = { top: RankingEntry[]; me: RankingEntry | null };
 type RankingsResponse = { boards: Record<RankingMetric, RankingBoard> };
+// 地域別ランキング（都道府県毎・国毎）。regions はドロップダウン用の地域一覧、
+// key は実際に集計した地域（未指定時はバックエンドが最も塗られた地域を選ぶ）。
+type RegionRankingsResponse = {
+  key: string | null;
+  regions: { key: string; count: number }[];
+  board: RankingBoard;
+};
 
 // 塗った日時（ISO 文字列）を「YYYY/M/D HH:mm」に整形。不正値は空文字。
 function formatPaintedAt(iso: string | undefined | null): string {
@@ -699,14 +717,11 @@ function blockCellFeatures(centerId: number): GeoJSON.Feature[] {
 // 格子生成・陸地判定で走査するセル数の安全上限（引きすぎ時は格子を出さない）
 const GRID_MAX_CELLS = 20000;
 
-type MapProps = {
-  onHoverAddressChange?: (address: string) => void;
-};
-
-export default function MapView({ onHoverAddressChange }: MapProps) {
+export default function MapView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const onHoverAddressChangeRef = useRef(onHoverAddressChange);
+  // ホバー中セルの詳細地名（町丁目まで）。左下パネルの2行目に表示する。
+  const [hoverAddress, setHoverAddress] = useState('');
   const [mapReady, setMapReady] = useState(false);
   const [painted, setPainted] = useState<PaintedState>({});
   const paintedRef = useRef<PaintedState>({});
@@ -757,6 +772,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const videoBusyRef = useRef(false);
   // 市区町村ごとの塗り％表示用
   const [hoverStat, setHoverStat] = useState<string | null>(null); // ホバー中市区町村の「市名 35%（n/N）」
+  const [statPanelCollapsed, setStatPanelCollapsed] = useState(false); // 左下パネルの折りたたみ
   // 外国（自国以外）にホバー中か。true の間「10×10まとめ塗り！」バッジを出す。
   const [foreignHover, setForeignHover] = useState(false);
   // 塗ったセルの CELLID → "PREF|CITY"。塗り時に求めた値を保持し、復元時は backend の
@@ -851,7 +867,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       window.setTimeout(() => {
         marker.remove();
         fxItemsRef.current = fxItemsRef.current.filter((i) => i !== item);
-      }, 1700);
+      }, 1100);
     },
     [tickRipples]
   );
@@ -943,10 +959,15 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
   const openStatsRef = useRef<() => void>(() => {});
   // ランキング（右からスライドするパネル）。開発者を除いた各種ランキングをバックエンドから取得して見せる。
   const [rankingsOpen, setRankingsOpen] = useState(false);
-  const [rankingsTab, setRankingsTab] = useState<RankingMetric>('painted');
+  const [rankingsTab, setRankingsTab] = useState<RankingTab>('painted');
   const [rankingsPeriod, setRankingsPeriod] = useState<RankingPeriod>('all');
   const [rankingsData, setRankingsData] = useState<RankingsResponse | null>(null);
   const [rankingsLoading, setRankingsLoading] = useState(false);
+  // 地域別ランキング（都道府県毎・国毎）の選択地域・取得結果・ローディング。
+  // regionKey が null のときはバックエンドが既定（最も塗られた地域）を選ぶ。
+  const [regionKey, setRegionKey] = useState<string | null>(null);
+  const [regionRanking, setRegionRanking] = useState<RegionRankingsResponse | null>(null);
+  const [regionLoading, setRegionLoading] = useState(false);
   const openRankingsRef = useRef<() => void>(() => {});
   const { data: session, isPending } = useSession();
   // 言語（ゲーム画面の用語・地名のローマ字表示）。effect 内の同期参照用に ref も持つ。
@@ -1040,9 +1061,16 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     };
     window.addEventListener('pointerdown', onGesture);
     window.addEventListener('keydown', onGesture);
+    // 非表示中はバックグラウンドで音（特に BGM ループ）を鳴らさない。
+    const onAudioVisibility = () => {
+      if (document.visibilityState === 'hidden') suspendAudioForHidden();
+      else resumeAudioFromHidden();
+    };
+    document.addEventListener('visibilitychange', onAudioVisibility);
     return () => {
       window.removeEventListener('pointerdown', onGesture);
       window.removeEventListener('keydown', onGesture);
+      document.removeEventListener('visibilitychange', onAudioVisibility);
     };
   }, []);
 
@@ -1239,6 +1267,40 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     };
   }, [rankingsOpen, rankingsPeriod]);
 
+  // 地域別タブ（都道府県毎・国毎）に切り替えたら選択地域と結果をリセットし、
+  // バックエンドの既定（最も塗られた地域）から表示し直す。
+  useEffect(() => {
+    setRegionKey(null);
+    setRegionRanking(null);
+  }, [rankingsTab]);
+
+  // 都道府県毎・国毎ランキングを取得する。地域（regionKey）・期間を変えるたびに引き直す。
+  useEffect(() => {
+    if (!rankingsOpen) return;
+    if (rankingsTab !== 'pref' && rankingsTab !== 'country') return;
+    let cancelled = false;
+    setRegionLoading(true);
+    (async () => {
+      try {
+        const params = new URLSearchParams({ type: rankingsTab, period: rankingsPeriod });
+        if (regionKey) params.set('key', regionKey);
+        const res = await fetch(`${RANKINGS_API}/region?${params.toString()}`, {
+          credentials: 'include',
+        });
+        if (!res.ok) throw new Error(`rankings region ${res.status}`);
+        const data = (await res.json()) as RegionRankingsResponse;
+        if (!cancelled) setRegionRanking(data);
+      } catch {
+        if (!cancelled) setRegionRanking(null);
+      } finally {
+        if (!cancelled) setRegionLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rankingsOpen, rankingsTab, rankingsPeriod, regionKey]);
+
   // デバッグ用：塗りポイント残高を指定値にセットする（MAX を超える値も可）。
   const setDebugPoints = useCallback(
     async (value: number) => {
@@ -1329,6 +1391,47 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     }
     if (!found) return;
     map.fitBounds(bounds, { padding: 80, maxZoom: 13, duration: 1200 });
+    setStatsOpen(false);
+  }, []);
+
+  // データ詳細パネル（世界タブ）で国名を押したとき、その国の塗ったセル全体が収まる範囲へ寄せる。
+  // 都道府県（flyToPref）と同じく、塗り済みセルから bbox を作るのでタイル未ロードでも飛べる。
+  const flyToCountry = useCallback((a3: string) => {
+    const map = mapRef.current;
+    if (!map) return;
+    const lookup = regionByPaintedCellRef.current;
+    const meta = stateMetaRef.current;
+    const bounds = new maplibregl.LngLatBounds();
+    let found = false;
+    // 日付変更線をまたぐ国（ロシア等）に備え、経度を 0..360 に寄せた幅も別に持つ。
+    let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+    let shiftMin = Infinity, shiftMax = -Infinity;
+    for (const key of Object.keys(paintedRef.current)) {
+      const [layer, idStr] = key.split(':');
+      if (layer !== 'mesh') continue;
+      const adm1 = lookup.get(Number(idStr));
+      if (!adm1 || meta.get(adm1)?.adm0_a3 !== a3) continue;
+      for (const [lng, lat] of meshCellRing(Number(idStr))) {
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+        if (lng < minLng) minLng = lng;
+        if (lng > maxLng) maxLng = lng;
+        const s = lng < 0 ? lng + 360 : lng;
+        if (s < shiftMin) shiftMin = s;
+        if (s > shiftMax) shiftMax = s;
+      }
+      found = true;
+    }
+    if (!found) return;
+    // 通常幅と日付変更線シフト幅の狭い方を採用（広域にズームアウトしすぎるのを防ぐ）。
+    let west = minLng, east = maxLng;
+    if (maxLng - minLng > shiftMax - shiftMin) {
+      west = shiftMin;
+      east = shiftMax;
+    }
+    bounds.extend([west, minLat]);
+    bounds.extend([east, maxLat]);
+    map.fitBounds(bounds, { padding: 60, maxZoom: 13, duration: 1200 });
     setStatsOpen(false);
   }, []);
 
@@ -1535,10 +1638,6 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
     };
   }, [userId]);
 
-  useEffect(() => {
-    onHoverAddressChangeRef.current = onHoverAddressChange;
-  }, [onHoverAddressChange]);
-
   // meshcode の所属市区町村キー（"PREF|CITY"）を求める。
   // タイル由来の properties があればそれを優先し、無ければロード済みの対応表を引く。
   // 既に塗ったセルの市区町村キー（"PREF|CITY"）。新規塗り時のキーは塗りハンドラ側が
@@ -1679,8 +1778,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       const [ri, ci] = gridFromMeshCode(id);
       const lng = (ci + 0.5) / MESH_LON_DIV;
       const lat = (ri + 0.5) / MESH_LAT_DIV;
-      // 波紋：塗ったセル中心（地理座標）に地図追従の波紋を出す（黄色半透明・派手に大きく広げる）
-      spawnRipple(lng, lat, 'rgba(250, 204, 21, 0.55)');
+      // 波紋：塗ったセル中心（地理座標）に地図追従の波紋を出す（赤半透明・派手に大きく広げる）
+      spawnRipple(lng, lat, 'rgba(239, 68, 68, 0.6)');
       // 地名＋経験値を画面 UI としてふわっと上に出す。まず手元の市区町村名で即出し、日本では
       // 逆ジオコーダ（町丁目まで）で詳しい住所に差し替える（キャッシュ済みなら最初から詳しく出す）。
       {
@@ -2169,8 +2268,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           'symbol-placement': 'point',
         },
         paint: {
-          // 画像地図（GSI）の上でも読めるよう赤文字＋白フチ（国名より少し薄い赤）。
-          'text-color': '#e05656',
+          // 国名は赤、州・県名は黒で表示（白フチで画像地図の上でも読めるように）。
+          'text-color': '#1a1a1a',
           'text-halo-color': '#ffffff',
           'text-halo-width': 1.4,
         },
@@ -2440,7 +2539,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         hoverId = null;
         meshHoverSrc()?.setData(EMPTY_FC);
         setForeignHover(false);
-        onHoverAddressChangeRef.current?.('');
+        setHoverAddress('');
         hoverKeyRef.current = null;
         hoverRegionRef.current = null;
         refreshHoverStat();
@@ -2477,7 +2576,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           return stamp ? `${text}（${stamp}）` : text;
         };
         const cached = hoverAddrCache.get(id);
-        onHoverAddressChangeRef.current?.(withPaintedAt(cached ?? address));
+        setHoverAddress(withPaintedAt(cached ?? address));
         if (hoverGeocodeTimer !== null) {
           clearTimeout(hoverGeocodeTimer);
           hoverGeocodeTimer = null;
@@ -2490,7 +2589,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           hoverGeocodeTimer = window.setTimeout(() => {
             reverseGeocode(lng, lat).then((full) => {
               if (full) hoverAddrCache.set(id, full);
-              if (hoverId === id && full) onHoverAddressChangeRef.current?.(withPaintedAt(full));
+              if (hoverId === id && full) setHoverAddress(withPaintedAt(full));
             });
           }, 250);
         }
@@ -2595,7 +2694,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               spawnRippleRef.current(
                 (ci + 0.5) / MESH_LON_DIV,
                 (ri + 0.5) / MESH_LAT_DIV,
-                'rgba(250, 204, 21, 0.55)'
+                'rgba(239, 68, 68, 0.6)'
               );
             }
           })
@@ -3152,6 +3251,14 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
           // 新規セル or となり塗り→gps 昇格：従来どおりローカル反映＋サーバー同期。
           applyPaint(id, 'gps', muniKey, region);
         }
+        // 現地塗り（GPS主導）では左下パネルにも現在地セルの市区町村％を出す。スマホは
+        // マウスホバーが無く、ホバー由来の hoverStat が立たないため、これが無いと％が出ない。
+        // セルを移った時だけ反映し、合間のマウスホバー（PC）を上書きしない。
+        if (paintModeRef.current === 'genchi' && enteredNewCell) {
+          hoverKeyRef.current = muniKey;
+          hoverRegionRef.current = region?.key ?? null;
+          refreshHoverStat();
+        }
         // 現地塗りモードでは、グリッド内の近似住所ではなく現在地の正確な住所を表示する。
         // 同じメッシュセル内では再取得しない（移動して別セルに入った時だけ問い合わせる）。
         if (paintModeRef.current === 'genchi' && gpsAddressEnabledRef.current && id !== lastGeocodedId) {
@@ -3160,6 +3267,8 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             // 取得待ちの間に別セルへ移動していたら反映しない（古い結果の上書き防止）
             if (address && lastGeocodedId === id) {
               showCurrentAddress(lngLat, address);
+              // 左下パネルの2行目（詳細地名）にも現在地の住所を反映する。
+              setHoverAddress(address);
             }
           });
         }
@@ -3916,16 +4025,24 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
             {t('modeNazori')}
           </button>
         </div>
-        {/* 塗りポイント残高（赤字・白ふち）。モード切り替えの下に表示。 */}
+        {/* 塗りポイント残高（赤字・白ふち）＋次の回復までのカウントダウン（+1まで …）。
+            下地は半透明の白。モード切り替えの下に表示。 */}
         {userId && (
-          <div
-            className="text-base font-black text-red-600"
-            style={{
-              WebkitTextStroke: '3px #fff',
-              paintOrder: 'stroke fill',
-            }}
-          >
-            {t('paintPoints', points as never, maxPoints as never)}
+          <div className="inline-flex items-center gap-2 rounded-lg bg-white/50 px-2 py-1">
+            <span
+              className="text-base font-black text-red-600"
+              style={{
+                WebkitTextStroke: '3px #fff',
+                paintOrder: 'stroke fill',
+              }}
+            >
+              {t('paintPoints', points as never, maxPoints as never)}
+            </span>
+            {regenAt !== null && points < maxPoints && (
+              <span className="text-xs font-medium text-gray-600">
+                {t('regenIn', formatCountdown(regenAt - nowTick, t) as never)}
+              </span>
+            )}
           </div>
         )}
         {/* なぞり塗り中の注意点（塗りポイント表示の下・なぞり塗りモード時のみ）。 */}
@@ -3936,46 +4053,80 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
         )}
       </div>
 
-      {(hoverStat || userId) && (
-        <div className="absolute bottom-4 left-4 bg-white rounded-lg px-4 py-2 shadow text-sm font-medium text-gray-700 space-y-1">
-          {hoverStat && (
-            <div className="text-gray-900 font-semibold whitespace-pre-line">
-              {hoverStat}
-            </div>
-          )}
+      {(
+        statPanelCollapsed ? (
+          /* 折りたたみ時：トグルボタンだけの正方形パネル（アイコンがはみ出さないように）。 */
+          <button
+            type="button"
+            onClick={() => setStatPanelCollapsed(false)}
+            aria-label="開く"
+            aria-expanded={false}
+            className="absolute bottom-4 left-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg bg-white text-gray-500 shadow hover:bg-gray-50 hover:text-gray-700"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polyline points="18 15 12 9 6 15" />
+            </svg>
+          </button>
+        ) : (
+        <div className="absolute bottom-4 left-4 z-20 bg-white/50 rounded-lg px-4 py-2 shadow text-sm font-medium text-gray-700">
+          <button
+            type="button"
+            onClick={() => setStatPanelCollapsed(true)}
+            aria-label="折りたたむ"
+            aria-expanded={true}
+            className="absolute top-1 right-1 flex h-6 w-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-4 w-4 transition-transform rotate-180"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polyline points="18 15 12 9 6 15" />
+            </svg>
+          </button>
+          <div className="space-y-1 pr-6">
+          {/* 1行目=市区町村の塗り％、2行目=詳細地名（町丁目まで）。 */}
+          <div className="text-gray-900">
+            {hoverStat && (
+              <div className="font-semibold whitespace-pre-line">{hoverStat}</div>
+            )}
+            {hoverAddress && (
+              <div className="text-xs font-normal text-gray-600 whitespace-pre-line">
+                {hoverAddress}
+              </div>
+            )}
+          </div>
           {userId && (
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <span className="inline-flex items-center rounded-md bg-yellow-400 px-2 py-0.5 text-xs font-bold text-gray-900">
                   Lv.{level}
                 </span>
-                <div className="h-2 flex-1 min-w-[80px] overflow-hidden rounded-full bg-gray-200">
+                {/* 経験値バー。現在レベルの経験値（X / Y）はバーの上に重ねて表示する。 */}
+                <div className="relative h-4 flex-1 min-w-[80px] overflow-hidden rounded-full bg-gray-200">
                   <div
                     className="h-full rounded-full bg-yellow-400 transition-[width] duration-500"
                     style={{
                       width: expToNext > 0 ? `${Math.min(100, (exp / expToNext) * 100)}%` : '0%',
                     }}
                   />
+                  <span className="absolute inset-0 flex items-center justify-center text-[10px] font-semibold text-gray-700 tabular-nums">
+                    {exp} / {expToNext}
+                  </span>
                 </div>
               </div>
-              <div className="text-[10px] text-gray-500">
-                {t('expLabel', exp as never, expToNext as never)}
-              </div>
-              <div className="text-[10px] text-gray-500">
-                {t('totalExpLabel', totalExp.toLocaleString() as never)}
-              </div>
-              <div
-                className={`font-semibold ${
-                  points > maxPoints ? 'text-red-600' : 'text-gray-900'
-                }`}
-              >
-                {t('paintPoints', points as never, maxPoints as never)}
-              </div>
-              {regenAt !== null && points < maxPoints && (
-                <div className="text-xs text-gray-500">
-                  {t('regenIn', formatCountdown(regenAt - nowTick, t) as never)}
-                </div>
-              )}
               {/* 動画リワード：動画を見てそのレベルの満タン分を回復。
                   クールダウン中・1日上限はボタンを無効化して理由を表示する。 */}
               {(() => {
@@ -4008,10 +4159,18 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               })()}
             </div>
           )}
+          <div className="mt-1 border-t border-gray-100 pt-2">
+            <ShareIcons />
+          </div>
+          </div>
         </div>
+        )
       )}
-      <div className="absolute bottom-4 right-4 bg-white rounded-lg px-3 py-2 shadow text-sm font-mono text-gray-600">
-        zoom: <span ref={zoomLabelRef}>4.5</span>
+      {/* zoom 表示を右下に置く（設定の歯車はヘッダー右側に戻した）。 */}
+      <div className="absolute bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+        <div className="bg-white rounded-lg px-3 py-2 shadow text-sm font-mono text-gray-600">
+          zoom: <span ref={zoomLabelRef}>4.5</span>
+        </div>
       </div>
       {debugMoving && (
         <div className="absolute top-4 right-4 bg-blue-600 text-white rounded-lg px-3 py-2 shadow text-xs font-medium flex items-center gap-1.5">
@@ -4042,7 +4201,7 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
       )}
       {toast && (
         <div
-          className="absolute top-4 left-1/2 -translate-x-1/2 bg-gray-900/85 text-white rounded-lg px-4 py-2 shadow text-sm font-medium pointer-events-none"
+          className="absolute top-25 left-1/2 -translate-x-1/2 bg-gray-900/85 text-white rounded-lg px-4 py-2 shadow text-sm font-medium pointer-events-none"
           role="status"
           aria-live="polite"
         >
@@ -4719,22 +4878,29 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                           : `${pct < 10 ? pct.toFixed(1) : Math.round(pct)}%`;
                       return (
                         <li key={c.a3}>
-                          <div className="flex items-baseline justify-between text-xs mb-0.5">
-                            <span className="font-medium text-gray-800">{c.name}</span>
-                            <span className="text-gray-500">
-                              {pctLabel}
-                              <span className="text-gray-400">（{c.painted}/{c.total}）</span>
-                            </span>
-                          </div>
-                          <div className="h-1.5 w-full rounded-full bg-gray-100 overflow-hidden">
-                            <div
-                              className="h-full rounded-full"
-                              style={{
-                                width: `${Math.min(100, Math.max(pct, pct > 0 ? 2 : 0))}%`,
-                                background: COLOR_GPS,
-                              }}
-                            />
-                          </div>
+                          <button
+                            type="button"
+                            onClick={() => flyToCountry(c.a3)}
+                            className="w-full text-left -mx-1 px-1 py-0.5 rounded-md hover:bg-gray-100 transition-colors cursor-pointer"
+                            title={t('flyToCountry')}
+                          >
+                            <div className="flex items-baseline justify-between text-xs mb-0.5">
+                              <span className="font-medium text-gray-800">{c.name}</span>
+                              <span className="text-gray-500">
+                                {pctLabel}
+                                <span className="text-gray-400">（{c.painted}/{c.total}）</span>
+                              </span>
+                            </div>
+                            <div className="h-1.5 w-full rounded-full bg-gray-100 overflow-hidden">
+                              <div
+                                className="h-full rounded-full"
+                                style={{
+                                  width: `${Math.min(100, Math.max(pct, pct > 0 ? 2 : 0))}%`,
+                                  background: COLOR_GPS,
+                                }}
+                              />
+                            </div>
+                          </button>
                         </li>
                       );
                     })}
@@ -4799,22 +4965,24 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               ))}
             </div>
 
-            {/* ランキングの種類タブ */}
-            <div className="flex rounded-lg bg-gray-100 p-0.5 mb-4 text-xs font-medium select-none">
+            {/* ランキングの種類タブ（後半2つは地域別ユーザーランキング） */}
+            <div className="grid grid-cols-3 gap-0.5 rounded-lg bg-gray-100 p-0.5 mb-4 text-xs font-medium select-none">
               {(
                 [
                   ['painted', t('rankPainted')],
                   ['gps', t('rankGps')],
                   ['muni', t('rankMuni')],
                   ['level', t('rankLevel')],
-                ] as [RankingMetric, string][]
+                  ['pref', t('rankPref')],
+                  ['country', t('rankCountry')],
+                ] as [RankingTab, string][]
               ).map(([key, label]) => (
                 <button
                   key={key}
                   type="button"
                   aria-pressed={rankingsTab === key}
                   onClick={() => setRankingsTab(key)}
-                  className={`flex-1 rounded-md px-2 py-1.5 transition-colors ${
+                  className={`rounded-md px-2 py-1.5 transition-colors ${
                     rankingsTab === key
                       ? 'bg-white text-gray-900 shadow-sm'
                       : 'text-gray-500 hover:text-gray-700'
@@ -4825,22 +4993,56 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
               ))}
             </div>
 
-            {rankingsLoading ? (
-              <p className="text-xs text-gray-400">{t('rankLoading')}</p>
-            ) : (() => {
-              const board = rankingsData?.boards?.[rankingsTab];
+            {(() => {
+              const isRegion = rankingsTab === 'pref' || rankingsTab === 'country';
+              // ドロップダウンに出す地域名（国はメタから訳語、都道府県は名前そのもの）。
+              const regionName = (key: string) =>
+                rankingsTab === 'country'
+                  ? (() => {
+                      const cm = countryMetaRef.current.get(key);
+                      return cm ? (lang === 'en' ? cm.name : cm.name_ja) || cm.name || key : key;
+                    })()
+                  : lang === 'en'
+                    ? prefRomaji(key)
+                    : key;
+              return (
+                <>
+                  {isRegion && regionRanking && regionRanking.regions.length > 0 && (
+                    <select
+                      aria-label={t('rankRegionSelect')}
+                      className="mb-3 w-full rounded-md border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-800"
+                      value={regionKey ?? regionRanking.key ?? ''}
+                      onChange={(e) => setRegionKey(e.target.value)}
+                    >
+                      {regionRanking.regions.map((r) => (
+                        <option key={r.key} value={r.key}>
+                          {regionName(r.key)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {(isRegion ? regionLoading : rankingsLoading) ? (
+                    <p className="text-xs text-gray-400">{t('rankLoading')}</p>
+                  ) : (() => {
+              const board = isRegion
+                ? regionRanking?.board
+                : rankingsData?.boards?.[rankingsTab];
               const unit =
-                rankingsTab === 'muni'
-                  ? t('rankUnitMuni')
-                  : rankingsTab === 'level'
-                    ? ''
-                    : t('rankUnitCells');
+                isRegion || rankingsTab === 'painted' || rankingsTab === 'gps'
+                  ? t('rankUnitCells')
+                  : rankingsTab === 'muni'
+                    ? t('rankUnitMuni')
+                    : '';
               const fmt = (v: number) =>
                 rankingsTab === 'level'
                   ? `${t('rankUnitLevel')}.${v}`
                   : `${v.toLocaleString()} ${unit}`;
               if (!board || board.top.length === 0) {
-                return <p className="text-xs text-gray-400">{t('rankEmpty')}</p>;
+                return (
+                  <p className="text-xs text-gray-400">
+                    {isRegion ? t('rankRegionEmpty') : t('rankEmpty')}
+                  </p>
+                );
               }
               const meInTop = board.me
                 ? board.top.some((e) => e.userId === board.me!.userId)
@@ -4886,6 +5088,9 @@ export default function MapView({ onHoverAddressChange }: MapProps) {
                       <ul className="space-y-0.5">{row(board.me)}</ul>
                     </div>
                   )}
+                </>
+              );
+                  })()}
                 </>
               );
             })()}

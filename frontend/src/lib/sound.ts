@@ -75,6 +75,23 @@ export function unlockAudio(): void {
   if (isBgmEnabled()) startBgm();
 }
 
+// ページが非表示（タブ切替・他アプリへ移動）になったらバックグラウンドで音が
+// 鳴り続けないよう AudioContext を止める。一度ユーザー操作で起動した
+// （ctx が生成済みの）場合のみ対象にし、復帰時は元の状態に戻す。
+let suspendedByHidden = false;
+export function suspendAudioForHidden(): void {
+  if (ctx && ctx.state === 'running') {
+    suspendedByHidden = true;
+    void ctx.suspend();
+  }
+}
+export function resumeAudioFromHidden(): void {
+  if (ctx && suspendedByHidden && ctx.state === 'suspended') {
+    void ctx.resume();
+  }
+  suspendedByHidden = false;
+}
+
 // ── 効果音 ──────────────────────────────────────────────────────────
 // 1音を鳴らすヘルパ。start からの相対時間でエンベロープを付ける。
 function blip(

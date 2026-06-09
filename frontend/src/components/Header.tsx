@@ -6,15 +6,10 @@ import { useLocale } from '@/lib/i18n';
 import AuthModal from './AuthModal';
 import NicknameModal from './NicknameModal';
 import SettingsMenu from './SettingsMenu';
-import ShareButton from './ShareButton';
 
 type ModalTab = 'login' | 'register';
 
-type HeaderProps = {
-  hoverAddress?: string;
-};
-
-export default function Header({ hoverAddress = '' }: HeaderProps) {
+export default function Header() {
   const { data: session, isPending, refetch } = useSession();
   const { t } = useLocale();
   const [modal, setModal] = useState<ModalTab | null>(null);
@@ -30,42 +25,40 @@ export default function Header({ hoverAddress = '' }: HeaderProps) {
     <>
       <header className="h-12 bg-white shadow-sm flex items-center px-4 z-10 shrink-0 gap-4">
         <h1 className="text-base font-bold text-gray-800 shrink-0">{t('appTitle')}</h1>
-        <span className="flex-1 text-sm text-gray-600 truncate min-w-0" title={hoverAddress}>
-          {hoverAddress}
-        </span>
-
-        <ShareButton />
+        <span className="flex-1 min-w-0" />
 
         {!isPending && (
-          realUser ? (
-            // 本名・メールは表示しない。ニックネームのみ表示する。
-            <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
+            {realUser ? (
+              // 本名・メールは表示しない。ニックネームのみ表示する。
               <span className="text-sm font-medium text-gray-700">
                 {session.user.name}
               </span>
-              <SettingsMenu
-                name={session.user.name}
-                role={session.user.role}
-                onEditNickname={() => setEditingNickname(true)}
-                onSignedOut={() => refetch()}
-              />
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setModal('login')}
-                className="text-sm text-gray-600 hover:text-gray-800 transition-colors px-2 py-1"
-              >
-                {t('login')}
-              </button>
-              <button
-                onClick={() => setModal('register')}
-                className="text-sm bg-blue-500 text-white px-3 py-1.5 rounded-lg hover:bg-blue-600 transition-colors"
-              >
-                {t('register')}
-              </button>
-            </div>
-          )
+            ) : (
+              <>
+                <button
+                  onClick={() => setModal('login')}
+                  className="text-sm text-gray-600 hover:text-gray-800 transition-colors px-2 py-1"
+                >
+                  {t('login')}
+                </button>
+                <button
+                  onClick={() => setModal('register')}
+                  className="text-sm bg-blue-500 text-white px-3 py-1.5 rounded-lg hover:bg-blue-600 transition-colors"
+                >
+                  {t('register')}
+                </button>
+              </>
+            )}
+            {/* 設定（歯車）をヘッダー右端に置く。ゲスト・未ログインはアカウント項目を隠す。 */}
+            <SettingsMenu
+              isGuest={!realUser}
+              name={realUser ? session.user.name : ''}
+              role={realUser ? session.user.role : null}
+              onEditNickname={() => setEditingNickname(true)}
+              onSignedOut={() => refetch()}
+            />
+          </div>
         )}
       </header>
 
@@ -106,7 +99,7 @@ export default function Header({ hoverAddress = '' }: HeaderProps) {
         <NicknameModal onDone={() => refetch()} />
       )}
 
-      {/* 設定からのニックネーム変更 */}
+      {/* 設定メニューからのニックネーム変更 */}
       {editingNickname && realUser && (
         <NicknameModal
           initialName={session.user.name}
