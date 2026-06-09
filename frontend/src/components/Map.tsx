@@ -926,6 +926,7 @@ export default function MapView() {
   const [hoverPaintMode, setHoverPaintMode] = useState(false);
   const hoverPaintModeRef = useRef(false);
   const debugCleanupRef = useRef<(() => void) | null>(null);
+  const wakeCleanupRef = useRef<(() => void) | null>(null); // 画面スリープ防止の後始末
   const addressMarkerRef = useRef<maplibregl.Marker | null>(null); // 現在地の住所ラベル
   const gpsAddressEnabledRef = useRef(true); // 現在地の住所ラベル表示 ON/OFF（設定・既定 ON）
   // 塗り方の操作モード。genchi=現地塗り（GPSの現在地のみ自動で塗る）/
@@ -3332,6 +3333,49 @@ export default function MapView() {
         console.warn('geolocation error', { code: err?.code, message: err?.message });
       });
 
+      // ── 画面スリープ防止（Screen Wake Lock）──────────────────────
+      // ブラウザ／PWA はアプリを閉じる・画面がオフになると GPS（watchPosition）が止まる。
+      // 完全なバックグラウンド追跡は Web では不可能だが、「歩きながら塗る」間に画面が
+      // 勝手に消えるのは防げる。GPS 追跡中だけ Wake Lock を取り、追跡停止・離脱で解放する。
+      // Wake Lock はタブが hidden になると OS に自動解放されるので、可視に戻ったら取り直す。
+      let wakeLock: WakeLockSentinel | null = null;
+      let wantWakeLock = false; // GPS 追跡中＝ロックを保持したい状態か
+      const requestWakeLock = async () => {
+        if (!wantWakeLock || wakeLock) return;
+        if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
+        if (document.visibilityState !== 'visible') return; // hidden では取得できない
+        try {
+          wakeLock = await navigator.wakeLock.request('screen');
+          // OS 都合（電池残量など）で解放されたら参照を捨てる。可視中なら再取得を試みる。
+          wakeLock.addEventListener('release', () => {
+            wakeLock = null;
+            if (wantWakeLock) void requestWakeLock();
+          });
+        } catch (e) {
+          // ユーザー操作外・非対応などで失敗しても致命的ではない（塗りは継続できる）。
+          console.warn('wakeLock request failed', e);
+        }
+      };
+      const releaseWakeLock = () => {
+        wantWakeLock = false;
+        wakeLock?.release().catch(() => {});
+        wakeLock = null;
+      };
+      const onWakeVisibility = () => {
+        if (document.visibilityState === 'visible') void requestWakeLock();
+      };
+      document.addEventListener('visibilitychange', onWakeVisibility);
+      // GeolocateControl が追跡を開始／終了したタイミングでロックを取得／解放する。
+      geolocate.on('trackuserlocationstart', () => {
+        wantWakeLock = true;
+        void requestWakeLock();
+      });
+      geolocate.on('trackuserlocationend', releaseWakeLock);
+      wakeCleanupRef.current = () => {
+        document.removeEventListener('visibilitychange', onWakeVisibility);
+        releaseWakeLock();
+      };
+
       // ── デバッグ用：十字キーで現在地を動かして塗る ──────────────
       // 十字キーで仮想の現在地を移動（GPS と同じ黄色で塗る）。スペースで移動モード解除。
       let debugMarker: maplibregl.Marker | null = null;
@@ -3443,6 +3487,8 @@ export default function MapView() {
       resizeObserver.disconnect();
       debugCleanupRef.current?.();
       debugCleanupRef.current = null;
+      wakeCleanupRef.current?.();
+      wakeCleanupRef.current = null;
       map.remove();
       maplibregl.removeProtocol('pmtiles');
       mapRef.current = null;

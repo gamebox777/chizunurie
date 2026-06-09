@@ -1,3 +1,6 @@
+-- 初期スキーマ。認証(better-auth)用の account/session/user/verification、
+-- 塗り記録 painted_regions、行動ログ user_logs、ポイント/レベル user_points を新規作成し、
+-- user への外部キー(ON DELETE cascade)と user_logs の (user_id, created_at) 索引を張る。
 CREATE TABLE "account" (
 	"id" text PRIMARY KEY NOT NULL,
 	"account_id" text NOT NULL,
