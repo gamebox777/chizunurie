@@ -7,16 +7,13 @@ const CONTACT_EMAIL = "rin7studio@gmail.com";
 export const metadata: Metadata = {
   title: "プライバシーポリシー｜ちずぬりえ",
   description:
-    "GPS 白地図ぬりつぶしゲーム「ちずぬりえ」のプライバシーポリシー。取得する情報（アカウント情報・位置情報・プレイデータ）、Cookie、Google Analytics・Google 広告の利用、データの保持と削除について説明します。",
+    "GPS 白地図ぬりつぶしゲーム「ちずぬりえ」のプライバシーポリシー。取得する情報（アカウント情報・位置情報・プレイデータ）、Cookie、Google Analytics・Google 広告の利用、データの保持と削除について説明します。Privacy Policy of Chizunurie.",
   robots: { index: true, follow: true },
 };
 
-export default function PrivacyPage() {
+function JaContent() {
   return (
-    <InfoPage
-      title="プライバシーポリシー"
-      subtitle="ちずぬりえ（Chizunurie）における利用者情報の取り扱いについて"
-    >
+    <>
       <p>
         「ちずぬりえ」（以下「本サービス」）の運営者（以下「運営者」）は、本サービスにおける
         利用者の情報の取り扱いについて、以下のとおりプライバシーポリシーを定めます。
@@ -197,6 +194,208 @@ export default function PrivacyPage() {
       </section>
 
       <p className="mt-10 text-sm text-gray-500">制定日：2026年6月10日</p>
-    </InfoPage>
+    </>
+  );
+}
+
+function EnContent() {
+  return (
+    <>
+      <p>
+        The operator of Chizunurie (the &ldquo;Service&rdquo;) sets out this Privacy Policy to
+        explain how user information is handled in the Service.
+      </p>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">1. Information we collect</h2>
+        <ul className="mt-3 list-disc space-y-3 pl-6">
+          <li>
+            <strong>Account information</strong>: email address, display name (nickname) and
+            credentials. If you sign in with Google, we receive basic information such as the email
+            address provided by Google. If you play without registering, an anonymous (guest)
+            account is created automatically so your progress can be saved.
+          </li>
+          <li>
+            <strong>Location (GPS)</strong>: only when you use the GPS-painting feature, and only
+            with your explicit permission, we read your device&rsquo;s location. It is used to
+            determine which cell (an area roughly 1 km square) you painted, and the server stores{" "}
+            <strong>the identifiers of painted cells and related records</strong>. You can refuse
+            location access at any time in your browser or device settings (the game is fully
+            playable with manual painting only).
+          </li>
+          <li>
+            <strong>Gameplay data</strong>: painted-cell records, paint points, level, experience
+            points, play time, and video-reward usage.
+          </li>
+          <li>
+            <strong>Activity logs</strong>: in-app events such as login, GPS use and search,
+            recorded to prevent abuse and improve the Service.
+          </li>
+          <li>
+            <strong>Access statistics</strong>: to count visits, we record a daily hash derived
+            from your IP address and browser information (User-Agent) in a form that cannot be
+            reversed. The IP address itself is not stored.
+          </li>
+        </ul>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">2. Purposes of use</h2>
+        <ul className="mt-3 list-disc space-y-1 pl-6">
+          <li>Providing and maintaining the Service (saving and restoring your painted map and progress)</li>
+          <li>Account authentication and transferring data across devices</li>
+          <li>Aggregate features such as rankings (only your display name is shown; email addresses are never published)</li>
+          <li>Preventing fraud and abuse</li>
+          <li>Improving the Service through usage analysis</li>
+          <li>Displaying advertising (see below)</li>
+          <li>Responding to inquiries</li>
+        </ul>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">3. Cookies</h2>
+        <p className="mt-3">
+          The Service uses cookies to keep you signed in (session management). Third parties such
+          as Google may also use cookies for analytics and advertising as described below. You can
+          delete or block cookies in your browser settings, but some features — such as staying
+          signed in — will stop working.
+        </p>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">4. Analytics (Google Analytics)</h2>
+        <p className="mt-3">
+          The Service uses Google Analytics to understand how it is used. Google Analytics collects
+          traffic data using cookies and similar technologies; this data is collected anonymously
+          and does not identify individuals. See{" "}
+          <a
+            href="https://policies.google.com/technologies/partner-sites"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 underline"
+          >
+            &ldquo;How Google uses information from sites or apps that use our services&rdquo;
+          </a>{" "}
+          for details.
+        </p>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">5. Advertising (Google ads)</h2>
+        <p className="mt-3">
+          The Service may show ads served by third-party vendors such as Google (including rewarded
+          video ads). Third-party vendors may use cookies to serve ads based on your prior visits
+          to this and other websites (personalized advertising).
+        </p>
+        <ul className="mt-3 list-disc space-y-2 pl-6">
+          <li>
+            You can opt out of personalized ads in{" "}
+            <a
+              href="https://adssettings.google.com/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 underline"
+            >
+              Google&rsquo;s Ads Settings
+            </a>
+            .
+          </li>
+          <li>
+            You can opt out of other third-party vendors&rsquo; cookies at{" "}
+            <a
+              href="https://optout.aboutads.info/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 underline"
+            >
+              www.aboutads.info
+            </a>
+            .
+          </li>
+        </ul>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">6. Disclosure to third parties</h2>
+        <p className="mt-3">
+          The operator does not provide personal information to third parties without your consent,
+          except as required by law. To provide the Service, information may be sent to the
+          following external services:
+        </p>
+        <ul className="mt-3 list-disc space-y-1 pl-6 text-sm">
+          <li>Google LLC (authentication, analytics, advertising)</li>
+          <li>
+            Geospatial Information Authority of Japan (reverse geocoding for address display; map
+            coordinates are sent)
+          </li>
+        </ul>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">7. Retention and deletion</h2>
+        <p className="mt-3">
+          Your account and related data are retained until you delete your account. You can delete
+          it at any time from the{" "}
+          <Link href="/delete-account" className="text-blue-600 underline">
+            account deletion page
+          </Link>
+          , which also details what is deleted and what is retained. Logs that must be kept for
+          legal compliance or fraud prevention are retained for up to 12 months within that scope
+          and then deleted.
+        </p>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">8. Security</h2>
+        <p className="mt-3">
+          The operator takes reasonable safeguards — including encrypted connections (HTTPS) and
+          access controls — to protect collected information against unauthorized access, loss or
+          leakage.
+        </p>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">9. Changes to this policy</h2>
+        <p className="mt-3">
+          This policy may be revised in response to changes in law or in the Service. Significant
+          changes will be announced within the Service.
+        </p>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">10. Contact</h2>
+        <p className="mt-3">
+          For questions about this policy, see the{" "}
+          <Link href="/contact" className="text-blue-600 underline">
+            operator information and contact page
+          </Link>{" "}
+          or email us at:
+        </p>
+        <p className="mt-2">
+          <a
+            href={`mailto:${CONTACT_EMAIL}`}
+            className="font-mono font-semibold text-blue-600 underline"
+          >
+            {CONTACT_EMAIL}
+          </a>
+        </p>
+      </section>
+
+      <p className="mt-10 text-sm text-gray-500">Established: June 10, 2026</p>
+    </>
+  );
+}
+
+export default function PrivacyPage() {
+  return (
+    <InfoPage
+      title={{ ja: "プライバシーポリシー", en: "Privacy Policy" }}
+      subtitle={{
+        ja: "ちずぬりえ（Chizunurie）における利用者情報の取り扱いについて",
+        en: "How user information is handled in Chizunurie",
+      }}
+      ja={<JaContent />}
+      en={<EnContent />}
+    />
   );
 }

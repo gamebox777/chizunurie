@@ -6,16 +6,30 @@ import InfoPage from "@/components/InfoPage";
 export const metadata: Metadata = {
   title: "ちずぬりえとは｜歩いた街が色になる GPS 白地図ぬりつぶしゲーム",
   description:
-    "「ちずぬりえ」は、GPS で訪れた場所や選んだ場所を約1km四方のマスで塗っていく、ブラウザで遊べる無料の白地図ぬりつぶしゲームです。市区町村の塗り％やランキングで日本制覇を目指せます。",
+    "「ちずぬりえ」は、GPS で訪れた場所や選んだ場所を約1km四方のマスで塗っていく、ブラウザで遊べる無料の白地図ぬりつぶしゲームです。市区町村の塗り％やランキングで日本制覇を目指せます。Chizunurie is a free browser-based GPS map-painting game.",
   robots: { index: true, follow: true },
 };
 
-export default function AboutPage() {
+function Screenshot({ caption }: { caption: string }) {
   return (
-    <InfoPage
-      title="ちずぬりえとは"
-      subtitle="歩いた街が色になる、GPS 白地図ぬりつぶしゲーム"
-    >
+    <>
+      <div className="mt-3 overflow-hidden rounded-xl border border-gray-200">
+        <Image
+          src="/promo/promo-ogp.png"
+          alt={caption}
+          width={1200}
+          height={630}
+          className="w-full h-auto"
+        />
+      </div>
+      <p className="mt-2 text-xs text-gray-500">{caption}</p>
+    </>
+  );
+}
+
+function JaContent() {
+  return (
+    <>
       <section>
         <p>
           「ちずぬりえ」は、日本の白地図を自分の足で塗りつぶしていく、ブラウザでそのまま遊べる
@@ -32,18 +46,7 @@ export default function AboutPage() {
 
       <section className="mt-8">
         <h2 className="text-lg font-bold">スクリーンショット</h2>
-        <div className="mt-3 overflow-hidden rounded-xl border border-gray-200">
-          <Image
-            src="/promo/promo-ogp.png"
-            alt="ちずぬりえのプレイ画面イメージ。白地図の上に塗ったマスが色付きで表示されている"
-            width={1200}
-            height={630}
-            className="w-full h-auto"
-          />
-        </div>
-        <p className="mt-2 text-xs text-gray-500">
-          白地図の上に、訪れた場所・選んだ場所が約1km四方のマスで塗られていきます。
-        </p>
+        <Screenshot caption="白地図の上に、訪れた場所・選んだ場所が約1km四方のマスで塗られていきます。" />
       </section>
 
       <section className="mt-8">
@@ -107,6 +110,106 @@ export default function AboutPage() {
           GPS ボタンを押してみてください。いまいる場所に最初の色が付きます。
         </p>
       </section>
-    </InfoPage>
+    </>
+  );
+}
+
+function EnContent() {
+  return (
+    <>
+      <section>
+        <p>
+          Chizunurie (&ldquo;map coloring&rdquo; in Japanese) is a free game you can play right in
+          your browser: a blank map of Japan that you fill in with your own feet. When you share
+          your GPS location, the roughly 1&nbsp;km × 1&nbsp;km cell you are standing in gets painted.
+          Commutes, walks, errands, trips — your everyday movement becomes a record, and the map
+          slowly fills with color like a coloring book of everywhere you have been.
+        </p>
+        <p className="mt-3">
+          There is nothing to install and no sign-up required — just open the site on your phone or
+          computer and start playing as a guest. If you create a free account later, your painted
+          map and points carry over to any device.
+        </p>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">Screenshot</h2>
+        <Screenshot caption="Places you visit or choose are painted on the blank map as roughly 1 km square cells." />
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">Features</h2>
+        <ul className="mt-3 list-disc space-y-2 pl-6">
+          <li>
+            <strong>Paint the map just by walking</strong>: painting the cell you are standing in
+            with GPS is free. Places you actually visit are specially recorded as
+            &ldquo;visited&rdquo; and earn bonus experience points.
+          </li>
+          <li>
+            <strong>Fair, equal-sized cells (about 1 km square)</strong>: the painting unit is a
+            uniform grid that is the same size everywhere. One cell in central Tokyo is worth the
+            same as one cell in the countryside — steady walking always fills the map.
+          </li>
+          <li>
+            <strong>Conquer municipalities</strong>: each city, town and village shows a painted
+            percentage (painted cells / total cells). Reach 100% to &ldquo;conquer&rdquo; it, and
+            conquer every municipality to fully conquer the prefecture.
+          </li>
+          <li>
+            <strong>Points and levels</strong>: places you cannot reach can be painted manually
+            using paint points. Painting earns XP, and leveling up raises your maximum points.
+          </li>
+          <li>
+            <strong>Rankings</strong>: compete on painted-cell counts with other players — overall,
+            by prefecture, and by country.
+          </li>
+          <li>
+            <strong>The whole world is paintable</strong>: outside Japan the same ~1 km cells apply,
+            and your travels are tracked as painted percentages per country and state.
+          </li>
+          <li>
+            <strong>Browser-only, PWA-ready</strong>: no install needed. Add it to your home screen
+            to play full-screen like a native app.
+          </li>
+        </ul>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">Map data sources</h2>
+        <p className="mt-3">
+          The maps and administrative boundaries are built from the following public and open data:
+        </p>
+        <ul className="mt-3 list-disc space-y-1 pl-6 text-sm">
+          <li>MLIT &ldquo;National Land Numerical Information&rdquo; (municipal boundaries)</li>
+          <li>Statistics Bureau of Japan, e-Stat census small-area data (neighborhood boundaries)</li>
+          <li>Geospatial Information Authority of Japan (GSI) maps (base-map overlay and reverse geocoding)</li>
+          <li>Natural Earth (country and state boundaries for the world map)</li>
+        </ul>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">Jump in</h2>
+        <p className="mt-3">
+          The full rules are on the{" "}
+          <Link href="/how-to-play" className="text-blue-600 underline">How to play page</Link>.
+          To start, just <Link href="/" className="text-blue-600 underline">open the map</Link> and
+          tap the GPS button — your first cell gets its color right where you are.
+        </p>
+      </section>
+    </>
+  );
+}
+
+export default function AboutPage() {
+  return (
+    <InfoPage
+      title={{ ja: "ちずぬりえとは", en: "About Chizunurie" }}
+      subtitle={{
+        ja: "歩いた街が色になる、GPS 白地図ぬりつぶしゲーム",
+        en: "A GPS map-painting game where the streets you walk turn into color",
+      }}
+      ja={<JaContent />}
+      en={<EnContent />}
+    />
   );
 }

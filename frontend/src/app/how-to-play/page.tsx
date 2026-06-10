@@ -5,13 +5,13 @@ import InfoPage from "@/components/InfoPage";
 export const metadata: Metadata = {
   title: "遊び方｜ちずぬりえ",
   description:
-    "ちずぬりえの遊び方ガイド。GPS で現在地を塗る方法、となり塗り・離れた場所塗りの違い、塗りポイントの回復、レベルと経験値、市区町村の制覇、ランキングまでをまとめて説明します。",
+    "ちずぬりえの遊び方ガイド。GPS で現在地を塗る方法、となり塗り・離れた場所塗りの違い、塗りポイントの回復、レベルと経験値、市区町村の制覇、ランキングまでをまとめて説明します。How to play Chizunurie.",
   robots: { index: true, follow: true },
 };
 
-export default function HowToPlayPage() {
+function JaContent() {
   return (
-    <InfoPage title="遊び方" subtitle="はじめてでも3分でわかる、ちずぬりえの基本">
+    <>
       <section>
         <h2 className="text-lg font-bold">1. まずは開くだけ — 登録は不要</h2>
         <p className="mt-3">
@@ -124,6 +124,143 @@ export default function HowToPlayPage() {
           もどうぞ。
         </p>
       </section>
-    </InfoPage>
+    </>
+  );
+}
+
+function EnContent() {
+  return (
+    <>
+      <section>
+        <h2 className="text-lg font-bold">1. Just open it — no sign-up needed</h2>
+        <p className="mt-3">
+          Open the <Link href="/" className="text-blue-600 underline">map page</Link> and the game
+          starts automatically as a guest. No account, no install. Everything you paint is saved
+          even as a guest.
+        </p>
+        <p className="mt-2">
+          Sign up for free with an email address or a Google account to carry your painted map,
+          points and level across devices. Anything you painted as a guest is transferred to your
+          account when you register.
+        </p>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">2. The painting unit: cells about 1 km square</h2>
+        <p className="mt-3">
+          Zoom in (roughly zoom level 10 or more) and a fine grid appears on the map. These cells
+          are the painting unit — a <strong>uniform grid about 1 km square</strong>, the same size
+          everywhere. Zoom out and you get a blank municipal map of Japan to admire your progress.
+        </p>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">3. Three ways to paint</h2>
+        <ul className="mt-3 list-disc space-y-3 pl-6">
+          <li>
+            <strong>GPS painting (free)</strong>: tap the GPS button and the cell you are standing
+            in gets painted. It is recorded as actually visited and earns a{" "}
+            <strong>+100 XP</strong> bonus. Revisiting the same cell after a while earns a revisit
+            bonus, and walking around inside a cell leaves fine &ldquo;footprints&rdquo; that add
+            extra XP bit by bit.
+          </li>
+          <li>
+            <strong>Adjacent painting (1 point)</strong>: any cell next to one you have already
+            painted can be painted with a tap for 1 point. Your very first cell can be placed
+            anywhere for free. +50 XP.
+          </li>
+          <li>
+            <strong>Remote painting (10 points)</strong>: faraway, non-adjacent cells can be painted
+            for 10 points after a confirmation. +50 XP. Outside Japan, one action paints a 10×10
+            block of cells at once.
+          </li>
+        </ul>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">4. Recovering paint points</h2>
+        <ul className="mt-3 list-disc space-y-2 pl-6">
+          <li>Points <strong>regenerate automatically</strong> over time (1 point every 10 minutes).</li>
+          <li>Your maximum starts at 10 and <strong>grows as you level up</strong>.</li>
+          <li>
+            A feature to recover points by watching a video ad to the end is in preparation —
+            coming soon.
+          </li>
+          <li>GPS painting never costs points. If you can walk there, walking is always the best deal.</li>
+        </ul>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">5. Levels and experience (XP)</h2>
+        <p className="mt-3">
+          Painting and visiting earn XP, and reaching the threshold levels you up. Each level raises
+          your maximum paint points so you can paint wider. XP is cumulative and never decreases.
+        </p>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">6. Conquer municipalities</h2>
+        <p className="mt-3">
+          Hover over (or tap) a cell to see the municipality&rsquo;s painted percentage, shown like
+          &ldquo;Sapporo 35% (n/N)&rdquo;. Paint every cell in a municipality to reach{" "}
+          <strong>100% and &ldquo;conquer&rdquo; it</strong>. Conquer all municipalities in a
+          prefecture for a full conquest. Outside Japan, percentages are shown per country and
+          state.
+        </p>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">7. Rankings</h2>
+        <p className="mt-3">
+          Compete on painted-cell counts in the overall ranking, plus per-prefecture and per-country
+          rankings. Every daily walk counts toward your rank.
+        </p>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-bold">8. Handy settings</h2>
+        <ul className="mt-3 list-disc space-y-2 pl-6">
+          <li>Switch the language (日本語 / English) from the gear menu at the top right.</li>
+          <li>
+            Turn on &ldquo;show base map&rdquo; to overlay a faint GSI map under the blank map —
+            useful for checking roads and stations while you paint.
+          </li>
+          <li>BGM, sound effects and vibration (on supported devices) are also in the gear menu.</li>
+          <li>On smartphones, &ldquo;Add to Home Screen&rdquo; gives you a full-screen, app-like experience.</li>
+        </ul>
+      </section>
+
+      <section className="mt-8 rounded-xl border border-amber-200 bg-amber-50 p-4">
+        <h2 className="text-base font-bold text-amber-900">⚠ Play safely</h2>
+        <p className="mt-2 text-sm text-amber-900">
+          Staring at your screen while walking is dangerous. Stop walking before you use GPS
+          painting, watch your surroundings, follow traffic rules, and stay out of restricted
+          areas.
+        </p>
+      </section>
+
+      <section className="mt-8">
+        <p>
+          For an overview of the game, see{" "}
+          <Link href="/about" className="text-blue-600 underline">About Chizunurie</Link>; for tips
+          on enjoying it, check the{" "}
+          <Link href="/columns" className="text-blue-600 underline">articles</Link>.
+        </p>
+      </section>
+    </>
+  );
+}
+
+export default function HowToPlayPage() {
+  return (
+    <InfoPage
+      title={{ ja: "遊び方", en: "How to play" }}
+      subtitle={{
+        ja: "はじめてでも3分でわかる、ちずぬりえの基本",
+        en: "The basics of Chizunurie in three minutes",
+      }}
+      ja={<JaContent />}
+      en={<EnContent />}
+    />
   );
 }
