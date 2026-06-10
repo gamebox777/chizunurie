@@ -231,6 +231,15 @@ const ja: Dict = {
   timeHour: (n: number) => `${n}時間`,
   timeMin: (n: number) => `${n}分`,
   timeSec: (n: number) => `${n}秒`,
+
+  // SiteFooter（情報ページへのリンク）
+  footerAbout: 'ちずぬりえとは',
+  footerHowTo: '遊び方',
+  footerNews: '更新情報',
+  footerColumns: 'コラム',
+  footerPrivacy: 'プライバシーポリシー',
+  footerContact: '運営者情報・お問い合わせ',
+  footerDeleteAccount: 'アカウント削除',
 };
 
 const en: Dict = {
@@ -438,6 +447,15 @@ const en: Dict = {
   timeHour: (n: number) => `${n}h `,
   timeMin: (n: number) => `${n}m `,
   timeSec: (n: number) => `${n}s`,
+
+  // SiteFooter (links to info pages)
+  footerAbout: 'About',
+  footerHowTo: 'How to play',
+  footerNews: 'News',
+  footerColumns: 'Articles',
+  footerPrivacy: 'Privacy Policy',
+  footerContact: 'Contact',
+  footerDeleteAccount: 'Delete account',
 };
 
 const TABLE: Record<Lang, Dict> = { ja, en };

@@ -4625,7 +4625,10 @@ export default function MapView() {
                   クールダウン中・1日上限はボタンを無効化して理由を表示する。
                   ネイティブアプリ（mobile/）では動画の仕組みが Web と異なるため、当面ボタンを
                   非表示にする（ブラウザ版はそのまま表示）。出し分けは @/lib/platform の
-                  isNativeApp() で判定。 */}
+                  isNativeApp() で判定。
+                  ※ AdSense のサイト審査が通って広告を配信できるようになるまで、ボタンごと
+                  コメントアウトして非表示にしている。審査通過後に下のブロックを戻すこと。 */}
+              {/*
               {!isNativeApp() && (() => {
                 const cooldownLeft =
                   rewardStatus?.nextAvailableAt != null
@@ -4654,6 +4657,7 @@ export default function MapView() {
                   </button>
                 );
               })()}
+              */}
             </div>
           )}
           <div className="mt-1 border-t border-gray-100 pt-2">

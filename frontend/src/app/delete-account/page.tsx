@@ -185,12 +185,7 @@ export default function DeleteAccountPage() {
       <section className="mt-8 border-t border-gray-200 pt-5 text-sm text-gray-600">
         <p>
           Related: / 関連情報：
-          <a
-            href="https://unitygamebox.com/?p=2230"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ml-1 text-blue-600 underline"
-          >
+          <a href="/privacy" className="ml-1 text-blue-600 underline">
             Privacy Policy / プライバシーポリシー
           </a>
         </p>

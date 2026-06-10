@@ -3,6 +3,7 @@
 import dynamic from 'next/dynamic';
 import { useEffect, useRef } from 'react';
 import Header from '@/components/Header';
+import SiteFooter from '@/components/SiteFooter';
 import { signIn, useSession } from '@/lib/auth-client';
 import { logEvent, recordAccess } from '@/lib/userlog';
 
@@ -59,6 +60,8 @@ export default function Home() {
       <div className="flex-1 overflow-hidden">
         <Map />
       </div>
+      {/* 情報ページへのリンク（クローラ導線・AdSense のコンテンツ要件対応） */}
+      <SiteFooter variant="bar" />
     </div>
   );
 }
