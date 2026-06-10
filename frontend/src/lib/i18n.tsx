@@ -112,14 +112,15 @@ const ja: Dict = {
   rewardCooldown: (t: string) => `回復まで ${t}`,
   rewardDailyLimit: '本日の視聴上限に達しました',
   rewardWatch: (left?: number) =>
-    `▶ 動画を見て回復${left != null ? `（残り${left}回）` : ''}`,
+    `▶ 広告を見て回復${left != null ? `（残り${left}回）` : ''}`,
+  rewardPreparing: '広告を準備中…',
 
   // Map: レベルアップ演出
   levelUp: 'LEVEL UP!',
   maxPointPlus: '塗りポイント上限 +1',
 
   // Map: 動画リワードモーダル
-  videoTitle: '動画を見て塗りポイントを回復',
+  videoTitle: '広告を見て塗りポイントを回復',
   videoAdSample: '広告（サンプル）',
   videoWatching: (s: number) => `あと ${s} 秒で「そのレベルの満タン分」を回復します`,
   videoClaiming: 'ポイントを回復しています…',
@@ -193,10 +194,13 @@ const ja: Dict = {
   rankPlaytimeAllOnly: 'プレイ時間は全期間のみの集計です',
 
   // Map: トースト（ゲーム向け）
-  needLoginVideo: 'ログインすると動画でポイントを回復できます',
-  videoNotYet: 'まだ動画を見られません（クールダウン中）',
+  needLoginVideo: 'ログインすると広告視聴でポイントを回復できます',
+  videoNotYet: 'まだ広告を見られません（クールダウン中）',
   recoverFailed: 'ポイントの回復に失敗しました',
-  recovered: (n: number) => `動画視聴で塗りポイントを ${n} 回復しました`,
+  recovered: (n: number) => `広告視聴で塗りポイントを ${n} 回復しました`,
+  // 動画リワード成功の中央ポップ（Map.tsx の rewardPop）
+  rewardPopTitle: '塗りポイント獲得！',
+  rewardPopSub: '広告視聴ボーナス',
   needLoginPaint: 'ログインすると塗りポイントを使って塗れます',
   zoomToPaint: 'もっとズームすると塗れます',
   switchTonari: 'となり塗りモードにするとマウスで塗れます',
@@ -326,20 +330,21 @@ const en: Dict = {
   rewardCooldown: (t: string) => `Recover in ${t}`,
   rewardDailyLimit: "Today's limit reached",
   rewardWatch: (left?: number) =>
-    `▶ Watch a video to recover${left != null ? ` (${left} left)` : ''}`,
+    `▶ Watch an ad to recover${left != null ? ` (${left} left)` : ''}`,
+  rewardPreparing: 'Preparing an ad…',
 
   // Map: level up
   levelUp: 'LEVEL UP!',
   maxPointPlus: 'Max paint points +1',
 
   // Map: video reward modal
-  videoTitle: 'Watch a video to recover paint points',
+  videoTitle: 'Watch an ad to recover paint points',
   videoAdSample: 'Ad (sample)',
   videoWatching: (s: number) =>
     `Recovering a full level's worth in ${s}s`,
   videoClaiming: 'Recovering points…',
   videoLoading: 'Preparing the ad…',
-  videoDismissed: 'Watch the full video to recover paint points',
+  videoDismissed: 'Watch the full ad to recover paint points',
   videoUnavailable: 'No ad available right now. Please try again later',
   videoError: 'Recovery failed. Please try again.',
   close: 'Close',
@@ -408,10 +413,13 @@ const en: Dict = {
   rankPlaytimeAllOnly: 'Play time is all-time only',
 
   // Map: toasts (game)
-  needLoginVideo: 'Sign in to recover points by watching videos',
+  needLoginVideo: 'Sign in to recover points by watching ads',
   videoNotYet: 'Not available yet (cooldown)',
   recoverFailed: 'Failed to recover points',
-  recovered: (n: number) => `Recovered ${n} paint points by watching a video`,
+  recovered: (n: number) => `Recovered ${n} paint points by watching an ad`,
+  // Center pop for a successful video reward (rewardPop in Map.tsx)
+  rewardPopTitle: 'Paint points earned!',
+  rewardPopSub: 'Ad bonus',
   needLoginPaint: 'Sign in to paint using paint points',
   zoomToPaint: 'Zoom in more to paint',
   switchTonari: 'Switch to Adjacent mode to paint with the mouse',

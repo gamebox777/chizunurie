@@ -31,6 +31,16 @@ import { isBasemapEnabled, onBasemapChange, getBasemapOpacity, onBasemapOpacityC
 import { isGpsAddressEnabled, onGpsAddressChange } from '@/lib/gpsAddress';
 import { getIconSize, onIconSizeChange } from '@/lib/iconSize';
 import { showRewardedAd } from '@/lib/rewardedAd';
+import {
+  showNativeRewardedAd,
+  watchNativeRewardedReady,
+  getNativeAdTestMode,
+  setNativeAdTestMode,
+  getNativeAdDebugInfo,
+  type NativeAdTestMode,
+  type NativeAdDebugInfo,
+} from '@/lib/nativeRewardedAd';
+import { showNativeBanner } from '@/lib/nativeBannerAd';
 import { isNativeApp } from '@/lib/platform';
 import ShareIcons from './ShareIcons';
 
@@ -823,6 +833,9 @@ export default function MapView() {
   // レベルアップ演出（{ to: 到達レベル } を一時表示）
   const [levelUp, setLevelUp] = useState<{ to: number } | null>(null);
   const levelUpTimerRef = useRef<number | null>(null);
+  // 動画リワード成功の獲得演出（{ granted: 獲得ポイント } を画面中央に一時表示）
+  const [rewardPop, setRewardPop] = useState<{ granted: number } | null>(null);
+  const rewardPopTimerRef = useRef<number | null>(null);
   // 離れた場所（10ポイント）の確認ダイアログ。map init の外（JSX）から確定させる。
   const [confirmPaint, setConfirmPaint] = useState<{
     id: number;
@@ -849,6 +862,13 @@ export default function MapView() {
   );
   // 連打・二重起動を防ぐためのフラグ（state はクロージャで古くなるので ref で持つ）。
   const videoBusyRef = useRef(false);
+  // ネイティブアプリ内のリワード広告の在庫（プリロード完了）。在庫が無い間は
+  // 「広告を見て回復」ボタンを非活性にする。旧 APK・ブラウザでは即 true が来る。
+  const [nativeAdReady, setNativeAdReady] = useState(false);
+  // デバッグメニュー用：広告モード（テスト広告/本広告）。null=未取得（旧 APK 等）。
+  const [adTestMode, setAdTestMode] = useState<NativeAdTestMode | null>(null);
+  // デバッグメニュー用：広告の診断情報（SDK 初期化・リワード在庫・バナーの状態とエラー）。
+  const [adDebugInfo, setAdDebugInfo] = useState<NativeAdDebugInfo | null>(null);
   // 市区町村ごとの塗り％表示用
   const [hoverStat, setHoverStat] = useState<string | null>(null); // ホバー中市区町村の「市名 35%（n/N）」
   const [statPanelCollapsed, setStatPanelCollapsed] = useState(false); // 左下パネルの折りたたみ
@@ -1143,6 +1163,19 @@ export default function MapView() {
     }, 3500);
   }, []);
 
+  // 動画リワード成功の派手な獲得演出（画面中央・レベルアップと同じポップ・3.5秒で自動で消える）。
+  const showRewardPop = useCallback((granted: number) => {
+    setRewardPop({ granted });
+    playLevelUp();
+    if (rewardPopTimerRef.current !== null) {
+      window.clearTimeout(rewardPopTimerRef.current);
+    }
+    rewardPopTimerRef.current = window.setTimeout(() => {
+      setRewardPop(null);
+      rewardPopTimerRef.current = null;
+    }, 3500);
+  }, []);
+
   // サーバーの権威的な塗りポイント状態（残高・最大値・レベル・経験値）をまとめて反映する。
   // レベルが上がっていたら演出を出す（初回取得時は演出しない）。
   const applyServerPoints = useCallback(
@@ -1247,8 +1280,12 @@ export default function MapView() {
         return;
       }
 
-      // 2) 広告表示（広告 UI は GPT が全画面で描画する）
-      const { outcome, detail } = await showRewardedAd(REWARDED_AD_UNIT_PATH);
+      // 2) 広告表示。ネイティブアプリ内は Unity Ads（UnityAdsPlugin 経由）、
+      //    ブラウザは GPT（全画面オーバーレイを GPT 自身が描画）。
+      //    どちらも同じ { outcome, detail? } を返すので以降の流れは共通。
+      const { outcome, detail } = isNativeApp()
+        ? await showNativeRewardedAd()
+        : await showRewardedAd(REWARDED_AD_UNIT_PATH);
       if (outcome !== 'granted') {
         // 途中キャンセル（dismissed）・在庫なし/非対応（unavailable）・エラー（error）。
         // detail に具体的な失敗理由（gpt_load_failed / ready_timeout 等）を残す。
@@ -1302,7 +1339,8 @@ export default function MapView() {
       logEvent('video_reward', {
         meta: { event: 'granted', granted: ok.granted ?? 0 },
       });
-      showToast(tRef.current('recovered', (ok.granted ?? 0) as never));
+      // 画面中央の派手な獲得演出（トーストではなくレベルアップ同様のポップ）。
+      showRewardPop(ok.granted ?? 0);
     } catch (err) {
       console.warn('video reward failed', err);
       logEvent('video_reward', { meta: { event: 'error' } });
@@ -1311,7 +1349,35 @@ export default function MapView() {
       setVideoPhase(null);
       videoBusyRef.current = false;
     }
-  }, [applyServerPoints]);
+  }, [applyServerPoints, showRewardPop]);
+
+  // ネイティブアプリ内のリワード広告在庫を監視する。プラグインが起動時から
+  // プリロードしており、在庫あり（ready）になったらボタンを活性化する。
+  useEffect(() => {
+    if (!isNativeApp()) return;
+    return watchNativeRewardedReady(setNativeAdReady);
+  }, []);
+
+  // ネイティブアプリ内のフッターバナー（Unity Ads）。マウント時に1回表示を試み、
+  // 失敗（在庫なし等）は1分おきに数回だけ再試行する。表示はネイティブ側が
+  // WebView を持ち上げて場所を確保するので、Web 側のレイアウト調整は不要。
+  useEffect(() => {
+    if (!isNativeApp()) return;
+    let cancelled = false;
+    let attempts = 0;
+    let timer: number | null = null;
+    const tryShow = async () => {
+      attempts += 1;
+      const shown = await showNativeBanner();
+      if (cancelled || shown || attempts >= 5) return;
+      timer = window.setTimeout(tryShow, 60_000);
+    };
+    tryShow();
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, []);
 
   // 離れた場所（10ポイント）の確認ダイアログで「塗る」を押したとき
   const confirmFarPaint = useCallback(() => {
@@ -1333,10 +1399,36 @@ export default function MapView() {
     openSearchRef.current = openSearch;
   }, [openSearch]);
 
+  // デバッグメニュー用：広告モードと診断情報を取得し直す。
+  const refreshAdDebug = useCallback(() => {
+    if (!isNativeApp()) return;
+    getNativeAdTestMode().then((mode) => {
+      if (mode) setAdTestMode(mode);
+    });
+    getNativeAdDebugInfo().then(setAdDebugInfo);
+  }, []);
+
   // デバッグメニューを開く（カスタムコントロールから呼ばれる）
   const openDebug = useCallback(() => {
     setDebugOpen(true);
-  }, []);
+    // ネイティブアプリなら広告モード・広告ステータスの現在値を取得して表示する。
+    refreshAdDebug();
+  }, [refreshAdDebug]);
+
+  // デバッグメニューの広告モード切り替え。SDK 初期化後はアプリ再起動で反映される
+  // （requiresRestart）。設定はネイティブ側（SharedPreferences）に永続化される。
+  const toggleAdTestMode = useCallback(async () => {
+    const next = !(adTestMode?.testMode ?? false);
+    const ret = await setNativeAdTestMode(next);
+    if (!ret) {
+      showToast('広告モードを変更できませんでした（旧バージョンのアプリ）');
+      return;
+    }
+    refreshAdDebug();
+    if (ret.requiresRestart) {
+      showToast('アプリを再起動すると反映されます');
+    }
+  }, [adTestMode, refreshAdDebug, showToast]);
   useEffect(() => {
     openDebugRef.current = openDebug;
   }, [openDebug]);
@@ -1561,6 +1653,10 @@ export default function MapView() {
       if (levelUpTimerRef.current !== null) {
         window.clearTimeout(levelUpTimerRef.current);
         levelUpTimerRef.current = null;
+      }
+      if (rewardPopTimerRef.current !== null) {
+        window.clearTimeout(rewardPopTimerRef.current);
+        rewardPopTimerRef.current = null;
       }
     };
   }, []);
@@ -4621,15 +4717,14 @@ export default function MapView() {
                   </span>
                 </div>
               </div>
-              {/* 動画リワード：動画を見てそのレベルの満タン分を回復。
-                  クールダウン中・1日上限はボタンを無効化して理由を表示する。
-                  ネイティブアプリ（mobile/）では動画の仕組みが Web と異なるため、当面ボタンを
-                  非表示にする（ブラウザ版はそのまま表示）。出し分けは @/lib/platform の
-                  isNativeApp() で判定。
-                  ※ AdSense のサイト審査が通って広告を配信できるようになるまで、ボタンごと
-                  コメントアウトして非表示にしている。審査通過後に下のブロックを戻すこと。 */}
-              {/*
-              {!isNativeApp() && (() => {
+              {/* 動画リワード：広告を見てそのレベルの満タン分を回復。
+                  広告在庫が準備できるまで（プリロード未完了）・クールダウン中・
+                  1日上限はボタンを無効化して理由を表示する。
+                  出し分け（@/lib/platform の isNativeApp()）：
+                  - ネイティブアプリ（mobile/）＝ Unity Ads（事前審査不要）なので表示する。
+                  - ブラウザ＝ GPT/AdSense。サイト審査が通って広告を配信できるようになるまで
+                    非表示（審査通過後に条件へ「|| true」相当の Web 表示を戻すこと）。 */}
+              {isNativeApp() && (() => {
                 const cooldownLeft =
                   rewardStatus?.nextAvailableAt != null
                     ? rewardStatus.nextAvailableAt - nowTick
@@ -4637,7 +4732,9 @@ export default function MapView() {
                 const onCooldown = cooldownLeft > 0;
                 const dailyLimit =
                   rewardStatus != null && rewardStatus.remainingToday <= 0;
-                const disabled = onCooldown || dailyLimit || videoPhase !== null;
+                const adPreparing = !nativeAdReady;
+                const disabled =
+                  adPreparing || onCooldown || dailyLimit || videoPhase !== null;
                 return (
                   <button
                     type="button"
@@ -4649,15 +4746,16 @@ export default function MapView() {
                         : 'bg-emerald-500 hover:bg-emerald-600'
                     }`}
                   >
-                    {onCooldown
-                      ? t('rewardCooldown', formatCountdown(cooldownLeft, t) as never)
-                      : dailyLimit
-                        ? t('rewardDailyLimit')
-                        : t('rewardWatch', (rewardStatus ? rewardStatus.remainingToday : undefined) as never)}
+                    {dailyLimit
+                      ? t('rewardDailyLimit')
+                      : onCooldown
+                        ? t('rewardCooldown', formatCountdown(cooldownLeft, t) as never)
+                        : adPreparing
+                          ? t('rewardPreparing')
+                          : t('rewardWatch', (rewardStatus ? rewardStatus.remainingToday : undefined) as never)}
                   </button>
                 );
               })()}
-              */}
             </div>
           )}
           <div className="mt-1 border-t border-gray-100 pt-2">
@@ -4730,6 +4828,26 @@ export default function MapView() {
             </span>
             <span className="text-xs font-semibold text-amber-900">
               {t('maxPointPlus')}
+            </span>
+          </div>
+        </div>
+      )}
+      {/* 動画リワード成功：画面中央の派手な獲得演出（レベルアップと同じポップ・自動で消える） */}
+      {rewardPop && (
+        <div
+          className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="level-up-pop flex flex-col items-center gap-1 rounded-2xl bg-gradient-to-b from-emerald-400 to-emerald-600 px-8 py-5 text-center shadow-2xl ring-4 ring-emerald-200">
+            <span className="text-sm font-bold tracking-widest text-emerald-50">
+              🎉 {t('rewardPopTitle')} 🎉
+            </span>
+            <span className="text-5xl font-black text-white drop-shadow">
+              +{rewardPop.granted}
+            </span>
+            <span className="text-xs font-semibold text-emerald-50">
+              {t('rewardPopSub')}
             </span>
           </div>
         </div>
@@ -5019,6 +5137,147 @@ export default function MapView() {
                 ユーザーデータをリセット
               </button>
             </div>
+            {/* 広告モード（テスト広告/本広告）。ネイティブアプリ内でのみ表示。
+                debug/release ビルドのどちらでも切り替えられる（既定は debug=テスト・
+                release=本広告）。SDK 初期化後の変更はアプリ再起動で反映される。 */}
+            {isNativeApp() && (
+              <div className="mt-4 mb-4 rounded-lg border border-gray-200 bg-gray-50 px-3 py-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-gray-600">広告モード</span>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${
+                      adTestMode == null
+                        ? 'border-gray-300 bg-gray-100 text-gray-500'
+                        : adTestMode.effectiveTestMode
+                          ? 'border-amber-300 bg-amber-50 text-amber-700'
+                          : 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                    }`}
+                  >
+                    {adTestMode == null
+                      ? '取得中…'
+                      : adTestMode.effectiveTestMode
+                        ? 'テスト広告'
+                        : '本広告'}
+                  </span>
+                </div>
+                {adTestMode != null && (
+                  <>
+                    <button
+                      type="button"
+                      className="mt-2 w-full text-left px-3 py-2 text-sm font-medium text-gray-800 border border-gray-200 rounded-lg bg-white hover:bg-gray-50"
+                      onClick={toggleAdTestMode}
+                    >
+                      {adTestMode.testMode
+                        ? '本広告に切り替える'
+                        : 'テスト広告に切り替える'}
+                    </button>
+                    {adTestMode.requiresRestart && (
+                      <div className="mt-1.5 text-[11px] text-amber-600">
+                        変更済み：アプリを再起動すると
+                        {adTestMode.testMode ? 'テスト広告' : '本広告'}になります
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+            {/* 広告ステータス詳細（ネイティブアプリのみ）。SDK 初期化・リワード在庫・
+                バナーの状態と直近のエラーを表示する。本広告で在庫が来ない等の切り分け用。 */}
+            {isNativeApp() && (
+              <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 px-3 py-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-gray-600">広告ステータス</span>
+                  <button
+                    type="button"
+                    className="rounded border border-gray-300 bg-white px-2 py-0.5 text-[11px] text-gray-600 hover:bg-gray-100"
+                    onClick={refreshAdDebug}
+                  >
+                    更新
+                  </button>
+                </div>
+                {adDebugInfo == null ? (
+                  <div className="text-[11px] text-gray-400">
+                    取得できません（旧バージョンのアプリ）
+                  </div>
+                ) : (
+                  <div className="space-y-1 text-[11px] text-gray-600">
+                    <div className="flex justify-between gap-2">
+                      <span className="text-gray-400 shrink-0">SDK</span>
+                      <span className="font-mono text-right break-all">
+                        v{adDebugInfo.sdkVersion ?? '?'}・
+                        {adDebugInfo.initState === 'initialized'
+                          ? '初期化済み'
+                          : adDebugInfo.initState === 'initializing'
+                            ? '初期化中…'
+                            : adDebugInfo.initState === 'failed'
+                              ? '初期化失敗'
+                              : '未初期化'}
+                      </span>
+                    </div>
+                    {adDebugInfo.initError && (
+                      <div className="font-mono break-all text-red-600">
+                        init: {adDebugInfo.initError}
+                      </div>
+                    )}
+                    <div className="flex justify-between gap-2">
+                      <span className="text-gray-400 shrink-0">Game ID</span>
+                      <span className="font-mono">{adDebugInfo.gameId ?? '?'}</span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-gray-400 shrink-0">リワード</span>
+                      <span className="font-mono text-right">
+                        {adDebugInfo.rewardedReady
+                          ? '在庫あり'
+                          : adDebugInfo.rewardedLoading
+                            ? 'ロード中…'
+                            : '在庫なし'}
+                        （load {adDebugInfo.rewardedLoadAttempts ?? 0}回
+                        {adDebugInfo.lastRewardedLoadAt
+                          ? `・最終 ${new Date(adDebugInfo.lastRewardedLoadAt).toLocaleTimeString()}`
+                          : ''}
+                        ）
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-gray-400 shrink-0">　placement</span>
+                      <span className="font-mono">{adDebugInfo.rewardedPlacementId ?? '?'}</span>
+                    </div>
+                    {adDebugInfo.lastRewardedError && (
+                      <div className="font-mono break-all text-red-600">
+                        rewarded: {adDebugInfo.lastRewardedError}
+                      </div>
+                    )}
+                    <div className="flex justify-between gap-2">
+                      <span className="text-gray-400 shrink-0">バナー</span>
+                      <span className="font-mono">
+                        {adDebugInfo.bannerShown ? '表示中' : '未表示'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-gray-400 shrink-0">　placement</span>
+                      <span className="font-mono">{adDebugInfo.bannerPlacementId ?? '?'}</span>
+                    </div>
+                    {adDebugInfo.lastBannerError && (
+                      <div className="font-mono break-all text-red-600">
+                        banner: {adDebugInfo.lastBannerError}
+                      </div>
+                    )}
+                    {!adDebugInfo.bannerShown && (
+                      <button
+                        type="button"
+                        className="mt-1 w-full rounded border border-gray-300 bg-white px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100"
+                        onClick={async () => {
+                          await showNativeBanner();
+                          refreshAdDebug();
+                        }}
+                      >
+                        バナー表示を再試行
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

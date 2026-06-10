@@ -136,4 +136,42 @@ bash geo.sh 34.6873 135.5259   # 例：大阪城
   `adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>` → `http://localhost:9222/json/list`
   で Chrome DevTools プロトコルに繋がる（PC版Chromeの `chrome://inspect` でも可）。
 
-> `mobile/ios`・`mobile/android`・`mobile/node_modules` は .gitignore 済み（`cap add` で再生成可）。
+> `mobile/ios`・`mobile/node_modules` は .gitignore 済み（`cap add` で再生成可）。
+> **`mobile/android` はコミット対象**：ネイティブの手書きコード（`UnityAdsPlugin.java`・
+> `MainActivity.java`・`app/build.gradle`・`AndroidManifest.xml` 等）を含み `cap add` では
+> 再生成できないため。ビルド生成物・`keystore.properties` は `android/.gitignore` が除外する。
+
+## Unity Ads（リワード動画）
+
+アプリ内の「▶ 広告を見て回復」は Web 版 GPT ではなく **Unity Ads SDK** で出す
+（事前審査不要。経緯は [docs/スマホアプリ広告-審査不要ネットワーク比較.md](../docs/スマホアプリ広告-審査不要ネットワーク比較.md)）。
+
+- ネイティブ側：`android/app/src/main/java/jp/chizunurie/app/UnityAdsPlugin.java`
+  （Capacitor プラグイン `UnityAds`・`showRewarded()`/`showBanner()`/`hideBanner()`/
+  `getRewardedStatus()`/`getAdTestMode()`/`setAdTestMode()`/`getAdDebugInfo()`）。
+  `MainActivity` で登録、依存は `app/build.gradle` の `com.unity3d.ads:unity-ads`。
+- フロント側：`frontend/src/lib/nativeRewardedAd.ts` が `window.Capacitor.Plugins.UnityAds`
+  を呼び、Web 版（`rewardedAd.ts`）と同じ `{ outcome, detail? }` を返す。`Map.tsx` の
+  `openVideoReward` が `isNativeApp()` で出し分け。報酬付与は Web 版と同じ backend の
+  nonce 方式（アプリ側に固有のサーバー処理は無い）。
+- **リワードはプリロード制**：プラグインがアプリ起動時から1本ロードしておき、在庫の有無を
+  `getRewardedStatus()` と `rewardedStatus` イベント（`notifyListeners`）で frontend へ通知。
+  `Map.tsx` は在庫が準備できるまで「広告を見て回復」ボタンを非活性（「広告を準備中…」）にする。
+  視聴・失敗のたびに次の1本を自動ロード、在庫なしは30秒おきに再試行。これに伴い backend の
+  視聴クールダウン（旧1分・`VIDEO_REWARD_COOLDOWN_MS`）は 0 にした（1日上限は維持）。
+- **フッターバナー**：`showBanner()` が 320x50 の `BannerView` を画面下中央に表示し、
+  **WebView を bottomMargin で持ち上げて場所を確保**（Web 側の CSS 調整不要）。フロントは
+  `frontend/src/lib/nativeBannerAd.ts` ＋ `Map.tsx` がアプリ内のみマウント時に自動表示。
+  あわせてアプリ内では地図トップのサイトフッター（`SiteFooter` variant="bar"）を非表示にした。
+- **テスト広告/本広告は実行時切り替え**：既定は debug ビルド＝テスト広告・release＝本広告
+  （実機で実広告を自分で視聴するとポリシー違反になり得るため）。開発者デバッグメニュー
+  （レンチ→「広告モード」）から `setAdTestMode()` でどちらのビルドでも切り替えられ、
+  SharedPreferences（`unity_ads.test_mode`）に永続化される。Unity Ads SDK は同一プロセスで
+  一度しか initialize できないため、**SDK 初期化後の切り替えはアプリ再起動後に反映**
+  （`requiresRestart`・デバッグメニューに注記が出る）。
+- **広告ステータス詳細**：デバッグメニューの「広告ステータス」が `getAdDebugInfo()` で
+  SDK 初期化状態（init エラー含む）・Game ID/Placement・リワード在庫（load 試行回数・
+  最終試行時刻・直近の load エラー）・バナー表示状態（直近エラー）を表示する。
+  本広告で在庫が来ない（本番 Game ID 6133603 の「Network error」等）の切り分けに使う。
+  「バナー表示を再試行」ボタン付き。取得ついでに止まっていたプリロードも再起動する。
+- Game ID `6133603`（Android）・Placement `Rewarded_Android` は UnityAdsPlugin.java に定数で記載。

@@ -1,7 +1,9 @@
 'use client';
 
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import { useLocale } from '@/lib/i18n';
+import { isNativeApp } from '@/lib/platform';
 
 // 情報ページ（紹介・遊び方・プライバシーポリシー等）へのリンク集。
 // AdSense 等のクローラが地図トップから各コンテンツページへ辿れるよう、
@@ -14,6 +16,14 @@ type Props = {
 export default function SiteFooter({ variant = 'block' }: Props) {
   const { t } = useLocale();
 
+  // 地図トップの bar はクローラ導線が目的なので、ネイティブアプリ（mobile/ の
+  // Capacitor ラッパー）内では消して地図を広く使う。SSR は window が無く判定できない
+  // ため、hydration 後に useEffect で判定する（ブラウザでは常に表示のまま）。
+  const [hideBar, setHideBar] = useState(false);
+  useEffect(() => {
+    if (variant === 'bar' && isNativeApp()) setHideBar(true);
+  }, [variant]);
+
   const links: { href: string; label: string }[] = [
     { href: '/about', label: t('footerAbout') },
     { href: '/how-to-play', label: t('footerHowTo') },
@@ -25,6 +35,7 @@ export default function SiteFooter({ variant = 'block' }: Props) {
   ];
 
   if (variant === 'bar') {
+    if (hideBar) return null;
     return (
       <footer className="shrink-0 bg-white border-t border-gray-200 px-3 py-1 sm:py-1.5 overflow-x-auto">
         <nav className="flex items-center gap-3 sm:gap-5 whitespace-nowrap text-[11px] leading-4 sm:text-sm sm:leading-5 text-gray-500">

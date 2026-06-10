@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ちず塗り絵</string>
+    <string name="title_activity_main">ちず塗り絵</string>
+    <string name="package_name">jp.chizunurie.app</string>
+    <string name="custom_url_scheme">jp.chizunurie.app</string>
+</resources>

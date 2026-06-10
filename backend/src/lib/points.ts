@@ -51,7 +51,9 @@ export const MAX_HEARTBEAT_DELTA_SEC = 120;
 // 動画を1本見ると「そのレベルの満タン分（= maxPointsForLevel(level)）」を残高に加算する。
 // 自然回復（REGEN_INTERVAL_MS で 1pt）と同等量を一気に得られる位置づけ。
 // 不正・乱用対策として「クールダウン」と「1日の上限回数」を併用する。
-export const VIDEO_REWARD_COOLDOWN_MS = 1 * 60 * 1000; // 前回視聴から1分は再視聴不可
+// クールダウンは廃止（0）：連続視聴の抑制は「広告在庫のプリロード完了までボタンを
+// 非活性にする」クライアント側の制御（nativeAdReady）と1日上限に任せる。
+export const VIDEO_REWARD_COOLDOWN_MS = 0;
 export const VIDEO_REWARD_MAX_PER_DAY = 100; // 1日（JST）に受け取れる上限回数
 // 視聴開始時に発行する nonce の有効期間。広告の表示〜視聴完了に十分な余裕を持たせる。
 export const VIDEO_REWARD_NONCE_TTL_MS = 10 * 60 * 1000;

@@ -27,7 +27,7 @@ const ROWS: {
   desc: string;
   tone: string;
 }[] = [
-  { key: 'start', label: 'ボタン押下', desc: '「動画を見て回復」を押した回数', tone: 'text-gray-800' },
+  { key: 'start', label: 'ボタン押下', desc: '「広告を見て回復」を押した回数', tone: 'text-gray-800' },
   { key: 'granted', label: '視聴完了・報酬付与', desc: '最後まで視聴し回復した回数', tone: 'text-green-700' },
   { key: 'dismissed', label: '途中キャンセル', desc: '広告を最後まで見ずに閉じた', tone: 'text-amber-700' },
   { key: 'unavailable', label: '在庫なし・非対応', desc: '広告を表示できなかった', tone: 'text-gray-500' },
