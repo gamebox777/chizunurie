@@ -23,6 +23,7 @@ import {
 import { isGpsAddressEnabled, setGpsAddressEnabled } from '@/lib/gpsAddress';
 import { getIconSize, setIconSize, type IconSize } from '@/lib/iconSize';
 import { hydrateSettings, pushSettings } from '@/lib/userSettings';
+import { isNativeApp, isPwa, nativeAppVersion } from '@/lib/platform';
 
 type Props = {
   // 現在のニックネーム（メニュー先頭に表示）
@@ -62,6 +63,11 @@ export default function SettingsMenu({ name, email, role, onEditNickname, onSign
   const [gpsAddressOn, setGpsAddressOn] = useState(true);
   // 右上の各種アイコンの大きさ（既定 小）。
   const [iconSize, setIconSizeState] = useState<IconSize>('small');
+  // メニュー最下部に出す実行環境（アプリ版/PWA版/ブラウザ版）。SSR では判定できないので
+  // マウント後に確定する（それまで null で行ごと非表示）。
+  const [variant, setVariant] = useState<'app' | 'pwa' | 'browser' | null>(null);
+  // アプリ版のバージョン表記（versionName (versionCode)）。旧 APK 等で取れなければ null。
+  const [appVersion, setAppVersion] = useState<string | null>(null);
   // localStorage 由来の現在値をローカル state に反映する（即描画用）。
   const syncFromLocal = () => {
     setSeOn(isSeEnabled());
@@ -77,6 +83,9 @@ export default function SettingsMenu({ name, email, role, onEditNickname, onSign
     syncFromLocal(); // まず手元の値で即描画
     // サーバー保存ぶん（別端末での変更など）を取り込んで反映し直す。
     hydrateSettings(setLang).then(syncFromLocal);
+    // 実行環境とアプリ版バージョン（アプリ内のみ・非同期で後から埋まる）。
+    setVariant(isNativeApp() ? 'app' : isPwa() ? 'pwa' : 'browser');
+    nativeAppVersion().then(setAppVersion);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const toggleSe = () => {
@@ -408,6 +417,22 @@ export default function SettingsMenu({ name, email, role, onEditNickname, onSign
             >
               {t('logout')}
             </button>
+          )}
+          {/* 実行環境（アプリ版/PWA版/ブラウザ版）とバージョン。
+              アプリ版はネイティブの versionName (versionCode)、全変種共通で Web の
+              ビルド日時（next.config.ts が build 時に焼き込む NEXT_PUBLIC_BUILD_TIME）を出す。
+              アプリ版はリモートURL方式で APK と Web の版が独立に上がるため両方併記する。 */}
+          {variant && (
+            <p className="px-4 pt-2 pb-1.5 border-t border-gray-100 text-[11px] text-gray-400">
+              {variant === 'app'
+                ? `${t('variantApp')}${appVersion ? ` v${appVersion}` : ''}`
+                : variant === 'pwa'
+                  ? t('variantPwa')
+                  : t('variantBrowser')}
+              {process.env.NEXT_PUBLIC_BUILD_TIME && (
+                <span className="block">Web {process.env.NEXT_PUBLIC_BUILD_TIME}</span>
+              )}
+            </p>
           )}
         </div>
       )}

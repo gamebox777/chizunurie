@@ -1,7 +1,17 @@
 import type { NextConfig } from "next";
 
+// Web 側の「バージョン」として設定メニュー最下部に出すビルド日時（JST）。
+// `next build` 実行時（dev では dev サーバー起動時）に評価されて焼き込まれる。
+// 例: "2026-06-10 23:45"（sv-SE ロケールは "YYYY-MM-DD HH:mm:ss" 形式なので先頭16文字を使う）
+const buildTime = new Date()
+  .toLocaleString("sv-SE", { timeZone: "Asia/Tokyo", hour12: false })
+  .slice(0, 16);
+
 const nextConfig: NextConfig = {
   output: "standalone",
+  env: {
+    NEXT_PUBLIC_BUILD_TIME: buildTime,
+  },
   turbopack: {
     root: __dirname,
   },

@@ -65,6 +65,9 @@ const ja: Dict = {
   iconSizeSmall: '小',
   iconSizeMedium: '中',
   iconSizeLarge: '大',
+  variantApp: 'アプリ版',
+  variantPwa: 'PWA版',
+  variantBrowser: 'ブラウザ版',
 
   // AuthModal
   googleLogin: 'Googleでログイン',
@@ -283,6 +286,9 @@ const en: Dict = {
   iconSizeSmall: 'S',
   iconSizeMedium: 'M',
   iconSizeLarge: 'L',
+  variantApp: 'App',
+  variantPwa: 'PWA',
+  variantBrowser: 'Browser',
 
   // AuthModal
   googleLogin: 'Sign in with Google',

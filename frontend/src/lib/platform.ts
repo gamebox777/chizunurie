@@ -11,6 +11,10 @@
 type CapacitorGlobal = {
   isNativePlatform?: () => boolean;
   getPlatform?: () => string;
+  Plugins?: {
+    // @capacitor/app（mobile/ に導入済み）。アプリ自身の versionName/versionCode を返す。
+    App?: { getInfo?: () => Promise<{ version?: string; build?: string }> };
+  };
 };
 
 function getCapacitor(): CapacitorGlobal | undefined {
@@ -27,4 +31,30 @@ export function isNativeApp(): boolean {
 export function nativePlatform(): "ios" | "android" | "web" {
   const p = getCapacitor()?.getPlatform?.();
   return p === "ios" || p === "android" ? p : "web";
+}
+
+/** PWA（ホーム画面に追加して standalone 表示）として動いているか。アプリ内・通常タブでは false。 */
+export function isPwa(): boolean {
+  if (typeof window === "undefined" || isNativeApp()) return false;
+  return (
+    window.matchMedia?.("(display-mode: standalone)")?.matches === true ||
+    // iOS Safari の「ホーム画面に追加」は display-mode を返さず navigator.standalone を立てる
+    (navigator as { standalone?: boolean }).standalone === true
+  );
+}
+
+/**
+ * ネイティブアプリのバージョン表記（例 "1.3 (4)" = versionName (versionCode)）。
+ * アプリ外・@capacitor/app 未搭載の旧 APK では null。
+ */
+export async function nativeAppVersion(): Promise<string | null> {
+  const getInfo = getCapacitor()?.Plugins?.App?.getInfo;
+  if (!isNativeApp() || !getInfo) return null;
+  try {
+    const info = await getInfo();
+    if (!info?.version) return null;
+    return info.build ? `${info.version} (${info.build})` : info.version;
+  } catch {
+    return null;
+  }
 }

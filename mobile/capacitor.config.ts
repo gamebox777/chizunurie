@@ -36,7 +36,11 @@ const config: CapacitorConfig = {
     // 自動でChromeに送り、Cookieが分離してアプリが未ログインのままになる。
     // accounts.google.com で認証→ /api/auth/callback/google（自ドメイン）へ戻り Cookie が
     // WebView に入る。overrideUserAgent と併用して Google の WebView 拒否も回避する。
-    allowNavigation: ["accounts.google.com", "*.google.com"],
+    // accounts.youtube.com：Cookie が空の「初回」サインインだけ Google がドメイン横断の
+    // Cookie 同期で経由するホスト。*.google.com に一致しないため、これが無いとそのホップが
+    // 外部 Chrome に飛ばされ、ワンタイム URL を Cookie 無しで開いて Google の一般 400
+    // （"It should not be retried"）になる（2回目以降はホップ自体が無いので成功していた）。
+    allowNavigation: ["accounts.google.com", "*.google.com", "accounts.youtube.com"],
   },
   android: {
     // WebView の User-Agent から "; wv"（WebView印）を消し、通常の Chrome として
