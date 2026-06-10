@@ -4,7 +4,7 @@ import { getSessionUser } from "../lib/auth.js";
 import { db } from "../db/index.js";
 import { paintedRegions, user, userPoints } from "../db/schema.js";
 
-// 各種ランキング（塗ったマス数・GPS訪問・市区町村数・レベル）を返す公開 API。
+// 各種ランキング（塗ったマス数・GPS訪問・市区町村数・レベル・プレイ時間）を返す公開 API。
 // Next.js の rewrite 経由で /api/backend/rankings から到達する。
 // 開発者（role='developer'）はランキングから除外する。
 export const rankingsRouter = new Hono();
@@ -19,6 +19,7 @@ type RankUser = {
   name: string;
   level: number | null;
   totalExp: number | null;
+  playTimeSec: number | null;
 };
 
 // 全ユーザーを sortKey の降順に並べ、上位 LIMIT 件と（指定があれば）自分の順位を返す。
@@ -66,6 +67,7 @@ rankingsRouter.get("/", async (c) => {
       name: user.name,
       level: userPoints.level,
       totalExp: userPoints.totalExp,
+      playTimeSec: userPoints.playTimeSec,
     })
     .from(user)
     .leftJoin(userPoints, eq(userPoints.userId, user.id))
@@ -90,6 +92,8 @@ rankingsRouter.get("/", async (c) => {
   // レベル順位はレベル優先・同レベルは累計経験値で並べる（表示はレベルのみ）。
   const levelKey = (u: RankUser) => (u.level ?? 1) * 1e12 + (u.totalExp ?? 0);
   const level = (u: RankUser) => u.level ?? 1;
+  // プレイ時間（秒）。累計値なのでレベルと同じく常に全期間で並べる。
+  const playtime = (u: RankUser) => u.playTimeSec ?? 0;
 
   return c.json({
     totalUsers: users.length,
@@ -98,6 +102,7 @@ rankingsRouter.get("/", async (c) => {
       gps: buildBoard(users, gps, gps, meId),
       muni: buildBoard(users, muni, muni, meId),
       level: buildBoard(users, levelKey, level, meId),
+      playtime: buildBoard(users, playtime, playtime, meId),
     },
   });
 });

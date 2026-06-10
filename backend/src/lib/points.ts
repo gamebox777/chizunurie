@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { userPoints } from "../db/schema.js";
+import { user, userPoints } from "../db/schema.js";
 
 // ── 塗りポイントの調整パラメータ（今後バランス調整予定） ──────────────
 export const INITIAL_POINTS = 10; // 登録時（初回）に付与される残高
@@ -344,6 +344,8 @@ export async function addPlayTime(
     .update(userPoints)
     .set({ playTimeSec: nextPlayTime })
     .where(eq(userPoints.userId, userId));
+  // ゲームをプレイ中（heartbeat）も「更新日」を進める＝管理画面で最終プレイ日時が分かる。
+  await tx.update(user).set({ updatedAt: new Date(now) }).where(eq(user.id, userId));
   return { ...state, playTimeSec: nextPlayTime };
 }
 

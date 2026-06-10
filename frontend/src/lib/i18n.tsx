@@ -173,6 +173,7 @@ const ja: Dict = {
   rankGps: 'GPS訪問',
   rankMuni: '市区町村',
   rankLevel: 'レベル',
+  rankPlaytime: 'プレイ時間',
   rankPref: '都道府県',
   rankCountry: '国',
   rankRegionSelect: '地域を選択',
@@ -189,6 +190,7 @@ const ja: Dict = {
   rankPeriodMonth: '月間',
   rankPeriodWeek: '週間',
   rankLevelAllOnly: 'レベルは全期間のみの集計です',
+  rankPlaytimeAllOnly: 'プレイ時間は全期間のみの集計です',
 
   // Map: トースト（ゲーム向け）
   needLoginVideo: 'ログインすると動画でポイントを回復できます',
@@ -377,6 +379,7 @@ const en: Dict = {
   rankGps: 'GPS',
   rankMuni: 'Cities',
   rankLevel: 'Level',
+  rankPlaytime: 'Play time',
   rankPref: 'Prefecture',
   rankCountry: 'Country',
   rankRegionSelect: 'Select a region',
@@ -393,6 +396,7 @@ const en: Dict = {
   rankPeriodMonth: 'Monthly',
   rankPeriodWeek: 'Weekly',
   rankLevelAllOnly: 'Level is all-time only',
+  rankPlaytimeAllOnly: 'Play time is all-time only',
 
   // Map: toasts (game)
   needLoginVideo: 'Sign in to recover points by watching videos',

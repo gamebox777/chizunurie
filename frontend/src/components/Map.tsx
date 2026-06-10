@@ -656,9 +656,9 @@ class RankingsControl implements maplibregl.IControl {
 
 type PaintedState = Record<string, PaintMode>;
 
-// ユーザー対戦ランキングの種類。前半4種は /rankings、後半2種（都道府県毎・国毎の
+// ユーザー対戦ランキングの種類。前半5種は /rankings、後半2種（都道府県毎・国毎の
 // 地域別ユーザーランキング）は /rankings/region から取得する。
-type RankingMetric = 'painted' | 'gps' | 'muni' | 'level';
+type RankingMetric = 'painted' | 'gps' | 'muni' | 'level' | 'playtime';
 type RankingRegionMetric = 'pref' | 'country';
 type RankingTab = RankingMetric | RankingRegionMetric;
 // 集計期間（全期間・月間・週間）。塗り由来のランキングにだけ効く。
@@ -5523,6 +5523,7 @@ export default function MapView() {
                   ['gps', t('rankGps')],
                   ['muni', t('rankMuni')],
                   ['level', t('rankLevel')],
+                  ['playtime', t('rankPlaytime')],
                   ['pref', t('rankPref')],
                   ['country', t('rankCountry')],
                 ] as [RankingTab, string][]
@@ -5586,7 +5587,9 @@ export default function MapView() {
               const fmt = (v: number) =>
                 rankingsTab === 'level'
                   ? `${t('rankUnitLevel')}.${v}`
-                  : `${v.toLocaleString()} ${unit}`;
+                  : rankingsTab === 'playtime'
+                    ? formatPlayTime(v, t)
+                    : `${v.toLocaleString()} ${unit}`;
               if (!board || board.top.length === 0) {
                 return (
                   <p className="text-xs text-gray-400">
@@ -5624,11 +5627,14 @@ export default function MapView() {
               };
               return (
                 <>
-                  {rankingsTab === 'level' && rankingsPeriod !== 'all' && (
-                    <p className="mb-2 text-[11px] text-gray-400">
-                      {t('rankLevelAllOnly')}
-                    </p>
-                  )}
+                  {(rankingsTab === 'level' || rankingsTab === 'playtime') &&
+                    rankingsPeriod !== 'all' && (
+                      <p className="mb-2 text-[11px] text-gray-400">
+                        {rankingsTab === 'playtime'
+                          ? t('rankPlaytimeAllOnly')
+                          : t('rankLevelAllOnly')}
+                      </p>
+                    )}
                   {board.me && (
                     <div className="mb-2 border-b border-gray-100 pb-2">
                       <ul className="space-y-0.5">{row(board.me)}</ul>

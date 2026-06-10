@@ -27,6 +27,8 @@ import { hydrateSettings, pushSettings } from '@/lib/userSettings';
 type Props = {
   // 現在のニックネーム（メニュー先頭に表示）
   name: string;
+  // 登録に使ったメールアドレス（メール登録・Google ログインとも session.user.email）。
+  email?: string | null;
   // 権限（session.user.role）。未設定／null なら一般ユーザー扱い。
   role?: string | null;
   // 「ニックネーム変更」を押したとき
@@ -40,7 +42,7 @@ type Props = {
 
 // 右側の歯車ボタン。押すと各種設定メニュー（言語切替・ニックネーム変更・ログアウト）が出る。
 // ゲスト時はアカウント項目を隠し、設定（言語・地図・サウンド）のみ表示する。
-export default function SettingsMenu({ name, role, onEditNickname, onSignedOut, isGuest = false }: Props) {
+export default function SettingsMenu({ name, email, role, onEditNickname, onSignedOut, isGuest = false }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const { lang, setLang, t } = useLocale();
@@ -179,7 +181,14 @@ export default function SettingsMenu({ name, role, onEditNickname, onSignedOut, 
             <div className="px-4 py-2 border-b border-gray-100">
               <p className="text-xs text-gray-400">{t('loggedIn')}</p>
               <p className="text-sm font-medium text-gray-800 truncate">{name}</p>
-              <p className="text-xs text-gray-500 mt-0.5">{t('role')}：{roleLabel(role)}</p>
+              {/* 登録メールアドレス（メール登録・Google ログインとも）を表示 */}
+              {email && (
+                <p className="text-xs text-gray-500 mt-0.5 truncate">{email}</p>
+              )}
+              {/* 権限は開発者のときだけ出す（一般ユーザーには表示しない） */}
+              {role === 'developer' && (
+                <p className="text-xs text-gray-500 mt-0.5">{t('role')}：{roleLabel(role)}</p>
+              )}
             </div>
           )}
           {/* 言語切替（日本語 / English） */}

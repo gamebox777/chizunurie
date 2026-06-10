@@ -42,6 +42,7 @@ adminRouter.get("/users", async (c) => {
       lastIpAddress: user.lastIpAddress,
       lastUserAgent: user.lastUserAgent,
       createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
     })
     .from(user);
 
@@ -75,6 +76,7 @@ adminRouter.get("/users", async (c) => {
       lastIpAddress: u.lastIpAddress,
       lastUserAgent: u.lastUserAgent,
       createdAt: u.createdAt,
+      updatedAt: u.updatedAt,
       painted: { total, gps, manual: total - gps },
       points: pt
         ? { points: pt.points, level: pt.level, exp: pt.exp }
@@ -246,6 +248,35 @@ adminRouter.delete("/users/:id/painted", async (c) => {
     .where(eq(paintedRegions.userId, id))
     .returning({ id: paintedRegions.id });
   return c.json({ ok: true, deleted: deleted.length });
+});
+
+// ユーザーを関連データごと完全削除する。session / account / painted_regions /
+// user_logs / user_points は外部キーの ON DELETE CASCADE で自動的に消える。
+// site_visits は user への FK を持たない（visitor 列が "u:<userId>"）ので、
+// ここで明示的に該当行を削除する。better-auth のテーブルも CASCADE で消える。
+adminRouter.delete("/users/:id", async (c) => {
+  const guard = await requireDeveloper(c);
+  if (guard) return guard;
+
+  const id = c.req.param("id");
+
+  // 自分自身は削除させない（管理画面からログイン中の開発者が誤って消すのを防ぐ）。
+  const me = await getSessionUser(c.req.raw);
+  if (me?.id === id) {
+    return c.json({ error: "cannot delete yourself" }, 400);
+  }
+
+  // FK を持たない site_visits の該当行を先に消す。
+  await db.delete(siteVisits).where(eq(siteVisits.visitor, `u:${id}`));
+
+  // user 本体を削除（関連テーブルは CASCADE で連鎖削除）。
+  const deleted = await db
+    .delete(user)
+    .where(eq(user.id, id))
+    .returning({ id: user.id });
+  if (deleted.length === 0) return c.json({ error: "not found" }, 404);
+
+  return c.json({ ok: true, id });
 });
 
 // limit（既定100・上限200）と beforeId（id < beforeId のカーソル）を取り出す。

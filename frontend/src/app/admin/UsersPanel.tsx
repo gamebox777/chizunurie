@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import {
   deletePainted,
+  deleteUser,
   fetchUsers,
   setPoints,
   setRole,
@@ -14,6 +15,19 @@ function formatDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '-';
   return d.toLocaleDateString('ja-JP');
+}
+
+// 更新日時は日付＋時刻まで表示する（「最後にアクションした日時」を見るため）。
+function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '-';
+  return d.toLocaleString('ja-JP', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 // 合計プレイ時間（秒）を「X時間Y分」などの日本語に整形する（一覧向けに分単位まで）。
@@ -34,9 +48,13 @@ function formatPlayTime(sec: number): string {
 function UserRow({
   u,
   onChanged,
+  selected,
+  onToggleSelect,
 }: {
   u: AdminUser;
   onChanged: () => void;
+  selected: boolean;
+  onToggleSelect: (id: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -86,6 +104,15 @@ function UserRow({
   return (
     <>
       <tr className="border-t border-gray-100 hover:bg-gray-50">
+        <td className="px-3 py-2 text-center">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onToggleSelect(u.id)}
+            className="h-4 w-4 cursor-pointer accent-red-600"
+            aria-label="選択"
+          />
+        </td>
         <td className="px-3 py-2">
           <div className="font-medium text-gray-800">{u.name || '(未設定)'}</div>
           {u.realName && (
@@ -127,6 +154,9 @@ function UserRow({
           </div>
         </td>
         <td className="px-3 py-2 text-xs text-gray-400">{formatDate(u.createdAt)}</td>
+        <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap tabular-nums">
+          {formatDateTime(u.updatedAt)}
+        </td>
         <td className="px-3 py-2 whitespace-nowrap text-right">
           <button
             disabled={busy}
@@ -146,7 +176,7 @@ function UserRow({
       </tr>
       {editing && (
         <tr className="border-t border-gray-100 bg-blue-50/40">
-          <td colSpan={11} className="px-3 py-3">
+          <td colSpan={13} className="px-3 py-3">
             <div className="flex flex-wrap items-end gap-3">
               <label className="text-xs text-gray-600">
                 ポイント
@@ -235,6 +265,10 @@ export default function UsersPanel() {
   const [page, setPage] = useState(0);
   // 選択中ユーザー（空なら全員表示）。
   const [userId, setUserId] = useState('');
+  // チェックボックスで削除対象に選んだユーザー ID 集合（ページをまたいで保持する）。
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // 一括削除の実行中フラグ。
+  const [deleting, setDeleting] = useState(false);
 
   const load = () => {
     fetchUsers()
@@ -243,6 +277,15 @@ export default function UsersPanel() {
   };
 
   useEffect(load, []);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   if (error) return <p className="text-sm text-red-600">読み込みに失敗しました：{error}</p>;
   if (!users) return <p className="text-sm text-gray-500">読み込み中…</p>;
@@ -258,6 +301,47 @@ export default function UsersPanel() {
     <Pager page={safePage} pageCount={pageCount} total={total} onChange={setPage} />
   );
 
+  // 現在のページが全選択済みか（ヘッダのチェックボックスの状態）。
+  const allPageSelected =
+    pageUsers.length > 0 && pageUsers.every((u) => selectedIds.has(u.id));
+
+  // ヘッダのチェックで現在ページぶんをまとめて選択／解除する。
+  const toggleSelectPage = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allPageSelected) pageUsers.forEach((u) => next.delete(u.id));
+      else pageUsers.forEach((u) => next.add(u.id));
+      return next;
+    });
+  };
+
+  // 選択したユーザーを関連データごと一括削除する。
+  const deleteSelected = async () => {
+    const ids = users.filter((u) => selectedIds.has(u.id));
+    if (ids.length === 0) return;
+    if (
+      !confirm(
+        `選択した ${ids.length} 人のユーザーを関連データ（塗り・ポイント・ログ等）ごと完全に削除します。\nこの操作は取り消せません。よろしいですか？`
+      )
+    )
+      return;
+    setDeleting(true);
+    const failed: string[] = [];
+    for (const u of ids) {
+      try {
+        await deleteUser(u.id);
+      } catch (e) {
+        failed.push(`${u.name || u.email}：${(e as Error).message}`);
+      }
+    }
+    setDeleting(false);
+    setSelectedIds(new Set());
+    load();
+    if (failed.length > 0) {
+      alert(`一部の削除に失敗しました：\n${failed.join('\n')}`);
+    }
+  };
+
   return (
     <div className="space-y-3">
       <UserFilter
@@ -269,12 +353,41 @@ export default function UsersPanel() {
         users={users}
       />
 
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm">
+          <span className="text-red-700">{selectedIds.size} 人を選択中</span>
+          <button
+            disabled={deleting}
+            onClick={deleteSelected}
+            className="rounded-lg bg-red-600 px-4 py-1.5 text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            {deleting ? '削除中…' : '選択したユーザーを削除'}
+          </button>
+          <button
+            disabled={deleting}
+            onClick={() => setSelectedIds(new Set())}
+            className="rounded px-2 py-1 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+          >
+            選択解除
+          </button>
+        </div>
+      )}
+
       <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="border-b border-gray-100">{pager}</div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-gray-500">
+              <th className="px-3 py-2 text-center font-medium">
+                <input
+                  type="checkbox"
+                  checked={allPageSelected}
+                  onChange={toggleSelectPage}
+                  className="h-4 w-4 cursor-pointer accent-red-600"
+                  aria-label="このページを全選択"
+                />
+              </th>
               <th className="px-3 py-2 font-medium">ユーザー</th>
               <th className="px-3 py-2 font-medium">権限</th>
               <th className="px-3 py-2 font-medium">国</th>
@@ -285,16 +398,23 @@ export default function UsersPanel() {
               <th className="px-3 py-2 font-medium">IP</th>
               <th className="px-3 py-2 font-medium">UserAgent</th>
               <th className="px-3 py-2 font-medium">登録日</th>
+              <th className="px-3 py-2 font-medium">更新日</th>
               <th className="px-3 py-2 text-right font-medium">操作</th>
             </tr>
           </thead>
           <tbody>
             {pageUsers.map((u) => (
-              <UserRow key={u.id} u={u} onChanged={load} />
+              <UserRow
+                key={u.id}
+                u={u}
+                onChanged={load}
+                selected={selectedIds.has(u.id)}
+                onToggleSelect={toggleSelect}
+              />
             ))}
             {total === 0 && (
               <tr>
-                <td colSpan={11} className="px-3 py-6 text-center text-gray-400">
+                <td colSpan={13} className="px-3 py-6 text-center text-gray-400">
                   ユーザーがいません
                 </td>
               </tr>

@@ -16,6 +16,8 @@ export type AdminUser = {
   lastIpAddress: string | null;
   lastUserAgent: string | null;
   createdAt: string;
+  // 最終更新日時（ログイン・GPS・検索などのアクションやプレイ中の heartbeat で更新）。
+  updatedAt: string;
   painted: { total: number; gps: number; manual: number };
   points: { points: number; level: number; exp: number } | null;
   playTimeSec: number;
@@ -67,6 +69,13 @@ export function setPoints(
 
 export function deletePainted(id: string) {
   return request<{ ok: true; deleted: number }>(`/users/${id}/painted`, {
+    method: 'DELETE',
+  });
+}
+
+// ユーザーを関連データごと完全削除する（塗り・ポイント・ログ・セッション等）。
+export function deleteUser(id: string) {
+  return request<{ ok: true; id: string }>(`/users/${id}`, {
     method: 'DELETE',
   });
 }

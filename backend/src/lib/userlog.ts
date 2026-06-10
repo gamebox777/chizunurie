@@ -53,10 +53,15 @@ export async function logEvent(c: Context, input: LogEventInput): Promise<void> 
       meta: input.meta ?? null,
     });
     // ユーザーテーブルに「最新の接続元」を上書き保存する（アクションのたびに更新）。
+    // updatedAt も併せて進める＝管理画面の「更新日」（最後にアクションした日時）になる。
     if (input.userId) {
       await db
         .update(user)
-        .set({ lastIpAddress: ipAddress, lastUserAgent: userAgent })
+        .set({
+          lastIpAddress: ipAddress,
+          lastUserAgent: userAgent,
+          updatedAt: new Date(),
+        })
         .where(eq(user.id, input.userId));
     }
   } catch (err) {

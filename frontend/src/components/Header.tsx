@@ -71,6 +71,7 @@ export default function Header() {
             <SettingsMenu
               isGuest={!realUser}
               name={realUser ? session.user.name : ''}
+              email={realUser ? session.user.email : null}
               role={realUser ? session.user.role : null}
               onEditNickname={() => setEditingNickname(true)}
               onSignedOut={() => refetch()}
