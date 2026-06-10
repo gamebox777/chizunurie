@@ -690,9 +690,10 @@ type RegionRankingsResponse = {
 // masks: CELLID → 歩いた細セルのビットマスク（部分塗りの1kmだけ持つ）。
 // 描画は2段重ね：
 //  - kind:'full'  …塗った1kmセルは必ず1km全体の矩形を描く（黄色＝そのkmに入った印）。
-//  - kind:'fine'  …部分的に歩いた1km（マスクが 0 でも FULL_MASK でもない）は、立っている
-//                  ビットの125m細セルだけを小四角で「黄色の上に」赤っぽく重ねて目立たせる。
-// 全ビット(FULL_MASK)＝そのkmを歩き尽くした時は full（黄色）だけにし、細セルは描かない。
+//  - kind:'fine'  …歩いた1km（マスクが 0 以外）は、立っているビットの125m細セルを
+//                  小四角で「黄色の上に」赤っぽく重ねて目立たせる。
+// 全ビット(FULL_MASK)＝そのkmを歩き尽くした時も黄色に戻さず赤のままにする
+// （64個の小四角の代わりに1km全体を1枚の fine 矩形で描く＝見た目同じ・軽い）。
 function buildPaintedOverlay(
   painted: PaintedState,
   masks: Map<number, bigint>
@@ -709,16 +710,25 @@ function buildPaintedOverlay(
       properties: { mode, kind: 'full' },
       geometry: { type: 'Polygon', coordinates: [meshCellRing(code)] },
     });
-    // 部分的に歩いた1km：歩いた125m細セルを赤っぽく上に重ねる。
+    // 歩いた1km：歩いた125m細セルを赤っぽく上に重ねる。
     const mask = masks.get(code);
-    if (mask !== undefined && mask !== 0n && mask !== FULL_MASK) {
-      for (let s = 0; s < 64; s++) {
-        if ((mask & (1n << BigInt(s))) !== 0n) {
-          features.push({
-            type: 'Feature',
-            properties: { mode, kind: 'fine' },
-            geometry: { type: 'Polygon', coordinates: [subCellRing(code, s)] },
-          });
+    if (mask !== undefined && mask !== 0n) {
+      if (mask === FULL_MASK) {
+        // 歩き尽くした1kmは赤のまま残す（1枚の矩形で全面を覆う）。
+        features.push({
+          type: 'Feature',
+          properties: { mode, kind: 'fine' },
+          geometry: { type: 'Polygon', coordinates: [meshCellRing(code)] },
+        });
+      } else {
+        for (let s = 0; s < 64; s++) {
+          if ((mask & (1n << BigInt(s))) !== 0n) {
+            features.push({
+              type: 'Feature',
+              properties: { mode, kind: 'fine' },
+              geometry: { type: 'Polygon', coordinates: [subCellRing(code, s)] },
+            });
+          }
         }
       }
     }
