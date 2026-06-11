@@ -4,7 +4,7 @@
 
 ## 本番URL
 
-https://chizunurie.unitygamebox.org
+https://chizunurie.unitygamebox.com
 
 ## 開発用URL
 
@@ -68,7 +68,7 @@ npm run dev:docker  # フル Docker に寄せる（frontend/backend/db を全部
 ### アカウント・データ削除ページ（`/delete-account`）
 
 Google Play「データセーフティ → アカウント削除用 URL」要件を満たす公開ページです。
-本番では https://chizunurie.gamebox777.org/delete-account に公開します。
+本番では https://chizunurie.unitygamebox.com/delete-account に公開します。
 
 - **ログイン中**は、ページ内のカードから本人が **その場でアカウントを削除**できます
   （確認のため `delete` または `削除` と入力 → `authClient.deleteUser()` で `user` 行を削除 →

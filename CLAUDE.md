@@ -361,7 +361,7 @@ better-auth の `user`/`session`/`account`/`verification` に加えて：
 
 ## モバイルアプリ（`mobile/`・Capacitor リモートURL方式）
 
-ネイティブの WebView が本番サイト（`https://chizunurie.gamebox777.org`）をそのまま開くだけの
+ネイティブの WebView が本番サイト（`https://chizunurie.unitygamebox.com`）をそのまま開くだけの
 ラッパー。**frontend/backend のコードには一切触らない**ため、ブラウザ版と挙動は完全に同一。
 詳細手順は `mobile/README.md`。
 
