@@ -4,6 +4,7 @@ import Script from "next/script";
 import "./globals.css";
 import { LocaleProvider } from "@/lib/i18n";
 import ServiceWorkerRegister from "./ServiceWorkerRegister";
+import ReloadManager from "@/components/ReloadManager";
 import AdSenseLoader from "./AdSenseLoader";
 import { RUN_MODE } from "@/lib/runtime-env";
 
@@ -99,6 +100,7 @@ export default function RootLayout({
         {/* Google AdSense（自動広告）。アプリ内 WebView では読み込まない（AdSenseLoader 参照） */}
         <AdSenseLoader />
         <ServiceWorkerRegister />
+        <ReloadManager />
         <LocaleProvider>{children}</LocaleProvider>
       </body>
     </html>
