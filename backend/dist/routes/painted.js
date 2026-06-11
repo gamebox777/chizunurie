@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { getSessionUser, isDeveloper } from "../lib/auth.js";
 import { db } from "../db/index.js";
 import { paintedRegions } from "../db/schema.js";
-import { ALLOWED_COSTS, COST_ADJACENT, EXP_FINE, EXP_PAINT, EXP_VISIT, REVISIT_EXP_COOLDOWN_MS, addExp, ensurePoints, spendPoints, } from "../lib/points.js";
+import { ALLOWED_COSTS, COST_ADJACENT, addExp, ensurePoints, getExpConfig, spendPoints, } from "../lib/points.js";
 export const paintedRouter = new Hono();
 // 'mesh' が現行の塗り単位。'municipalities'/'chocho' は旧データ互換のため許可
 const ALLOWED_LAYERS = new Set(["mesh", "municipalities", "chocho"]);
@@ -109,14 +109,16 @@ paintedRouter.post("/", async (c) => {
         region: parsed.region,
         country: parsed.country,
     };
+    // 経験値・レベル設定を1回だけ読む（トランザクション内で渡して再読みを防ぐ）。
+    const expCfg = await getExpConfig();
     if (parsed.mode === "gps") {
         // GPS（実際の移動）はポイント無料。最優先なので既存（manual含む）があれば gps に昇格。
         // 「実際に訪れる」と経験値を獲得する。歩き塗りは1kmを 8×8=64 の細セル（125m）に分け、
         // walked_mask に踏んだ細セル（subIndex）のビットを立てる：
-        //   ・新規1km（行の新規 insert）         … 1km初訪問 EXP_VISIT(+100) ＋ 細セル初 EXP_FINE(+5)
-        //   ・取得済み1km内で新しい細セルを踏む    … 細セル初 EXP_FINE(+5)（1kmは既に取得済みなので+100は無し）
-        //   ・全面セル(mask=0：手動/旧GPS/まとめ)  … 細分化しない。manual→gps昇格 or 再訪で従来どおり EXP_VISIT
-        //   ・既に踏んだ細セルへ入り直し          … 再訪扱い。クールダウン経過時のみ EXP_VISIT
+        //   ・新規1km（行の新規 insert）        … 1km初訪問 expVisit ＋ 細セル初 expFine
+        //   ・取得済み1km内で新しい細セルを踏む   … 細セル初 expFine（1kmは既に取得済みなので初訪問XPは無し）
+        //   ・全面セル(mask=0：手動/旧GPS/まとめ) … 細分化しない。manual→gps昇格 or 再訪で expVisit
+        //   ・既に踏んだ細セルへ入り直し         … 再訪扱い。クールダウン経過時のみ expVisit
         // subIndex 無し（旧クライアント等）は bit=0 として「全面塗り」扱い（従来挙動）。
         // ※ Postgres の bigint は符号付き64bit なので、subIndex=63（最上位ビット=2^63）は
         //   そのままだと範囲外になる。マスクの計算は符号なし64bit（asUintN）で行い、DB へ書く
@@ -138,9 +140,9 @@ paintedRouter.post("/", async (c) => {
                 .onConflictDoNothing()
                 .returning({ id: paintedRegions.id });
             if (inserted.length > 0) {
-                // 新規1kmを訪問 → 1km初訪問(+100) ＋ 細セルを踏んでいれば細セル初(+5)
-                const gained = EXP_VISIT + (bit !== 0n ? EXP_FINE : 0);
-                const state = await addExp(user.id, gained, now, tx);
+                // 新規1kmを訪問 → 1km初訪問 ＋ 細セルを踏んでいれば細セル初
+                const gained = expCfg.expVisit + (bit !== 0n ? expCfg.expFine : 0);
+                const state = await addExp(user.id, gained, now, tx, expCfg);
                 return { ok: true, points: state, gainedExp: gained };
             }
             // 既存セル：現在のモード・最終訪問・歩いた細セルマスクを読む。
@@ -153,7 +155,7 @@ paintedRouter.post("/", async (c) => {
                 .from(paintedRegions)
                 .where(cellWhere);
             const curMask = BigInt.asUintN(64, existing[0]?.walkedMask ?? 0n); // 符号なしへ戻す
-            // 部分塗り（mask 非0）で、まだ踏んでいない細セルを踏んだ → ビットを立てて細セル初 EXP。
+            // 部分塗り（mask 非0）で、まだ踏んでいない細セルを踏んだ → ビットを立てて細セル初 XP。
             if (bit !== 0n && curMask !== 0n && (curMask & bit) === 0n) {
                 await tx
                     .update(paintedRegions)
@@ -162,8 +164,8 @@ paintedRouter.post("/", async (c) => {
                     lastVisitAt: new Date(now),
                 })
                     .where(cellWhere);
-                const state = await addExp(user.id, EXP_FINE, now, tx);
-                return { ok: true, points: state, gainedExp: EXP_FINE };
+                const state = await addExp(user.id, expCfg.expFine, now, tx, expCfg);
+                return { ok: true, points: state, gainedExp: expCfg.expFine };
             }
             // 全面セル（mask=0）で manual → gps 昇格。訪問時刻も now に更新する。
             // （部分塗りセルは既に gps なのでこの分岐には来ない）
@@ -172,29 +174,32 @@ paintedRouter.post("/", async (c) => {
                     .update(paintedRegions)
                     .set({ mode: "gps", lastVisitAt: new Date(now) })
                     .where(cellWhere);
-                const state = await addExp(user.id, EXP_VISIT, now, tx);
-                return { ok: true, points: state, gainedExp: EXP_VISIT };
+                const state = await addExp(user.id, expCfg.expVisit, now, tx, expCfg);
+                return { ok: true, points: state, gainedExp: expCfg.expVisit };
             }
             // 再訪（全面セルへ入り直し／既に踏んだ細セルへ入り直し）：前回訪問から十分時間が
             // 経っていれば再び経験値を付与する。履歴は残さず lastVisitAt を上書きするだけ。
+            // 細セル再訪（bit が立っていて既に踏んだビット）は expFineRevisit、
+            // 全面セル・subIndex なし再訪は expVisit を付与する。
             const last = existing[0]?.lastVisitAt ?? null;
-            const canReward = last === null || now - last.getTime() >= REVISIT_EXP_COOLDOWN_MS;
+            const canReward = last === null || now - last.getTime() >= expCfg.revisitCooldownSec * 1000;
             if (canReward) {
                 await tx
                     .update(paintedRegions)
                     .set({ lastVisitAt: new Date(now) })
                     .where(cellWhere);
-                const state = await addExp(user.id, EXP_VISIT, now, tx);
-                return { ok: true, points: state, gainedExp: EXP_VISIT };
+                const revisitExp = bit !== 0n && curMask !== 0n ? expCfg.expFineRevisit : expCfg.expVisit;
+                const state = await addExp(user.id, revisitExp, now, tx, expCfg);
+                return { ok: true, points: state, gainedExp: revisitExp };
             }
             // クールダウン中：経験値なし（lastVisitAt も触らない）
-            const state = await ensurePoints(user.id, now, tx);
+            const state = await ensurePoints(user.id, now, tx, expCfg);
             return { ok: true, points: state, gainedExp: 0 };
         });
         return c.json(result);
     }
     // manual：新規セルのみ塗りポイントを消費する。残高不足ならロールバックして 402 を返す。
-    // 既存セルへの再 POST（idempotent）は課金しない。新規かつ有料（cost>0）なら経験値 EXP_PAINT を付与。
+    // 既存セルへの再 POST（idempotent）は課金しない。新規かつ有料（cost>0）なら経験値 expPaint を付与。
     try {
         const result = await db.transaction(async (tx) => {
             const inserted = await tx
@@ -210,29 +215,29 @@ paintedRouter.post("/", async (c) => {
                 .returning({ id: paintedRegions.id });
             if (inserted.length === 0) {
                 // 既に塗り済み → 課金せず現在の残高を返す
-                const state = await ensurePoints(user.id, now, tx);
+                const state = await ensurePoints(user.id, now, tx, expCfg);
                 return { ok: true, points: state, gainedExp: 0 };
             }
             // 外国まとめ塗りの「残り」セル：課金も経験値もなし（代表1セルが既に支払い済み）。
             if (parsed.bulk) {
-                const state = await ensurePoints(user.id, now, tx);
+                const state = await ensurePoints(user.id, now, tx, expCfg);
                 return { ok: true, points: state, gainedExp: 0 };
             }
-            const spent = await spendPoints(user.id, parsed.cost, now, tx);
+            const spent = await spendPoints(user.id, parsed.cost, now, tx, expCfg);
             if (!spent) {
                 // 残高不足 → トランザクションを巻き戻して塗りを取り消す
                 throw new InsufficientPointsError();
             }
             // 新規セルの塗りに経験値を付与。cost===0 の Shift+デバッグ塗り（開発者のみ・96行目で
             // チェック済み）も経験値が入るようにする。spent は cost===0 でも残高据え置きで返るので使わない。
-            const state = await addExp(user.id, EXP_PAINT, now, tx);
-            return { ok: true, points: state, gainedExp: EXP_PAINT };
+            const state = await addExp(user.id, expCfg.expPaint, now, tx, expCfg);
+            return { ok: true, points: state, gainedExp: expCfg.expPaint };
         });
         return c.json(result);
     }
     catch (err) {
         if (err instanceof InsufficientPointsError) {
-            const state = await ensurePoints(user.id, now);
+            const state = await ensurePoints(user.id, now, undefined, expCfg);
             return c.json({ error: "insufficient_points", points: state }, 402);
         }
         throw err;

@@ -59,28 +59,33 @@ public class UnityAdsPlugin extends Plugin {
      * Game ID 6133602・`Rewarded_iOS`・`Banner_iOS` を使うこと（インタースティシャルは
      * `Interstitial_Android`/`Interstitial_iOS` が存在するが未使用。動画はリワード型を使う方針）。
      *
-     * ⚠ 2026-06-10 時点、本番 Game ID 6133603 は広告ユニット作成後も load が
+     * ⚠ 2026-06-10 時点、本番 Game ID 6133603 はデフォルト名の Ad Unit
+     * （Rewarded_Android/Banner_Android）だと load が
      * 「INTERNAL_ERROR/NATIVE_ERROR: ... Network error occurred」で失敗する
      * （SDK 初期化は成功する）。Unity フォーラムに同症状の報告あり（2026-05・SDK 4.17系）：
      * 「新規作成のダッシュボードプロジェクトでのみ発生・旧プロジェクトの ID なら動く」
      * 「デフォルト名の Ad Unit をやめて別名で新規作成したら直った」
      * https://discussions.unity.com/t/ads-loading-failed/1718865
-     * → 対処はまず Ad Unit を別名（例 Rewarded_Chizunurie）で作り直して下の定数を差し替え。
-     *   次にダッシュボードの Monetization 設定（ストア URL・COPPA 回答）の完了確認、
-     *   それでもダメなら Unity サポートへチケット。
+     * → 2026-06-11 にフォーラムの対処どおり別名 Ad Unit（Rewarded_Chizunurie/
+     *   Banner_Chizunurie/Interstitial_Chizunurie・インタースティシャルは未使用）を
+     *   ダッシュボードで新規作成し、下の定数を差し替えた。それでもダメなら
+     *   ダッシュボードの Monetization 設定（ストア URL・COPPA 回答）の完了確認、
+     *   次に Unity サポートへチケット。
      * 切り分けには開発者デバッグメニューの「広告ステータス」（getAdDebugInfo）を使う。
      * そのためテストモードは Unity 公式のテスト用ゲーム（14851）に固定し、テスト広告で
      * 機能確認できるようにしている。本番 ID 側が直ったら、テストモードも本番 ID ＋
      * testMode=true（テスト広告が出る）に戻してよい。
      */
     private static final String PROD_GAME_ID = "6133603"; // Android（iOS は 6133602）
-    private static final String PROD_REWARDED_ID = "Rewarded_Android"; // iOS は Rewarded_iOS
-    private static final String PROD_BANNER_ID = "Banner_Android"; // iOS は Banner_iOS
+    // デフォルト名（Rewarded_Android/Banner_Android）の Ad Unit は本番広告がフィルしない
+    // 問題（上記コメント参照）への対処で、別名で作り直した Ad Unit を使う（2026-06-11）。
+    private static final String PROD_REWARDED_ID = "Rewarded_Chizunurie"; // 旧: Rewarded_Android
+    private static final String PROD_BANNER_ID = "Banner_Chizunurie"; // 旧: Banner_Android
 
-    // Unity 公式のテスト用ゲーム（必ずテスト広告がフィルする）。
-    private static final String TEST_GAME_ID = "14851";
-    private static final String TEST_REWARDED_ID = "rewardedVideo";
-    private static final String TEST_BANNER_ID = "bannerads";
+    // テストモードも本番 Game ID＋本番 Ad Unit を使い、SDK の testMode=true で
+    // テスト広告を出す（本番のダッシュボード設定そのものを検証できる）。
+    // 本番 ID 側がまた壊れて機能確認すらできなくなったら、Unity 公式のテスト用ゲーム
+    // （Game ID 14851・placement rewardedVideo/bannerads）に一時的に戻す。
 
     /** SDK の initialize に実際に使ったテストモード（未初期化なら null）。 */
     private volatile Boolean initTestMode = null;
@@ -99,15 +104,15 @@ public class UnityAdsPlugin extends Plugin {
     }
 
     private String gameId() {
-        return effectiveTestMode() ? TEST_GAME_ID : PROD_GAME_ID;
+        return PROD_GAME_ID;
     }
 
     private String rewardedPlacementId() {
-        return effectiveTestMode() ? TEST_REWARDED_ID : PROD_REWARDED_ID;
+        return PROD_REWARDED_ID;
     }
 
     private String bannerPlacementId() {
-        return effectiveTestMode() ? TEST_BANNER_ID : PROD_BANNER_ID;
+        return PROD_BANNER_ID;
     }
 
     /** バナーサイズ（dp）。320x50 はスマホ標準のアンカーバナー。 */

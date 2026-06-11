@@ -23,6 +23,35 @@ const DEV = process.env.CAP_DEV === "1" || process.env.CAP_DEV === "true";
 const DEV_URL = process.env.CAP_DEV_URL ?? "http://localhost:3000";
 const PROD_URL = "https://chizunurie.unitygamebox.com";
 
+// Google の全国別ドメイン（https://www.google.com/supported_domains の ".google." 以降）。
+// 初回サインインの Cookie 同期ホップは accounts.google.com → accounts.youtube.com →
+// accounts.google.<ユーザーの国のccTLD>/accounts/SetSID を経由する（日本なら
+// accounts.google.co.jp）。Capacitor の allowNavigation はセグメント数まで一致が必要で
+// `*.google.com` は accounts.google.co.jp にマッチしないため、ccTLD を全部許可しないと
+// そのホップが外部 Chrome に飛び、ワンタイム URL を Cookie 無しで開いて Google の一般 400
+// （"It should not be retried"）になる。
+const GOOGLE_CCTLDS = [
+  "com", "ad", "ae", "com.af", "com.ag", "al", "am", "co.ao", "com.ar", "as",
+  "at", "com.au", "az", "ba", "com.bd", "be", "bf", "bg", "com.bh", "bi",
+  "bj", "com.bn", "com.bo", "com.br", "bs", "bt", "co.bw", "by", "com.bz", "ca",
+  "cd", "cf", "cg", "ch", "ci", "co.ck", "cl", "cm", "cn", "com.co",
+  "co.cr", "com.cu", "cv", "com.cy", "cz", "de", "dj", "dk", "dm", "com.do",
+  "dz", "com.ec", "ee", "com.eg", "es", "com.et", "fi", "com.fj", "fm", "fr",
+  "ga", "ge", "gg", "com.gh", "com.gi", "gl", "gm", "gr", "com.gt", "gy",
+  "com.hk", "hn", "hr", "ht", "hu", "co.id", "ie", "co.il", "im", "co.in",
+  "iq", "is", "it", "je", "com.jm", "jo", "co.jp", "co.ke", "com.kh", "ki",
+  "kg", "co.kr", "com.kw", "kz", "la", "com.lb", "li", "lk", "co.ls", "lt",
+  "lu", "lv", "com.ly", "co.ma", "md", "me", "mg", "mk", "ml", "com.mm",
+  "mn", "com.mt", "mu", "mv", "mw", "com.mx", "com.my", "co.mz", "com.na", "com.ng",
+  "com.ni", "ne", "nl", "no", "com.np", "nr", "nu", "co.nz", "com.om", "com.pa",
+  "com.pe", "com.pg", "com.ph", "com.pk", "pl", "pn", "com.pr", "ps", "pt", "com.py",
+  "com.qa", "ro", "ru", "rw", "com.sa", "com.sb", "sc", "se", "com.sg", "sh",
+  "si", "sk", "com.sl", "sn", "so", "sm", "sr", "st", "com.sv", "td",
+  "tg", "co.th", "com.tj", "tl", "tm", "tn", "to", "com.tr", "tt", "com.tw",
+  "co.tz", "com.ua", "co.ug", "co.uk", "com.uy", "co.uz", "com.vc", "co.ve", "co.vi", "com.vn",
+  "vu", "ws", "rs", "co.za", "co.zm", "co.zw", "cat",
+];
+
 const config: CapacitorConfig = {
   appId: "jp.chizunurie.app", // ← ストア用の一意ID（逆ドメイン）。確定後に変更
   appName: "ちず塗り絵",
@@ -37,10 +66,14 @@ const config: CapacitorConfig = {
     // accounts.google.com で認証→ /api/auth/callback/google（自ドメイン）へ戻り Cookie が
     // WebView に入る。overrideUserAgent と併用して Google の WebView 拒否も回避する。
     // accounts.youtube.com：Cookie が空の「初回」サインインだけ Google がドメイン横断の
-    // Cookie 同期で経由するホスト。*.google.com に一致しないため、これが無いとそのホップが
-    // 外部 Chrome に飛ばされ、ワンタイム URL を Cookie 無しで開いて Google の一般 400
-    // （"It should not be retried"）になる（2回目以降はホップ自体が無いので成功していた）。
-    allowNavigation: ["accounts.google.com", "*.google.com", "accounts.youtube.com"],
+    // Cookie 同期で経由するホスト（2回目以降はホップ自体が無い）。
+    // *.google.<ccTLD>：同じく初回のみ accounts.google.co.jp 等の国別ドメインの SetSID を
+    // 経由する（GOOGLE_CCTLDS のコメント参照）。
+    allowNavigation: [
+      "accounts.google.com",
+      "accounts.youtube.com",
+      ...GOOGLE_CCTLDS.map((tld) => `*.google.${tld}`),
+    ],
   },
   android: {
     // WebView の User-Agent から "; wv"（WebView印）を消し、通常の Chrome として

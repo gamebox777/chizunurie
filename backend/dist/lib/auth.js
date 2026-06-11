@@ -101,6 +101,10 @@ export const auth = betterAuth({
         google: {
             clientId: process.env.GOOGLE_CLIENT_ID,
             clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+            // Google 側にセッションが残っていると確認なしで前回のアカウントで自動ログイン
+            // されてしまう（特にアプリ版 WebView は Cookie が消えないので顕著）。
+            // 毎回アカウント選択画面を必ず出す。
+            prompt: "select_account",
             // ニックネーム(name)は空のままにし、ログイン後に本人に入力してもらう。
             // 本名は取得できれば realName に保存する（ゲーム画面では非表示・管理画面専用）。
             // 日本語は姓→名の順が自然なので family_name + given_name を優先し、
