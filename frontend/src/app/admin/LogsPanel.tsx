@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   createColumnHelper,
   getCoreRowModel,
@@ -162,10 +162,45 @@ function MetaCell({ meta }: { meta: unknown }) {
   );
 }
 
+// 1行ぶんのログ全情報を JSON テキストにする（コピー用）。
+function logToText(log: UserLog): string {
+  return JSON.stringify(log, null, 2);
+}
+
+// サーバー環境バッジの表示ラベルと色。
+const ENV_BADGE: Record<string, { label: string; cls: string }> = {
+  dev: { label: '開発', cls: 'bg-green-100 text-green-700' },
+  docker: { label: 'Docker', cls: 'bg-blue-100 text-blue-700' },
+  production: { label: '本番', cls: 'bg-red-100 text-red-700' },
+};
+
+function EnvironmentBadge({ env }: { env: string | null }) {
+  if (!env) return <span className="text-xs text-gray-300">-</span>;
+  const badge = ENV_BADGE[env] ?? { label: env, cls: 'bg-gray-100 text-gray-600' };
+  return (
+    <span className={`inline-block rounded px-2 py-0.5 text-[10px] font-medium ${badge.cls}`}>
+      {badge.label}
+    </span>
+  );
+}
+
 // 列定義。ソートはサーバー側（manual モード）なので、ソート可能列の id は
 // backend/routes/admin.ts の LOG_SORTABLE のキーと一致させる。
 const columnHelper = createColumnHelper<UserLog>();
 const columns = [
+  // コピーボタン列（ソート不可・固定幅）
+  columnHelper.display({
+    id: 'copy',
+    header: '',
+    cell: ({ row }) => <CopyButton log={row.original} />,
+    meta: { tdClass: 'px-1 py-1 whitespace-nowrap' },
+    enableSorting: false,
+  }),
+  columnHelper.accessor('id', {
+    id: 'logId',
+    header: 'ID',
+    meta: { tdClass: 'text-xs text-gray-400 whitespace-nowrap font-mono' },
+  }),
   columnHelper.accessor('createdAt', {
     id: 'date',
     header: '日時',
@@ -182,6 +217,11 @@ const columns = [
         <div className="text-xs text-gray-400">{row.original.userEmail}</div>
       </>
     ),
+  }),
+  columnHelper.accessor((l) => l.userId ?? '-', {
+    id: 'userId',
+    header: 'ユーザーID',
+    meta: { tdClass: 'text-[10px] text-gray-400 whitespace-nowrap font-mono' },
   }),
   columnHelper.accessor('action', {
     id: 'action',
@@ -213,10 +253,27 @@ const columns = [
     ),
     meta: { tdClass: 'text-xs text-gray-600 whitespace-nowrap' },
   }),
+  // サーバー環境（dev / docker / production）。バッジで色分け表示。
+  columnHelper.accessor((l) => l.environment ?? '', {
+    id: 'environment',
+    header: 'サーバー環境',
+    cell: ({ row }) => <EnvironmentBadge env={row.original.environment} />,
+    meta: { tdClass: 'whitespace-nowrap' },
+  }),
   columnHelper.accessor((l) => l.municipality ?? '-', {
     id: 'municipality',
     header: '市区町村',
-    meta: { tdClass: 'text-xs text-gray-600' },
+    meta: { tdClass: 'text-xs text-gray-600 whitespace-nowrap' },
+  }),
+  columnHelper.accessor((l) => l.lat != null ? String(l.lat) : '-', {
+    id: 'lat',
+    header: '緯度',
+    meta: { tdClass: 'text-xs text-gray-500 whitespace-nowrap font-mono' },
+  }),
+  columnHelper.accessor((l) => l.lng != null ? String(l.lng) : '-', {
+    id: 'lng',
+    header: '経度',
+    meta: { tdClass: 'text-xs text-gray-500 whitespace-nowrap font-mono' },
   }),
   columnHelper.accessor((l) => l.ipAddress ?? '-', {
     id: 'ip',
@@ -229,6 +286,96 @@ const columns = [
     meta: { tdClass: 'text-xs text-gray-400 break-all' },
   }),
 ];
+
+// コピーボタンコンポーネント。クリックで行全体の JSON をクリップボードにコピーする。
+function CopyButton({ log }: { log: UserLog }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(logToText(log)).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, [log]);
+  return (
+    <button
+      onClick={handleCopy}
+      title="この行のログ情報をすべてコピー"
+      className={`rounded p-1 text-xs transition-colors ${
+        copied
+          ? 'bg-green-100 text-green-600'
+          : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600'
+      }`}
+    >
+      {copied ? '✓' : '📋'}
+    </button>
+  );
+}
+
+// 上下スクロールバー同期コンテナ。上にもスクロールバーを配置し、
+// 下のスクロールバーと連動させる。
+function SyncedScrollContainer({ children }: { children: React.ReactNode }) {
+  const topRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const [contentWidth, setContentWidth] = useState(0);
+  const syncing = useRef(false);
+
+  // テーブルの実コンテンツ幅を監視して上のダミーバーに反映する。
+  useEffect(() => {
+    const bottom = bottomRef.current;
+    if (!bottom) return;
+    const update = () => {
+      const inner = bottom.scrollWidth;
+      if (inner !== contentWidth) setContentWidth(inner);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(bottom);
+    // テーブル内の子要素のサイズ変化も拾う
+    const first = bottom.firstElementChild;
+    if (first) ro.observe(first);
+    return () => ro.disconnect();
+  }, [contentWidth]);
+
+  const onTopScroll = useCallback(() => {
+    if (syncing.current) return;
+    syncing.current = true;
+    if (bottomRef.current && topRef.current) {
+      bottomRef.current.scrollLeft = topRef.current.scrollLeft;
+    }
+    syncing.current = false;
+  }, []);
+
+  const onBottomScroll = useCallback(() => {
+    if (syncing.current) return;
+    syncing.current = true;
+    if (topRef.current && bottomRef.current) {
+      topRef.current.scrollLeft = bottomRef.current.scrollLeft;
+    }
+    syncing.current = false;
+  }, []);
+
+  return (
+    <>
+      {/* 上部スクロールバー（ダミー） */}
+      <div
+        ref={topRef}
+        onScroll={onTopScroll}
+        className="overflow-x-auto"
+        style={{ height: 16 }}
+      >
+        <div style={{ width: contentWidth, height: 1 }} />
+      </div>
+      {/* テーブル本体 */}
+      <div
+        ref={bottomRef}
+        onScroll={onBottomScroll}
+        className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm"
+      >
+        {children}
+      </div>
+    </>
+  );
+}
 
 export default function LogsPanel() {
   const [logs, setLogs] = useState<UserLog[] | null>(null);
@@ -325,14 +472,14 @@ export default function LogsPanel() {
       {logs && (
         <div className="space-y-3">
           {pager}
-          <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+          <SyncedScrollContainer>
             <table className="w-full text-sm">
               <thead>
                 <SortableHeaderRow table={table} />
               </thead>
               <TableBody table={table} empty="ログがありません" />
             </table>
-          </div>
+          </SyncedScrollContainer>
           {pager}
         </div>
       )}

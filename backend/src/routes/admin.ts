@@ -394,6 +394,7 @@ adminRouter.get("/logs", async (c) => {
       lng: userLogs.lng,
       municipality: userLogs.municipality,
       meta: userLogs.meta,
+      environment: userLogs.environment,
       createdAt: userLogs.createdAt,
     })
     .from(userLogs)

@@ -13,6 +13,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { RUN_MODE } from './runtime-env';
 
 export type Lang = 'ja' | 'en';
 
@@ -20,8 +21,8 @@ const STORAGE_KEY = 'chizunurie:lang';
 
 // ブラウザタブのタイトル（layout.tsx の静的 title と一致させる・言語で切替）
 const DOC_TITLE: Record<Lang, string> = {
-  ja: 'ちずぬりえ',
-  en: 'Color the Map',
+  ja: RUN_MODE === 'production' ? 'ちずぬりえ' : 'ちずぬりえ開発',
+  en: RUN_MODE === 'production' ? 'Color the Map' : 'Color the Map Dev',
 };
 
 // 各エントリは「文字列」または「引数を受け取って文字列を返す関数」。

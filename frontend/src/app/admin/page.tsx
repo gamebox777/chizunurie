@@ -9,6 +9,7 @@ import LogsPanel from './LogsPanel';
 import PaintedLogPanel from './PaintedLogPanel';
 import VideoStatsPanel from './VideoStatsPanel';
 import SettingsPanel from './SettingsPanel';
+import { RUN_MODE, RUN_MODE_LABEL, RUN_MODE_BADGE } from '@/lib/runtime-env';
 
 type Tab = 'stats' | 'users' | 'logs' | 'painted' | 'video' | 'settings';
 
@@ -57,6 +58,9 @@ export default function AdminPage() {
         <h1 className="text-lg font-bold">管理画面</h1>
         <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
           開発者専用
+        </span>
+        <span className={`rounded border px-2 py-0.5 text-xs font-medium ${RUN_MODE_BADGE[RUN_MODE]}`}>
+          {RUN_MODE_LABEL[RUN_MODE]}
         </span>
         <span className="flex-1" />
         <span className="text-sm text-gray-500">{session.user.name}</span>

@@ -30,7 +30,12 @@ export type RewardedAdDetail =
   | 'gpt_load_failed' // gpt.js を読めなかった（広告ブロッカー等）
   | 'define_threw' // defineOutOfPageSlot が例外
   | 'slot_null' // リワード非対応・スロット重複で slot が null
-  | 'ready_timeout'; // 一定時間 ready にならず在庫なし扱い
+  | 'ready_timeout' // 一定時間 ready にならず在庫なし扱い
+  // AdSense ディスプレイ広告（Web）用
+  | 'ad_unfilled' // 広告在庫なし
+  | 'ad_timeout' // 読み込みタイムアウト
+  | 'ad_closed_during_load' // 読み込み中にユーザーが閉じた
+  | 'ad_push_failed'; // 広告リクエストの push に失敗
 
 // 表示フローの詳細トレース。失敗の切り分け用に操作ログ（video_reward の meta.debug）へ残す。
 // trail は「経過ms イベント名」の時系列。renderIsEmpty=true は GPT が応答したが在庫ゼロ
@@ -43,6 +48,12 @@ export type RewardedAdDebug = {
   creativeId?: number | null;
   size?: string | null;
   reward?: { type?: string; amount?: number } | null;
+  // AdSense ディスプレイ広告（Web）用
+  adStatus?: string | null;
+  visibilityState?: string;
+  boxDimensions?: { width: number; height: number };
+  insDimensions?: { width: number; height: number };
+  pushError?: { name: string; message: string; stack?: string } | null;
 };
 
 // 表示結果。granted 以外のとき detail に具体的な失敗理由を添える。

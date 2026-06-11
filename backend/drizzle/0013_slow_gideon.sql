@@ -1,0 +1,1 @@
+ALTER TABLE "user_logs" ADD COLUMN "environment" text;

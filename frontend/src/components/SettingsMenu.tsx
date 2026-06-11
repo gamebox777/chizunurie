@@ -411,6 +411,8 @@ export default function SettingsMenu({ name, email, role, onEditNickname, onSign
           {!isGuest && role === 'developer' && (
             <Link
               href="/admin"
+              target="_blank"
+              rel="noopener noreferrer"
               onClick={() => setOpen(false)}
               className="block px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
             >
