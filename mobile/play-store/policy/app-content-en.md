@@ -1,7 +1,7 @@
 # App content (Play Console "App content" answers) / English
 
 Draft answers for "Policy and programs → App content" in Play Console.
-**The app is a WebView wrapper of the production site (chizunurie.gamebox777.org)**.
+**The app is a WebView wrapper of the production site (chizunurie.unitygamebox.com)**.
 The site's Google Analytics, Google Sign-In and GPS apply, but the **initial release
 shows no ads in the app** (the rewarded-ad button is hidden via `isNativeApp()`, there
 is no banner unit, and the ad script gpt.js is never loaded in the app).

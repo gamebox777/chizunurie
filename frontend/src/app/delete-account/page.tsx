@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import DeleteAccountActions from "./DeleteAccountActions";
 
 // Google Play「データセーフティ → アカウント削除用 URL」要件を満たす公開ページ。
-// https://chizunurie.gamebox777.org/delete-account に公開する。
+// https://chizunurie.unitygamebox.com/delete-account に公開する。
 // 必須3条件：①アプリ/デベロッパー名に言及 ②削除リクエスト手順を目立たせる
 // ③削除/保持されるデータの種類と保持期間を明記。
 

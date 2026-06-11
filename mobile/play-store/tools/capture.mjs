@@ -8,7 +8,7 @@
 //   node capture.mjs
 //
 // 環境変数:
-//   URL     キャプチャ対象（既定: https://chizunurie.gamebox777.org）
+//   URL     キャプチャ対象（既定: https://chizunurie.unitygamebox.com）
 //   OUT     出力ディレクトリ（既定: ../graphics/screenshots/raw）
 //   CHROME  Chrome 実行ファイル（既定: macOS の Google Chrome）
 //
@@ -25,7 +25,7 @@ import { dirname, resolve } from "node:path";
 import http from "node:http";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
-const URL_ = process.env.URL || "https://chizunurie.gamebox777.org";
+const URL_ = process.env.URL || "https://chizunurie.unitygamebox.com";
 const OUT = process.env.OUT || resolve(__dir, "../graphics/screenshots/raw");
 const CHROME =
   process.env.CHROME ||

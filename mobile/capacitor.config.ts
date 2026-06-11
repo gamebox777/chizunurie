@@ -15,13 +15,13 @@ import type { CapacitorConfig } from "@capacitor/cli";
 //   - Mac 側で `npm run dev`（frontend:3000 + backend:3001）を起動しておくこと。
 //   - 実機を同一LANで使う等で別URLにしたいときは CAP_DEV_URL=http://192.168.x.x:3000 で上書き
 //     （ただし http の生IPは非セキュアなので GPS は使えない。GPS も要るなら adb reverse 方式か https）。
-// 本番ビルド（CAP_DEV なし）では https://chizunurie.gamebox777.org を開く。
+// 本番ビルド（CAP_DEV なし）では https://chizunurie.unitygamebox.com を開く。
 //
 // 注意：この url は `cap sync`/`cap copy` 実行時に評価されて native へ焼き込まれる。
 // よって CAP_DEV は「ビルド時」に必要（npm run apk が中で cap sync を呼ぶのでそこに効く）。
 const DEV = process.env.CAP_DEV === "1" || process.env.CAP_DEV === "true";
 const DEV_URL = process.env.CAP_DEV_URL ?? "http://localhost:3000";
-const PROD_URL = "https://chizunurie.gamebox777.org";
+const PROD_URL = "https://chizunurie.unitygamebox.com";
 
 const config: CapacitorConfig = {
   appId: "jp.chizunurie.app", // ← ストア用の一意ID（逆ドメイン）。確定後に変更

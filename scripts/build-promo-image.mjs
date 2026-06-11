@@ -11,7 +11,6 @@ import { Resvg } from "@resvg/resvg-js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
-const SITE = "chizunurie.gamebox777.org";
 
 // アプリ実物の配色
 const C = {
@@ -120,7 +119,6 @@ ${defs}
   <text x="92" y="${S - 82}" font-family="${FONT}" font-size="40" font-weight="900" fill="${C.bg0}" text-anchor="middle">塗</text>
   <text x="150" y="${S - 104}" font-family="${FONT}" font-size="60" font-weight="900" fill="${C.text}">ちずぬりえ</text>
   <text x="152" y="${S - 60}" font-family="${FONT}" font-size="30" font-weight="600" fill="${C.sub}">歩いた街が色になる、白地図ぬりつぶしゲーム</text>
-  <text x="${S - 56}" y="${S - 170}" font-family="${FONT}" font-size="28" font-weight="700" fill="${C.accent}" text-anchor="end">${SITE}</text>
 </svg>`;
 }
 
@@ -143,7 +141,6 @@ ${defs}
   <circle cx="100" cy="${H - 86}" r="36" fill="${C.accent}"/>
   <text x="100" y="${H - 71}" font-family="${FONT}" font-size="42" font-weight="900" fill="${C.bg0}" text-anchor="middle">塗</text>
   <text x="156" y="${H - 92}" font-family="${FONT}" font-size="56" font-weight="900" fill="${C.text}">ちずぬりえ</text>
-  <text x="158" y="${H - 56}" font-family="${FONT}" font-size="30" font-weight="700" fill="${C.accent}">${SITE}</text>
 </svg>`;
 }
 

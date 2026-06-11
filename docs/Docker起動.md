@@ -77,8 +77,8 @@ Console の「承認済みリダイレクト URI」に開発用の `http://local
 TLS を終端し、`http://フロント:3000` へ流す。あわせて `.env` を本番値にする：
 
 ```env
-BETTER_AUTH_URL=https://chizunurie.gamebox777.org
-FRONTEND_URL=https://chizunurie.gamebox777.org
+BETTER_AUTH_URL=https://chizunurie.unitygamebox.com
+FRONTEND_URL=https://chizunurie.unitygamebox.com
 BETTER_AUTH_SECRET=<openssl rand -base64 32 で新規生成>
 POSTGRES_PASSWORD=<強いパスワード>
 GOOGLE_CLIENT_ID=...
@@ -86,7 +86,7 @@ GOOGLE_CLIENT_SECRET=...
 ```
 
 > `BETTER_AUTH_URL` が `https://` だと Secure Cookie が自動で有効になる。
-> 本番リダイレクト URI `https://chizunurie.gamebox777.org/api/auth/callback/google` を
+> 本番リダイレクト URI `https://chizunurie.unitygamebox.com/api/auth/callback/google` を
 > Google 側に追加すること（開発用 `localhost:3001` の URI と同じクライアントに両方登録）。
 
 > フロントの中継先 `BACKEND_URL` は Next.js の `rewrites()` が**ビルド時**に焼き込むため、

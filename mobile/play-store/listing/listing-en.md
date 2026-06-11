@@ -74,5 +74,5 @@ First release. Paint all of Japan in ~1km tiles. Includes GPS "Visit paint" for 
 - Category: **Casual** (alt: Trivia / Puzzle)
 - Tags: maps, location game, walking, territory, Japan geography
 - Public contact email: rin7studio@gmail.com (shown publicly; a dedicated address is recommended)
-- Website: https://chizunurie.gamebox777.org
+- Website: https://chizunurie.unitygamebox.com
 - Privacy policy URL: https://unitygamebox.com/?p=2230

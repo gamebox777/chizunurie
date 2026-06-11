@@ -1,7 +1,7 @@
 # アプリのコンテンツ（Play Console「アプリのコンテンツ」回答集）/ 日本語
 
 Play Console 左メニュー「ポリシーとプログラム → アプリのコンテンツ」で求められる
-各申告の回答案。**本アプリは本番サイト（chizunurie.gamebox777.org）を WebView で
+各申告の回答案。**本アプリは本番サイト（chizunurie.unitygamebox.com）を WebView で
 表示するラッパー**。サイトの Google Analytics・Google ログイン・GPS は該当するが、
 **初回リリースではアプリ内に広告を表示しない**（リワード広告ボタンは `isNativeApp()`
 で非表示・バナー広告なし・広告スクリプト gpt.js もアプリでは読み込まれない）。

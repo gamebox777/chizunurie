@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
 
-const SITE_URL = "https://chizunurie.gamebox777.org";
+const SITE_URL = "https://chizunurie.unitygamebox.com";
 
 // 公開ページの一覧（クローラ向け）。情報ページを追加したらここにも足す。
 export default function sitemap(): MetadataRoute.Sitemap {

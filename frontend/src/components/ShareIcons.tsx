@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useLocale } from '@/lib/i18n';
 
-const SHARE_URL = 'https://chizunurie.gamebox777.org/';
+const SHARE_URL = 'https://chizunurie.unitygamebox.com/';
 
 // X のインテント（投稿画面を別タブで開く。画像はURLのOGPカードで表示される）
 function openXIntent(text: string) {

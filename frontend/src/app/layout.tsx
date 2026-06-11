@@ -4,6 +4,7 @@ import Script from "next/script";
 import "./globals.css";
 import { LocaleProvider } from "@/lib/i18n";
 import ServiceWorkerRegister from "./ServiceWorkerRegister";
+import AdSenseLoader from "./AdSenseLoader";
 import { RUN_MODE } from "@/lib/runtime-env";
 
 const GA_MEASUREMENT_ID = "G-CLKCJXR6CN";
@@ -18,7 +19,7 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const SITE_URL = "https://chizunurie.gamebox777.org";
+const SITE_URL = "https://chizunurie.unitygamebox.com";
 const SITE_NAME = "ちずぬりえ";
 const SITE_DESC = "歩いた街が色になる、GPS白地図ぬりつぶしゲーム";
 
@@ -95,6 +96,8 @@ export default function RootLayout({
             gtag('config', '${GA_MEASUREMENT_ID}');
           `}
         </Script>
+        {/* Google AdSense（自動広告）。アプリ内 WebView では読み込まない（AdSenseLoader 参照） */}
+        <AdSenseLoader />
         <ServiceWorkerRegister />
         <LocaleProvider>{children}</LocaleProvider>
       </body>

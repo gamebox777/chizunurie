@@ -3,7 +3,7 @@
 Last updated: 2026-06-09
 
 This policy describes how user information is handled in the mobile app
-"Color the Map" (the "App") and the website https://chizunurie.gamebox777.org
+"Color the Map" (the "App") and the website https://chizunurie.unitygamebox.com
 (the "Service"). The App displays the Service, so this policy applies to both.
 
 > ⚠️ Before publishing, replace **[Operator name] / [contact]** with real details.
