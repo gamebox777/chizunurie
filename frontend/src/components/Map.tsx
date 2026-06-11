@@ -30,7 +30,7 @@ import { vibratePaint } from '@/lib/haptics';
 import { isBasemapEnabled, onBasemapChange, getBasemapOpacity, onBasemapOpacityChange } from '@/lib/basemap';
 import { isGpsAddressEnabled, onGpsAddressChange } from '@/lib/gpsAddress';
 import { getIconSize, onIconSizeChange } from '@/lib/iconSize';
-import { showRewardedAd } from '@/lib/rewardedAd';
+import { showDisplayAdOverlay } from '@/lib/displayAd';
 import {
   showNativeRewardedAd,
   watchNativeRewardedReady,
@@ -40,25 +40,20 @@ import {
   type NativeAdTestMode,
   type NativeAdDebugInfo,
 } from '@/lib/nativeRewardedAd';
-import { showNativeBanner } from '@/lib/nativeBannerAd';
+import { showNativeBanner, hideNativeBanner } from '@/lib/nativeBannerAd';
 import { isNativeApp } from '@/lib/platform';
 import ShareIcons from './ShareIcons';
 
 const PAINT_API = '/api/backend/painted';
 const POINTS_API = '/api/backend/points';
 const RANKINGS_API = '/api/backend/rankings';
-// 動画リワードの GPT 広告ユニットパス（/ネットワークコード/広告ユニットコード）。
-// 本番：GAM で作成済み（ネットワーク 23356418393・ユニット chizunurie_rewarded_video）。
-const REWARDED_AD_UNIT_PROD = '/23356418393/chizunurie_rewarded_video';
-// 開発：Google 公式のテスト用リワードユニット。ドメイン審査・ads.txt 不要で必ずテスト広告が出る。
-const REWARDED_AD_UNIT_SAMPLE = '/22639388115/rewarded_web_example';
-// 解決順：env で明示 > 開発ビルドはサンプル > 本番ユニット。
-// （NODE_ENV はビルド時に静的置換される。npm run dev=development / build=production）
-const REWARDED_AD_UNIT_PATH =
-  process.env.NEXT_PUBLIC_REWARDED_AD_UNIT ||
-  (process.env.NODE_ENV !== 'production'
-    ? REWARDED_AD_UNIT_SAMPLE
-    : REWARDED_AD_UNIT_PROD);
+// 「▶ 動画を見て回復」（Web）が表示する AdSense ディスプレイユニットのスロット ID。
+// GPT リワード（/23356418393/chizunurie_rewarded_video・rewardedAd.ts）は日本の Web では
+// ほぼ no fill だったため、通常のディスプレイ広告（chizunurie_display_1）のオーバーレイ
+// 表示に切り替えた（displayAd.ts）。視聴完了は待たず、閉じた時点で報酬請求に進む。
+// ※ AdSense は localhost には配信しないので開発では unfilled になる（フローの確認は可能）。
+const DISPLAY_AD_SLOT =
+  process.env.NEXT_PUBLIC_DISPLAY_AD_SLOT || '5435028180';
 // 市区町村ごとの総メッシュ数（塗り％の分母）と meshcode→市区町村 の対応表。
 // 約37万セル分を含むため map 表示後に遅延ロードする（build-muni-stats.mjs が生成）。
 const MUNI_STATS_URL = '/data/muni-stats.json';
@@ -1291,12 +1286,12 @@ export default function MapView() {
         return;
       }
 
-      // 2) 広告表示。ネイティブアプリ内は Unity Ads（UnityAdsPlugin 経由）、
-      //    ブラウザは GPT（全画面オーバーレイを GPT 自身が描画）。
-      //    どちらも同じ { outcome, detail? } を返すので以降の流れは共通。
+      // 2) 広告表示。ネイティブアプリ内は Unity Ads（UnityAdsPlugin 経由・視聴完了必須）、
+      //    ブラウザは AdSense ディスプレイ広告のオーバーレイ（displayAd.ts・閉じた時点で
+      //    granted＝視聴完了は待たない）。どちらも同じ { outcome, detail? } を返す。
       const { outcome, detail, debug } = isNativeApp()
         ? await showNativeRewardedAd()
-        : await showRewardedAd(REWARDED_AD_UNIT_PATH);
+        : await showDisplayAdOverlay(DISPLAY_AD_SLOT);
       if (outcome !== 'granted') {
         // 途中キャンセル（dismissed）・在庫なし/非対応（unavailable）・エラー（error）。
         // detail に具体的な失敗理由（gpt_load_failed / ready_timeout 等）、debug に
@@ -1381,11 +1376,17 @@ export default function MapView() {
     return watchNativeRewardedReady(setNativeAdReady);
   }, []);
 
-  // ネイティブアプリ内のフッターバナー（Unity Ads）。マウント時に1回表示を試み、
+  // ネイティブアプリ内のフッターバナー（Unity Ads）。session 確定後に1回表示を試み、
   // 失敗（在庫なし等）は1分おきに数回だけ再試行する。表示はネイティブ側が
   // WebView を持ち上げて場所を確保するので、Web 側のレイアウト調整は不要。
+  // 開発者アカウントには出さない（このセッション中に開発者ログインしたら消す）。
+  // デバッグメニューの「バナー表示を再試行」（手動）はこの制限の対象外。
   useEffect(() => {
-    if (!isNativeApp()) return;
+    if (!isNativeApp() || isPending) return;
+    if (isDeveloper) {
+      hideNativeBanner();
+      return;
+    }
     let cancelled = false;
     let attempts = 0;
     let timer: number | null = null;
@@ -1400,7 +1401,7 @@ export default function MapView() {
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, []);
+  }, [isPending, isDeveloper]);
 
   // 離れた場所（10ポイント）の確認ダイアログで「塗る」を押したとき
   const confirmFarPaint = useCallback(() => {
@@ -3549,7 +3550,13 @@ export default function MapView() {
 
       // ── GPS 自動塗り（移動中も追跡して現在地を黄色く塗る）──────────
       // メッシュコードは座標から数式で求まるので、タイル未ロードでも塗れる。
-      let lastGeocodedId: number | null = null; // 逆ジオコーダの連打防止（セルが変わった時だけ）
+      // 現在地住所（逆ジオコーダ）の間引き状態。問い合わせは125m細セルを移った時だけ・
+      // 最低間隔つきで間引く。失敗（圏外・通信エラー・海上）はセルを移らなくても再試行する。
+      const GEOCODE_MIN_INTERVAL_MS = 5_000; // 問い合わせの最低間隔（移動中の連打防止）
+      const GEOCODE_RETRY_INTERVAL_MS = 20_000; // 取得失敗時の再試行間隔
+      let geocodedSubKey: number | null = null; // 直近に住所が取れた125m細セル（id*64+sub）
+      let geocodeNextAt = 0; // 次に問い合わせて良い時刻（ms）
+      let geocodeSeq = 0; // 古い応答を捨てるための連番
       let lastGpsCellId: number | null = null; // 直前にGPSで居たセル（再訪検出・静止中の連投防止）
       let lastGpsSubIndex: number | null = null; // 直前にGPSで居た細セル（同一細セル内の連投防止）
       const paintGpsAt = (lngLat: [number, number]) => {
@@ -3616,17 +3623,33 @@ export default function MapView() {
           refreshHoverStat();
         }
         // 現地塗りモードでは、グリッド内の近似住所ではなく現在地の正確な住所を表示する。
-        // 同じメッシュセル内では再取得しない（移動して別セルに入った時だけ問い合わせる）。
-        if (paintModeRef.current === 'genchi' && gpsAddressEnabledRef.current && id !== lastGeocodedId) {
-          lastGeocodedId = id;
-          reverseGeocode(lngLat[0], lngLat[1]).then((address) => {
-            // 取得待ちの間に別セルへ移動していたら反映しない（古い結果の上書き防止）
-            if (address && lastGeocodedId === id) {
-              showCurrentAddress(lngLat, address);
-              // 左下パネルの2行目（詳細地名）にも現在地の住所を反映する。
-              setHoverAddress(address);
-            }
-          });
+        // ラベルの位置は毎回現在地へ追従させ、住所の問い合わせ（逆ジオコーダ）は
+        // 125m細セルを移った時だけ＋最低間隔つきで間引く。
+        if (paintModeRef.current === 'genchi' && gpsAddressEnabledRef.current) {
+          // 位置の追従はフェッチ無しの軽い処理なので毎回行う（ラベル置き去り防止）。
+          addressMarkerRef.current?.setLngLat(lngLat);
+          const subKey = id * 64 + sub;
+          const now = Date.now();
+          // ラベル未表示（表示ONし直し・モード復帰直後）は同じ細セルでも取得し直す。
+          const needFetch = subKey !== geocodedSubKey || !addressMarkerRef.current;
+          if (needFetch && now >= geocodeNextAt) {
+            geocodeNextAt = now + GEOCODE_MIN_INTERVAL_MS;
+            const seq = ++geocodeSeq;
+            reverseGeocode(lngLat[0], lngLat[1]).then((address) => {
+              // 後続の問い合わせがある／取得待ちの間に OFF・モード切替されたら捨てる
+              if (seq !== geocodeSeq) return;
+              if (paintModeRef.current !== 'genchi' || !gpsAddressEnabledRef.current) return;
+              if (address) {
+                geocodedSubKey = subKey;
+                showCurrentAddress(lngLat, address);
+                // 左下パネルの2行目（詳細地名）にも現在地の住所を反映する。
+                setHoverAddress(address);
+              } else {
+                // 取得失敗：成功扱いにせず、少し間を置いて同じ場所でも再試行する。
+                geocodeNextAt = Date.now() + GEOCODE_RETRY_INTERVAL_MS;
+              }
+            });
+          }
         }
       };
       // 自国（adm0_a3）を現在地から判定する。GPS の trackUserLocation は現在地へ地図を
@@ -4743,10 +4766,10 @@ export default function MapView() {
               {/* 動画リワード：広告を見てそのレベルの満タン分を回復。
                   クールダウン中・1日上限はボタンを無効化して理由を表示する。
                   - ネイティブアプリ（mobile/）＝ Unity Ads。起動時からプリロードしており、
-                    在庫が ready になるまで（adPreparing）も無効化する。
-                  - ブラウザ/PWA ＝ GPT（rewardedAd.ts）。プリロードは無く押した時点で
-                    load→show が走るので、ボタンは常に活性（在庫なしは ready_timeout で
-                    unavailable トーストになり、video_reward ログに detail が残る）。 */}
+                    在庫が ready になるまで（adPreparing）も無効化する。視聴完了で報酬。
+                  - ブラウザ/PWA ＝ AdSense ディスプレイ広告のオーバーレイ（displayAd.ts）。
+                    押した時点で表示し、閉じれば報酬（視聴完了は待たない）。フィルの有無は
+                    video_reward ログの debug（renderIsEmpty・trail）に残る。 */}
               {(() => {
                 const cooldownLeft =
                   rewardStatus?.nextAvailableAt != null

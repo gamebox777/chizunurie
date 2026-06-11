@@ -36,7 +36,7 @@ export async function showNativeBanner(): Promise<boolean> {
   }
 }
 
-/** フッターバナーを消す（現状未使用。全画面化などで使う想定）。 */
+/** フッターバナーを消す（開発者ログイン時に Map.tsx が使用）。 */
 export async function hideNativeBanner(): Promise<void> {
   const plugin = getUnityAdsPlugin();
   if (!plugin?.hideBanner) return;
