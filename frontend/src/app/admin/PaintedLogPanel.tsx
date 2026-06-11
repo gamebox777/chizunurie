@@ -35,13 +35,18 @@ function modeBadge(mode: string) {
 
 function formatLatLng(lat: number | null, lng: number | null): string {
   if (lat == null || lng == null) return '-';
-  return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+  return `${lat}, ${lng}`;
 }
 
 // 列定義。ソートはサーバー側（manual モード）なので、ソート可能列の id は
 // backend/routes/admin.ts の PAINTED_SORTABLE のキーと一致させる。
 const columnHelper = createColumnHelper<PaintedLog>();
 const columns = [
+  columnHelper.accessor('id', {
+    id: 'paintedId',
+    header: 'ID',
+    meta: { tdClass: 'text-xs text-gray-400 whitespace-nowrap font-mono' },
+  }),
   columnHelper.accessor('paintedAt', {
     id: 'date',
     header: '日時',
@@ -49,15 +54,23 @@ const columns = [
     cell: (info) => formatDateTime(info.getValue()),
     meta: { tdClass: 'text-xs text-gray-500 whitespace-nowrap' },
   }),
-  columnHelper.accessor((p) => p.userName || p.userEmail || '', {
+  columnHelper.accessor((p) => p.userName || p.userEmail || p.userId || '', {
     id: 'user',
     header: 'ユーザー',
     cell: ({ row }) => (
-      <>
+      <div className="flex flex-col gap-0.5">
         <div className="font-medium text-gray-800">{row.original.userName || '(未設定)'}</div>
-        <div className="text-xs text-gray-400">{row.original.userEmail}</div>
-      </>
+        {row.original.userEmail && (
+          <div className="text-xs text-gray-400">{row.original.userEmail}</div>
+        )}
+        <div className="text-[10px] text-gray-400 font-mono">{row.original.userId || '-'}</div>
+      </div>
     ),
+  }),
+  columnHelper.accessor('sourceLayer', {
+    id: 'sourceLayer',
+    header: 'レイヤー',
+    meta: { tdClass: 'text-xs text-gray-600' },
   }),
   columnHelper.accessor('keyCode', {
     id: 'keyCode',
@@ -84,7 +97,7 @@ const columns = [
     id: 'latlng',
     header: '緯度経度',
     cell: ({ row }) => formatLatLng(row.original.lat, row.original.lng),
-    meta: { tdClass: 'text-xs text-gray-500 whitespace-nowrap tabular-nums' },
+    meta: { tdClass: 'text-xs text-gray-500 whitespace-nowrap tabular-nums font-mono' },
   }),
 ];
 

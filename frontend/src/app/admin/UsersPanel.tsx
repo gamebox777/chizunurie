@@ -156,10 +156,10 @@ function UserRow({
             aria-label="選択"
           />
         </td>
-        <td className="px-3 py-2 text-[10px] text-gray-400 font-mono whitespace-nowrap">
-          {u.id}
-        </td>
         <td className="px-3 py-2">
+          <div className="text-[10px] text-gray-400 font-mono whitespace-nowrap">
+            {u.id}
+          </div>
           <div className="font-medium text-gray-800">{u.name || '(未設定)'}</div>
           {u.realName && (
             <div className="text-xs text-gray-500">本名: {u.realName}</div>
@@ -190,7 +190,6 @@ function UserRow({
           </div>
         </td>
         <td className="px-3 py-2 text-right tabular-nums">{u.points?.level ?? '-'}</td>
-        <td className="px-3 py-2 text-right tabular-nums">{u.points?.points ?? '-'}</td>
         <td className="px-3 py-2 text-right tabular-nums">
           {u.painted.total.toLocaleString()}
           <span className="ml-1 text-xs text-gray-400">
@@ -233,7 +232,7 @@ function UserRow({
       </tr>
       {editing && (
         <tr className="border-t border-gray-100 bg-blue-50/40">
-          <td colSpan={15} className="px-3 py-3">
+          <td colSpan={13} className="px-3 py-3">
             <div className="flex flex-wrap items-end gap-3">
               <label className="text-xs text-gray-600">
                 ポイント
@@ -376,11 +375,6 @@ export default function UsersPanel() {
           );
         },
       }),
-      columnHelper.accessor('id', {
-        id: 'id',
-        header: 'ID',
-        meta: { tdClass: 'text-[10px] text-gray-400 whitespace-nowrap font-mono' },
-      }),
       columnHelper.accessor((u) => u.name || u.email, {
         id: 'name',
         header: 'ユーザー',
@@ -398,11 +392,7 @@ export default function UsersPanel() {
         header: 'Lv',
         meta: { align: 'right' as const },
       }),
-      columnHelper.accessor((u) => u.points?.points ?? -1, {
-        id: 'points',
-        header: 'ポイント',
-        meta: { align: 'right' as const },
-      }),
+
       columnHelper.accessor((u) => u.painted.total, {
         id: 'painted',
         header: '塗り',
@@ -547,7 +537,7 @@ export default function UsersPanel() {
             ))}
             {visibleUsers.length === 0 && (
               <tr>
-                <td colSpan={15} className="px-3 py-6 text-center text-gray-400">
+                <td colSpan={13} className="px-3 py-6 text-center text-gray-400">
                   ユーザーがいません
                 </td>
               </tr>

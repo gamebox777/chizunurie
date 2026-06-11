@@ -19,16 +19,23 @@
 
 import { useEffect, useState } from "react";
 import Script from "next/script";
+import { usePathname } from "next/navigation";
 import { isNativeApp } from "@/lib/platform";
 import { getMyWebAds } from "@/lib/webAds";
 
 const ADSENSE_CLIENT = "ca-pub-3466778617044617";
 
 export default function AdSenseLoader() {
+  const pathname = usePathname();
   const [enabled, setEnabled] = useState(false);
 
   useEffect(() => {
     if (isNativeApp()) return;
+    // 管理画面（/admin から始まるパス）では広告は絶対に表示しない
+    if (pathname && (pathname === "/admin" || pathname.startsWith("/admin/"))) {
+      setEnabled(false);
+      return;
+    }
     let cancelled = false;
     // 実効設定（全体＋個別・取得失敗時は ON）を確認してから読み込む。
     getMyWebAds().then((ads) => {
@@ -37,7 +44,11 @@ export default function AdSenseLoader() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [pathname]);
+
+  if (pathname && (pathname === "/admin" || pathname.startsWith("/admin/"))) {
+    return null;
+  }
 
   if (!enabled) return null;
   return (

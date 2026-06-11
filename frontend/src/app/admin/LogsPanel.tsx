@@ -277,7 +277,16 @@ const columns = [
   columnHelper.display({
     id: 'latlng',
     header: '緯度・経度',
-    cell: ({ row }) => formatLatLng(row.original.lat, row.original.lng),
+    cell: ({ row }) => {
+      const { lat, lng } = row.original;
+      if (lat == null || lng == null) return '-';
+      return (
+        <div className="flex flex-col gap-0.5">
+          <div>{lat}</div>
+          <div>{lng}</div>
+        </div>
+      );
+    },
     meta: { tdClass: 'text-xs text-gray-500 whitespace-nowrap font-mono' },
   }),
   columnHelper.accessor((l) => l.ipAddress ?? '-', {
