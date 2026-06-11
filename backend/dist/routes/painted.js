@@ -187,7 +187,11 @@ paintedRouter.post("/", async (c) => {
             if (existing[0]?.mode !== "gps") {
                 await tx
                     .update(paintedRegions)
-                    .set({ mode: "gps", lastVisitAt: new Date(now) })
+                    .set({
+                    mode: "gps",
+                    walkedMask: BigInt.asIntN(64, bit),
+                    lastVisitAt: new Date(now),
+                })
                     .where(cellWhere);
                 const state = await addExp(user.id, expCfg.expVisit, now, tx, expCfg);
                 return { ok: true, points: state, gainedExp: expCfg.expVisit };
