@@ -15,6 +15,9 @@ export type AdminUser = {
   // 直近のアクション時に観測した IP / UserAgent（最新）。
   lastIpAddress: string | null;
   lastUserAgent: string | null;
+  // このユーザー個別の Web 広告配信の上書き設定。キーが無い項目は全体設定
+  // （app_settings.webAds）に従い、true/false が入っていれば全体設定より優先される。
+  adSettings: { auto?: boolean; reward?: boolean };
   createdAt: string;
   // 最終更新日時（ログイン・GPS・検索などのアクションやプレイ中の heartbeat で更新）。
   updatedAt: string;
@@ -55,6 +58,22 @@ export function setRole(id: string, role: 'user' | 'developer') {
     method: 'POST',
     body: JSON.stringify({ role }),
   });
+}
+
+// ユーザー個別の Web 広告配信の上書き設定を更新する。
+// true/false=全体設定を上書きして強制 ON/OFF、null=上書き解除（全体設定に従う）、
+// undefined（キーを送らない）=その項目は変更しない。
+export function setUserAds(
+  id: string,
+  fields: { auto?: boolean | null; reward?: boolean | null }
+) {
+  return request<{ ok: true; adSettings: { auto?: boolean; reward?: boolean } }>(
+    `/users/${id}/ads`,
+    {
+      method: 'POST',
+      body: JSON.stringify(fields),
+    }
+  );
 }
 
 export function setPoints(

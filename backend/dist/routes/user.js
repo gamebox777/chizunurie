@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { getSessionUser } from "../lib/auth.js";
 import { db } from "../db/index.js";
 import { user } from "../db/schema.js";
+import { resolveWebAdsForUser } from "../lib/webAds.js";
 // ログイン中ユーザー自身のプロフィール更新（所在国・設定）。
 // Next.js の rewrite 経由で /api/backend/user/* から到達する。
 export const userRouter = new Hono();
@@ -30,6 +31,15 @@ userRouter.post("/me/country", async (c) => {
         .set({ country, updatedAt: new Date() })
         .where(eq(user.id, u.id));
     return c.json({ ok: true, country, changed: true });
+});
+// 自分に適用される Web 広告配信の実効設定（全体設定＋個別上書き）を返す。
+// 未ログイン（セッション無し）でも全体設定で答えるので、広告ローダーが最初に
+// 呼んでも 401 にならない。クライアントはこの値で自動広告の読み込みと
+// 「広告を見て回復」（Web 版）の表示を切り替える。
+userRouter.get("/me/ads", async (c) => {
+    const u = await getSessionUser(c.req.raw);
+    const ads = await resolveWebAdsForUser(u?.id ?? null);
+    return c.json({ ads });
 });
 // 自分の設定 JSON を取得する。
 userRouter.get("/me/settings", async (c) => {

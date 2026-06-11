@@ -44,6 +44,11 @@ export const user = pgTable("user", {
   // ユーザー設定（効果音・BGM・バイブ・地図オーバーレイ・言語など）を1つの JSON にまとめて保存する。
   // 設定項目は今後増減するため、項目ごとにカラム＝マイグレーションを増やすのを避け jsonb に全部入れる。
   settings: jsonb("settings").notNull().default({}),
+  // このユーザー個別の Web 広告配信の上書き設定（開発者が管理画面からのみ編集する）。
+  // { auto?: boolean, reward?: boolean }。キーが無い項目は全体設定（app_settings.webAds）に従い、
+  // true/false が入っていれば全体設定より優先される（個別設定＞全体設定）。
+  // ユーザー自身が書き換えられる settings とは別カラムにして、本人による改変を防ぐ。
+  adSettings: jsonb("ad_settings").notNull().default({}),
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
 });

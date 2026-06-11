@@ -11,29 +11,35 @@
 // ローカル開発（localhost）でも読み込むが、AdSense は承認済みドメインにしか実広告を
 // 配信しないため、ローカルでは空枠 or 未表示になることがある（エラーではない）。
 //
-// 開発者アカウント（role=developer）にも読み込まない：自分の閲覧で広告を出さない
-// （無効トラフィック対策）。session 確定（isPending 解消）を待ってから読み込むため、
-// 一般ユーザーも自動広告の開始が session 取得ぶんだけ遅れる。リワード動画
-// （displayAd.ts・動作確認用）は開発者でも従来どおり表示される。
+// 配信の ON/OFF は管理画面の Web 広告設定で制御する：全体設定（app_settings.webAds.autoEnabled）
+// ＋ユーザー個別の上書き（user.ad_settings.auto・個別＞全体）。実効値はサーバー
+// （/api/backend/user/me/ads）が解決し、OFF ならスクリプト自体を読み込まない。
+// 以前あった「開発者アカウント（role=developer）には読み込まない」特別扱いは廃止した。
+// 自分の閲覧で広告を出したくない場合は、管理画面で自分のユーザーの個別設定を OFF にする。
 
 import { useEffect, useState } from "react";
 import Script from "next/script";
 import { isNativeApp } from "@/lib/platform";
-import { useSession } from "@/lib/auth-client";
+import { getMyWebAds } from "@/lib/webAds";
 
 const ADSENSE_CLIENT = "ca-pub-3466778617044617";
 
 export default function AdSenseLoader() {
-  const [browser, setBrowser] = useState(false);
-  const { data: session, isPending } = useSession();
-  const isDeveloper =
-    (session?.user as { role?: string } | undefined)?.role === "developer";
+  const [enabled, setEnabled] = useState(false);
 
   useEffect(() => {
-    if (!isNativeApp()) setBrowser(true);
+    if (isNativeApp()) return;
+    let cancelled = false;
+    // 実効設定（全体＋個別・取得失敗時は ON）を確認してから読み込む。
+    getMyWebAds().then((ads) => {
+      if (!cancelled && ads.auto) setEnabled(true);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  if (!browser || isPending || isDeveloper) return null;
+  if (!enabled) return null;
   return (
     <Script
       src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT}`}

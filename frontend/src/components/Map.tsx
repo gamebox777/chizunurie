@@ -40,8 +40,15 @@ import {
   type NativeAdTestMode,
   type NativeAdDebugInfo,
 } from '@/lib/nativeRewardedAd';
-import { showNativeBanner, hideNativeBanner } from '@/lib/nativeBannerAd';
+import { showNativeBanner } from '@/lib/nativeBannerAd';
+import {
+  isNativeBgGeoAvailable,
+  startNativeBgGeo,
+  stopNativeBgGeo,
+} from '@/lib/nativeBackgroundGeolocation';
 import { isNativeApp } from '@/lib/platform';
+import { getMyWebAds, refreshMyWebAds } from '@/lib/webAds';
+import { setGpsStatus } from '@/lib/gpsStatus';
 import ShareIcons from './ShareIcons';
 
 const PAINT_API = '/api/backend/painted';
@@ -63,6 +70,10 @@ const WORLD_STATS_URL = '/data/world-stats.json';
 // ── 塗りポイント／レベル（GPS移動は無料・それ以外の塗りはポイント消費） ──────────
 // ※サーバー側（backend/src/lib/points.ts）が権威。max・level・exp はサーバーから受け取る。
 const DEFAULT_MAX_POINTS = 10; // level 1 の最大塗りポイント（サーバー応答前の初期表示用）
+
+// GPS の位置がこの時間届かなければ「GPS を掴んでいない」（GPS OFF 表示）に戻す。
+// 追跡中の watchPosition は連続的に発火するので、途絶＝画面OFF・電波喪失などの検出に十分な長さ。
+const GPS_HELD_STALE_MS = 30_000;
 const REGEN_INTERVAL_MS = 30 * 60 * 1000; // 30分で1ポイント回復
 const COST_ADJACENT = 1; // 塗り済みに隣接する場所
 const COST_FAR = 10; // 離れた場所（確認ダイアログ付き）
@@ -860,6 +871,14 @@ export default function MapView() {
   >(() => {});
   // 動画リワード（動画視聴でそのレベルの満タン分を回復）
   const [rewardStatus, setRewardStatus] = useState<VideoRewardStatus | null>(null);
+  // Web 版の「広告を見て回復」を出すか（Web 広告配信設定の実効値・全体＋個別上書き）。
+  // OFF だとボタン自体を表示しない。アプリ版（Unity Ads）はこの設定の対象外。
+  const [webRewardEnabled, setWebRewardEnabled] = useState(true);
+  // 初回は AdSenseLoader と共有のキャッシュ（getMyWebAds）を使い、ユーザーが変わったら取り直す。
+  const webAdsFetchedRef = useRef(false);
+  // GPS を「掴んでいる」か（位置が届いている間 true）。false の間は右下に小さく GPS OFF を
+  // 表示する。手動で追跡を止めた・許可していない・自動追跡が途絶えた、のいずれも含む。
+  const [gpsHeld, setGpsHeld] = useState(false);
   // 進行中フェーズ：null=非表示 / 'loading'=広告準備中 / 'claiming'=報酬請求中。
   // 実際の広告 UI（全画面）は GPT が生成するため、こちらは前後のローディング表示専用。
   const [videoPhase, setVideoPhase] = useState<'loading' | 'claiming' | null>(
@@ -1226,10 +1245,12 @@ export default function MapView() {
   }, []);
 
   // 動画リワードの利用可否（残り回数・クールダウン）をサーバーから取得する。
+  // platform はクールダウンの適用判定（Web のみ・アプリは 0）に使う。
   const refreshRewardStatus = useCallback(async () => {
     if (!userIdRef.current) return;
     try {
-      const res = await fetch(`${POINTS_API}/reward/video`, {
+      const platform = isNativeApp() ? 'app' : 'web';
+      const res = await fetch(`${POINTS_API}/reward/video?platform=${platform}`, {
         credentials: 'include',
       });
       if (!res.ok) return;
@@ -1256,10 +1277,14 @@ export default function MapView() {
     // 回線状態（net）は在庫なし/タイムアウトの切り分け用に各段階へ添える。
     logEvent('video_reward', { meta: { event: 'start', net: connectionMeta() } });
     try {
-      // 1) nonce 発行（視聴前のクールダウン・上限チェックを兼ねる）
+      // 1) nonce 発行（視聴前のクールダウン・上限チェックを兼ねる）。
+      //    platform でクールダウンの適用（Web のみ）が決まる。
+      const platform = isNativeApp() ? 'app' : 'web';
       const nonceRes = await fetch(`${POINTS_API}/reward/video/nonce`, {
         method: 'POST',
         credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ platform }),
       });
       const nonceData = (await nonceRes.json().catch(() => null)) as
         | { nonce?: string; status?: VideoRewardStatus; error?: string }
@@ -1318,7 +1343,7 @@ export default function MapView() {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nonce: nonceData.nonce }),
+        body: JSON.stringify({ nonce: nonceData.nonce, platform }),
       });
       const data = (await res.json().catch(() => null)) as
         | { points?: ServerPoints; granted?: number; status?: VideoRewardStatus }
@@ -1379,14 +1404,9 @@ export default function MapView() {
   // ネイティブアプリ内のフッターバナー（Unity Ads）。session 確定後に1回表示を試み、
   // 失敗（在庫なし等）は1分おきに数回だけ再試行する。表示はネイティブ側が
   // WebView を持ち上げて場所を確保するので、Web 側のレイアウト調整は不要。
-  // 開発者アカウントには出さない（このセッション中に開発者ログインしたら消す）。
-  // デバッグメニューの「バナー表示を再試行」（手動）はこの制限の対象外。
+  // 以前あった「開発者アカウントには出さない」特別扱いは廃止した（開発者にも表示する）。
   useEffect(() => {
     if (!isNativeApp() || isPending) return;
-    if (isDeveloper) {
-      hideNativeBanner();
-      return;
-    }
     let cancelled = false;
     let attempts = 0;
     let timer: number | null = null;
@@ -1401,7 +1421,7 @@ export default function MapView() {
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [isPending, isDeveloper]);
+  }, [isPending]);
 
   // 離れた場所（10ポイント）の確認ダイアログで「塗る」を押したとき
   const confirmFarPaint = useCallback(() => {
@@ -1793,6 +1813,22 @@ export default function MapView() {
   // ログアウト時は動画リワードの状態もクリアする。
   useEffect(() => {
     if (!userId) setRewardStatus(null);
+  }, [userId]);
+
+  // Web 広告配信の実効設定（全体＋個別上書き）を取得して「広告を見て回復」の表示を決める。
+  // 個別上書きはユーザー単位なので、ログイン・ゲスト連携でユーザーが変わったら取り直す。
+  // アプリ版は Web 広告設定の対象外（Unity Ads 側で従来どおり）。
+  useEffect(() => {
+    if (isNativeApp()) return;
+    let cancelled = false;
+    const isFirst = !webAdsFetchedRef.current;
+    webAdsFetchedRef.current = true;
+    (isFirst ? getMyWebAds() : refreshMyWebAds()).then((ads) => {
+      if (!cancelled) setWebRewardEnabled(ads.reward);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [userId]);
 
   // 塗りポイントの時間回復（クライアント側）。1秒ごとに回復時刻を過ぎていれば加算し、
@@ -3685,9 +3721,31 @@ export default function MapView() {
         if (!tryReport()) map.once('idle', tryReport);
       };
       let firstGpsLogged = false;
-      geolocate.on('geolocate', (pos: GeolocationPosition) => {
-        const lng = pos.coords.longitude;
-        const lat = pos.coords.latitude;
+      // GPS を「掴んでいる」かの表示用（右下インジケーター＋設定メニューの理由表示）。
+      // 位置が届くたびに ON にし、しばらく途絶えたら inactive（OFF）に戻す。
+      // エラー時はエラー種別を reason に乗せて即 OFF。
+      let gpsHeldTimer: number | null = null;
+      const markGpsHeld = () => {
+        setGpsHeld(true);
+        setGpsStatus({ held: true });
+        if (gpsHeldTimer !== null) window.clearTimeout(gpsHeldTimer);
+        gpsHeldTimer = window.setTimeout(() => {
+          setGpsHeld(false);
+          setGpsStatus({ held: false, reason: 'inactive' });
+        }, GPS_HELD_STALE_MS);
+      };
+      const markGpsOff = (reason: import('@/lib/gpsStatus').GpsStatusReason = 'inactive') => {
+        if (gpsHeldTimer !== null) {
+          window.clearTimeout(gpsHeldTimer);
+          gpsHeldTimer = null;
+        }
+        setGpsHeld(false);
+        setGpsStatus({ held: false, reason });
+      };
+      // 実GPS（maplibre の watchPosition）とアプリ版のバックグラウンド追跡の両方から呼ぶ
+      // 共通処理。塗り・自国判定・現在地共有・初回ログまでを1か所にまとめる。
+      const handleGpsPosition = (lng: number, lat: number) => {
+        markGpsHeld();
         paintGpsAt([lng, lat]);
         resolveHomeCountry(lng, lat);
         reportCountry(lng, lat);
@@ -3699,6 +3757,9 @@ export default function MapView() {
           firstGpsLogged = true;
           logEvent('gps', { lat, lng, municipality });
         }
+      };
+      geolocate.on('geolocate', (pos: GeolocationPosition) => {
+        handleGpsPosition(pos.coords.longitude, pos.coords.latitude);
       });
       // 同じ位置情報エラーが連続で飛んでくる（watch がエラーを吐き続ける）ので、
       // トーストはコードが変わったとき or 15秒経過後にだけ出して連発を防ぐ。
@@ -3707,6 +3768,8 @@ export default function MapView() {
       geolocate.on('error', (err: GeolocationPositionError) => {
         const code = err?.code ?? 0;
         console.warn('geolocation error', { code, message: err?.message });
+        // 取得失敗＝掴んでいない。エラー種別を reason に乗せる（設定メニューに表示）。
+        markGpsOff(code === 1 ? 'denied' : code === 3 ? 'timeout' : 'unavailable');
         const now = Date.now();
         const repeat = code === lastGeoErrCode && now - lastGeoErrAt < 15000;
         lastGeoErrCode = code;
@@ -3777,9 +3840,44 @@ export default function MapView() {
         void requestWakeLock();
       });
       geolocate.on('trackuserlocationend', releaseWakeLock);
+      // 追跡を止めた（手動・自動とも）ら即 GPS OFF 表示に戻す。
+      geolocate.on('trackuserlocationend', markGpsOff);
+
+      // ── アプリ版のみ：バックグラウンドGPS追跡（@capgo/background-geolocation）──
+      // ブラウザ／PWA の watchPosition は画面OFF・アプリ裏で止まる（上の Wake Lock は
+      // 「画面を点けたままにする」緩和策）。ネイティブアプリ内ではフォアグラウンド
+      // サービスのプラグインが画面OFFでも現在地を流し続けるので、GPS追跡の開始/終了に
+      // 合わせて並走させ、届いた位置は実GPSと同じパイプライン（handleGpsPosition）へ流す。
+      // 前面では maplibre 自身の watch と二重に届くが、paintGpsAt がセル・細セル単位で
+      // 間引くので実害はない。Web 版・プラグイン未搭載の旧 APK では no-op。
+      if (isNativeBgGeoAvailable()) {
+        geolocate.on('trackuserlocationstart', () => {
+          void startNativeBgGeo({
+            backgroundTitle: tRef.current('bgGeoTitle'),
+            backgroundMessage: tRef.current('bgGeoMessage'),
+            // 125m細セルを取りこぼさない程度に間引く（歩き想定・電池節約）。
+            distanceFilter: 25,
+            onLocation: (lng, lat) => {
+              if (!cancelled) handleGpsPosition(lng, lat);
+            },
+            onError: (error) => {
+              // 権限拒否（NOT_AUTHORIZED）等。実GPS側の error ハンドラが別途トーストを
+              // 出すので、ここではバックグラウンド追跡を畳むだけにする。
+              if (error?.code === 'NOT_AUTHORIZED') void stopNativeBgGeo();
+            },
+          });
+        });
+        geolocate.on('trackuserlocationend', () => {
+          void stopNativeBgGeo();
+        });
+      }
+
       wakeCleanupRef.current = () => {
         document.removeEventListener('visibilitychange', onWakeVisibility);
         releaseWakeLock();
+        void stopNativeBgGeo(); // アプリ版のバックグラウンド追跡も後始末する
+        // GPS OFF 表示の途絶タイマーも止める（unmount 後の setState を防ぐ）。
+        if (gpsHeldTimer !== null) window.clearTimeout(gpsHeldTimer);
       };
 
       // ── デバッグ用：十字キーで現在地を「走る速さ」で連続移動して塗る ──────────────
@@ -4771,6 +4869,9 @@ export default function MapView() {
                     押した時点で表示し、閉じれば報酬（視聴完了は待たない）。フィルの有無は
                     video_reward ログの debug（renderIsEmpty・trail）に残る。 */}
               {(() => {
+                // Web 広告配信設定（全体＋個別・個別優先）で「広告で回復」が OFF の
+                // Web 版にはボタン自体を出さない（アプリ版は対象外）。
+                if (!isNativeApp() && !webRewardEnabled) return null;
                 const cooldownLeft =
                   rewardStatus?.nextAvailableAt != null
                     ? rewardStatus.nextAvailableAt - nowTick
@@ -4814,6 +4915,21 @@ export default function MapView() {
       {/* zoom 表示を右下に置く（設定の歯車はヘッダー右側に戻した）。
           優先度は最低（マップよりは上だが、ランキング・データ詳細などのパネルより下）。 */}
       <div className="absolute bottom-4 right-4 z-[5] flex flex-col items-end gap-2">
+        {/* GPS 状態インジケーター：常時表示。ON=緑 / OFF=灰色 */}
+        <div
+          className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 shadow text-[10px] font-semibold ${
+            gpsHeld
+              ? 'bg-white/90 text-emerald-600'
+              : 'bg-white/80 text-gray-500'
+          }`}
+        >
+          <span
+            className={`inline-block h-2 w-2 rounded-full ${
+              gpsHeld ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'
+            }`}
+          />
+          {gpsHeld ? 'GPS' : t('gpsOff')}
+        </div>
         <div className="bg-white rounded-lg px-3 py-2 shadow text-sm font-mono text-gray-600">
           zoom: <span ref={zoomLabelRef}>4.5</span>
         </div>

@@ -227,6 +227,11 @@ const ja: Dict = {
   geoTimeout: '位置情報の取得がタイムアウトしました',
   geoFailed: '位置情報を取得できませんでした',
   geoInsecure: '位置情報は https か localhost でしか使えません（IPアドレス等のhttp接続では取得できません）',
+  // GPS を掴んでいない（追跡停止中・位置が届いていない）ときの小さなインジケーター
+  gpsOff: 'GPS OFF',
+  // アプリ版バックグラウンドGPS追跡のフォアグラウンドサービス通知（Android）
+  bgGeoTitle: '現在地を記録中',
+  bgGeoMessage: '歩いた場所を塗るため、バックグラウンドでも現在地を取得しています',
 
   // Map: ホバー中の市区町村塗り％
   hoverStat: (city: string, pct: string, p: number, total: number) =>
@@ -450,6 +455,11 @@ const en: Dict = {
   geoTimeout: 'Getting your location timed out',
   geoFailed: 'Could not get your location',
   geoInsecure: 'Location works only over https or localhost (not over plain http such as an IP address)',
+  // small indicator shown while no GPS fix is held (tracking off / no position coming in)
+  gpsOff: 'GPS OFF',
+  // foreground-service notification for the app's background GPS tracking (Android)
+  bgGeoTitle: 'Tracking your location',
+  bgGeoMessage: 'Recording where you walk to paint the map, even in the background',
 
   // Map: hover municipality paint %
   hoverStat: (city: string, pct: string, p: number, total: number) =>

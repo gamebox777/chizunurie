@@ -24,6 +24,7 @@ import { isGpsAddressEnabled, setGpsAddressEnabled } from '@/lib/gpsAddress';
 import { getIconSize, setIconSize, type IconSize } from '@/lib/iconSize';
 import { hydrateSettings, pushSettings } from '@/lib/userSettings';
 import { isNativeApp, isPwa, nativeAppVersion } from '@/lib/platform';
+import { getGpsStatus, onGpsStatusChange, type GpsStatus } from '@/lib/gpsStatus';
 
 type Props = {
   // 現在のニックネーム（メニュー先頭に表示）
@@ -63,6 +64,9 @@ export default function SettingsMenu({ name, email, role, onEditNickname, onSign
   const [gpsAddressOn, setGpsAddressOn] = useState(true);
   // 右上の各種アイコンの大きさ（既定 小）。
   const [iconSize, setIconSizeState] = useState<IconSize>('small');
+  // GPS 状態（Map.tsx が setGpsStatus で書き込む・gpsStatus.ts の CustomEvent で受け取る）。
+  // OFF のとき reason の内容に応じてメニュー下部に原因を表示する。
+  const [gpsStatus, setGpsStatusState] = useState<GpsStatus>(() => getGpsStatus());
   // メニュー最下部に出す実行環境（アプリ版/PWA版/ブラウザ版）。SSR では判定できないので
   // マウント後に確定する（それまで null で行ごと非表示）。
   const [variant, setVariant] = useState<'app' | 'pwa' | 'browser' | null>(null);
@@ -86,6 +90,9 @@ export default function SettingsMenu({ name, email, role, onEditNickname, onSign
     // 実行環境とアプリ版バージョン（アプリ内のみ・非同期で後から埋まる）。
     setVariant(isNativeApp() ? 'app' : isPwa() ? 'pwa' : 'browser');
     nativeAppVersion().then(setAppVersion);
+    // GPS 状態の変更を購読する（Map.tsx が setGpsStatus() を呼ぶたびに更新）。
+    const unsub = onGpsStatusChange(setGpsStatusState);
+    return unsub;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const toggleSe = () => {
@@ -422,6 +429,26 @@ export default function SettingsMenu({ name, email, role, onEditNickname, onSign
               アプリ版はネイティブの versionName (versionCode)、全変種共通で Web の
               ビルド日時（next.config.ts が build 時に焼き込む NEXT_PUBLIC_BUILD_TIME）を出す。
               アプリ版はリモートURL方式で APK と Web の版が独立に上がるため両方併記する。 */}
+          {/* GPS がオフの場合、原因をメニュー下部に表示する（inactive=理由なし・単に停止中）。
+              denied/unavailable/timeout は対処が必要なケースなので原因を出す。 */}
+          {!gpsStatus.held && gpsStatus.reason !== 'inactive' && (
+            <div className="px-4 pt-2 pb-1.5 border-t border-gray-100 flex items-start gap-1.5">
+              <span className="mt-0.5 shrink-0 text-amber-500">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                  <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+              </span>
+              <p className="text-[11px] text-amber-700 leading-tight">
+                {gpsStatus.reason === 'denied'
+                  ? t('geoDenied')
+                  : gpsStatus.reason === 'timeout'
+                    ? t('geoTimeout')
+                    : t('geoFailed')}
+              </p>
+            </div>
+          )}
+
           {variant && (
             <p className="px-4 pt-2 pb-1.5 border-t border-gray-100 text-[11px] text-gray-400">
               {variant === 'app'

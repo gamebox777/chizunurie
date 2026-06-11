@@ -317,7 +317,21 @@ Next.js の rewrite（`frontend/next.config.ts`）経由でアクセスする：
 ゲーム進行のコアロジック。主要定数：初期10pt・**10分で1pt 回復（遅延回復＝読み取り時に
 `ensurePoints()` で経過時間から算出）**・レベルで最大pt増加（`10 + (level-1)`）・
 隣接塗り1pt／遠距離塗り10pt・GPS訪問は無料で +100XP・手動塗り +50XP・動画リワードは
-nonce で多重請求防止。`totalExp` は累積で減らない。
+nonce で多重請求防止。`totalExp` は累積で減らない。動画リワードの**クールダウン
+（Web 版のみ・既定5分）と回復量（full=満タン分／half=50%切り上げ／fixed=固定値）は
+`app_settings` の `videoReward` キー**で変更できる（管理画面の設定タブ・リクエストごとに
+読むので保存即・全ユーザーに反映）。アプリ版はクールダウン 0（Unity Ads のプリロード制御＋
+1日上限に任せる）。platform はクライアント自己申告（アプリは UA を Chrome に偽装している
+ため UA では判別できない）。
+
+**Web 広告配信の ON/OFF**：全体設定は `app_settings` の `webAds` キー
+（`autoEnabled`=自動広告／`rewardEnabled`=広告で回復・管理画面の設定タブ）、ユーザー個別の
+上書きは `user.ad_settings`（`{auto?, reward?}`・管理画面のユーザー一覧から編集・**個別＞全体**）。
+実効値の解決は `backend/src/lib/webAds.ts`、クライアントは `/user/me/ads`（未ログインは全体設定で
+応答）から取得して `AdSenseLoader`（自動広告の読み込み可否）と Map.tsx（回復ボタンの表示）に反映。
+OFF 時はサーバー側でも reward の nonce 発行・報酬請求を 403（`ads_disabled`）で拒否する。
+アプリ版（Unity Ads）は対象外。**「開発者アカウントには広告を出さない」特別扱いは廃止**
+（自分に広告を出したくなければ自分のユーザーの個別設定を OFF にする）。
 
 ### 塗りの永続化（`backend/src/routes/painted.ts`）
 
@@ -339,7 +353,8 @@ better-auth の `user`/`session`/`account`/`verification` に加えて：
 - **`site_visits`**：日次アクセス（`(date, visitor)` 複合PK・`visitor` は `u:`userId か `h:`ハッシュ）。
 - **`app_settings`**：ゲーム全体の共通設定（常に id=1 の1行・jsonb・開発者のみ編集）。
 - `user` には better-auth 標準列に加え `is_anonymous`（匿名ゲスト判定）・
-  `last_ip_address`/`last_user_agent`（最終アクセス情報）を持つ。
+  `last_ip_address`/`last_user_agent`（最終アクセス情報）・`ad_settings`（Web 広告配信の
+  個別上書き `{auto?, reward?}`・全体設定 `app_settings.webAds` より優先・開発者のみ編集）を持つ。
 
 マイグレーションは `backend/drizzle/*.sql`（**コミット対象**）。スキーマ変更時は
 `npm run db:generate` で SQL を生成 →（開発は）`npm run db:push` または `db:migrate` で適用。
@@ -376,4 +391,11 @@ better-auth の `user`/`session`/`account`/`verification` に加えて：
   だけ経由する Cookie 同期ホップ）＋ `overrideUserAgent`（"; wv" を消して disallowed_useragent
   拒否を回避）。これらを外すとアプリ内ログインが壊れる。
 - `geo.sh` でエミュに GPS 位置を注入（引数は「緯度 経度」順・内部で adb の「経度 緯度」順へ変換）。
+- **バックグラウンドGPS塗り（アプリ版のみ・Android）**：`@capgo/background-geolocation`
+  （mobile/ に npm 導入・フォアグラウンドサービス＋通知方式で `ACCESS_BACKGROUND_LOCATION`
+  不要＝Play 審査が軽い）。frontend 側は `lib/nativeBackgroundGeolocation.ts` が
+  `window.Capacitor.Plugins.BackgroundGeolocation` を呼び、Map.tsx が GPS 追跡の開始/終了
+  （`trackuserlocationstart`/`end`）に合わせて並走させる。届いた位置は実GPSと同じ
+  `handleGpsPosition` → `paintGpsAt` へ流れる（前面では watchPosition と二重に届くが、
+  セル・細セル単位の間引きで実害なし）。Web 版・旧 APK では no-op。iOS は未対応。
 - appId は `jp.chizunurie.app`・ストア素材は `mobile/play-store/`。

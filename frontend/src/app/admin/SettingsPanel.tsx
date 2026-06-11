@@ -5,10 +5,16 @@ import {
   fetchGameSettings,
   saveGameSettings,
   DEFAULT_RIPPLE,
+  DEFAULT_VIDEO_REWARD,
+  DEFAULT_WEB_ADS,
   resolveRipple,
+  resolveVideoReward,
+  resolveWebAds,
   rippleRgba,
   type ResolvedRipple,
   type ResolvedRippleMode,
+  type ResolvedVideoReward,
+  type ResolvedWebAds,
 } from '@/lib/gameSettings';
 
 // 塗りの波紋（paint-ripple）演出を調整する管理画面パネル（開発者専用）。
@@ -177,8 +183,180 @@ function ModeEditor({
   );
 }
 
+// Web 広告配信の全体 ON/OFF を編集するセクション。自動広告（AdSense スクリプト）と
+// 「広告で回復」（リワード）を別々に切り替えられる。全ユーザーに効くが、ユーザー個別の
+// 上書き（ユーザー管理タブから設定・個別＞全体）があるユーザーにはそちらが優先される。
+// アプリ版（Unity Ads）は対象外。
+function WebAdsEditor({
+  cfg,
+  onChange,
+}: {
+  cfg: ResolvedWebAds;
+  onChange: (next: ResolvedWebAds) => void;
+}) {
+  const ITEMS: {
+    key: keyof ResolvedWebAds;
+    label: string;
+    desc: string;
+  }[] = [
+    {
+      key: 'autoEnabled',
+      label: '自動広告（AdSense）',
+      desc: 'ページ内の自動広告。OFF にすると adsbygoogle.js 自体を読み込みません。',
+    },
+    {
+      key: 'rewardEnabled',
+      label: '広告で回復（リワード）',
+      desc: 'Web 版の「広告を見て回復」ボタン。OFF にするとボタンを表示せず、サーバーでも報酬請求を拒否します。',
+    },
+  ];
+
+  return (
+    <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <h3 className="text-sm font-semibold text-gray-700">Web 広告配信（全ユーザー）</h3>
+      <p className="mt-1 text-xs text-gray-400">
+        Web 版の広告配信の全体スイッチです（アプリ版の Unity Ads は対象外）。ユーザー個別の
+        上書き設定（ユーザー管理タブ）がある場合はそちらが優先されます。反映は各端末の
+        次回読み込み時から。
+      </p>
+
+      <div className="mt-5 space-y-4">
+        {ITEMS.map((item) => (
+          <label key={item.key} className="flex cursor-pointer items-start gap-3">
+            <input
+              type="checkbox"
+              checked={cfg[item.key]}
+              onChange={(e) => onChange({ ...cfg, [item.key]: e.target.checked })}
+              className="mt-0.5 h-4 w-4 accent-blue-500"
+            />
+            <span>
+              <span className="text-sm text-gray-700">
+                {item.label}
+                <span
+                  className={`ml-2 rounded px-1.5 py-0.5 text-xs font-bold ${
+                    cfg[item.key]
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : 'bg-red-100 text-red-700'
+                  }`}
+                >
+                  {cfg[item.key] ? '配信中' : '停止中'}
+                </span>
+              </span>
+              <span className="block text-xs text-gray-400">{item.desc}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// 動画リワード（広告を見て回復）の運用設定を編集するセクション。
+// クールダウンは Web 版のみに効く（アプリは Unity Ads のプリロード制御＋1日上限に任せる）。
+// 回復量はプラットフォーム共通。保存すると即・全ユーザーに反映される（backend が
+// リワード系リクエストのたびに app_settings を読み直す）。
+function VideoRewardEditor({
+  cfg,
+  onChange,
+}: {
+  cfg: ResolvedVideoReward;
+  onChange: (next: ResolvedVideoReward) => void;
+}) {
+  const AMOUNT_MODES: {
+    key: ResolvedVideoReward['amountMode'];
+    label: string;
+    desc: string;
+  }[] = [
+    { key: 'full', label: 'フル回復（満タン分）', desc: 'そのレベルの最大塗りポイントと同量を加算（従来挙動）。' },
+    { key: 'half', label: '50%（満タンの半分）', desc: '最大塗りポイントの半分（切り上げ）を加算。' },
+    { key: 'fixed', label: '固定値', desc: 'レベルに関係なく、下で指定したポイントを加算。' },
+  ];
+
+  return (
+    <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <h3 className="text-sm font-semibold text-gray-700">動画リワード（広告を見て回復）</h3>
+      <p className="mt-1 text-xs text-gray-400">
+        クールタイムは Web 版のみに効きます（アプリ版は広告在庫のプリロードと1日上限で抑制）。
+        回復量は Web・アプリ共通。保存すると全ユーザーに即反映されます。
+      </p>
+
+      <div className="mt-5 space-y-5">
+        {/* クールタイム（Web のみ） */}
+        <div>
+          <div className="flex items-baseline justify-between">
+            <label className="text-sm font-medium text-gray-700">クールタイム（Web 版・秒）</label>
+            <span className="font-mono text-sm text-gray-700">
+              {cfg.cooldownWebSec} 秒（{(cfg.cooldownWebSec / 60).toFixed(1)} 分）
+            </span>
+          </div>
+          <input
+            type="number"
+            min={0}
+            step={10}
+            value={cfg.cooldownWebSec}
+            onChange={(e) =>
+              onChange({
+                ...cfg,
+                cooldownWebSec: Math.max(0, Math.floor(Number(e.target.value) || 0)),
+              })
+            }
+            className="mt-2 w-40 rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+          />
+          <p className="mt-1 text-xs text-gray-400">
+            広告を見てから次に見られるまでの待ち時間。0 でクールタイムなし。既定 300（5分）。
+          </p>
+        </div>
+
+        {/* 回復量 */}
+        <div>
+          <label className="text-sm font-medium text-gray-700">回復量</label>
+          <div className="mt-2 space-y-2">
+            {AMOUNT_MODES.map((m) => (
+              <label key={m.key} className="flex cursor-pointer items-start gap-2">
+                <input
+                  type="radio"
+                  name="videoRewardAmountMode"
+                  checked={cfg.amountMode === m.key}
+                  onChange={() => onChange({ ...cfg, amountMode: m.key })}
+                  className="mt-0.5 accent-blue-500"
+                />
+                <span>
+                  <span className="text-sm text-gray-700">{m.label}</span>
+                  <span className="block text-xs text-gray-400">{m.desc}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          {cfg.amountMode === 'fixed' && (
+            <div className="mt-3 flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={cfg.fixedAmount}
+                onChange={(e) =>
+                  onChange({
+                    ...cfg,
+                    fixedAmount: Math.max(1, Math.floor(Number(e.target.value) || 1)),
+                  })
+                }
+                className="w-28 rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+              />
+              <span className="text-sm text-gray-600">ポイント</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function SettingsPanel() {
   const [cfg, setCfg] = useState<ResolvedRipple>(() => resolveRipple(undefined));
+  const [videoReward, setVideoReward] = useState<ResolvedVideoReward>(() =>
+    resolveVideoReward(undefined)
+  );
+  const [webAds, setWebAds] = useState<ResolvedWebAds>(() => resolveWebAds(undefined));
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -186,7 +364,11 @@ export default function SettingsPanel() {
 
   useEffect(() => {
     fetchGameSettings()
-      .then((s) => setCfg(resolveRipple(s.ripple)))
+      .then((s) => {
+        setCfg(resolveRipple(s.ripple));
+        setVideoReward(resolveVideoReward(s.videoReward));
+        setWebAds(resolveWebAds(s.webAds));
+      })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
@@ -195,8 +377,8 @@ export default function SettingsPanel() {
     setSaving(true);
     setError('');
     try {
-      // ripple キーだけ送る（サーバーが既存設定に浅くマージするので移動スピード等は消えない）。
-      await saveGameSettings({ ripple: cfg });
+      // このパネルが扱うキーだけ送る（サーバーが既存設定に浅くマージするので移動スピード等は消えない）。
+      await saveGameSettings({ ripple: cfg, videoReward, webAds });
       setSavedAt(Date.now());
     } catch (e) {
       setError((e as Error).message);
@@ -210,9 +392,19 @@ export default function SettingsPanel() {
   return (
     <div className="max-w-4xl space-y-6">
       <p className="text-xs text-gray-400">
-        マスを塗った瞬間に広がる波紋の見た目を、隣塗り／GPS塗りそれぞれ調整します。保存すると
-        全ユーザーに反映されます（各端末は次回読み込み時に取得）。
+        ゲーム全体に効く共通設定です。保存すると全ユーザーに反映されます
+        （波紋は各端末の次回読み込み時・動画リワードは次のリクエストから）。
       </p>
+
+      <WebAdsEditor cfg={webAds} onChange={(next) => {
+        setWebAds(next);
+        setSavedAt(null);
+      }} />
+
+      <VideoRewardEditor cfg={videoReward} onChange={(next) => {
+        setVideoReward(next);
+        setSavedAt(null);
+      }} />
 
       {MODES.map((m) => (
         <ModeEditor
@@ -238,6 +430,8 @@ export default function SettingsPanel() {
         <button
           onClick={() => {
             setCfg({ manual: { ...DEFAULT_RIPPLE.manual }, gps: { ...DEFAULT_RIPPLE.gps } });
+            setVideoReward({ ...DEFAULT_VIDEO_REWARD });
+            setWebAds({ ...DEFAULT_WEB_ADS });
             setSavedAt(null);
           }}
           className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"

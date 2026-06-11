@@ -41,6 +41,7 @@ adminRouter.get("/users", async (c) => {
       country: user.country,
       lastIpAddress: user.lastIpAddress,
       lastUserAgent: user.lastUserAgent,
+      adSettings: user.adSettings,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
     })
@@ -75,6 +76,7 @@ adminRouter.get("/users", async (c) => {
       country: u.country,
       lastIpAddress: u.lastIpAddress,
       lastUserAgent: u.lastUserAgent,
+      adSettings: u.adSettings ?? {},
       createdAt: u.createdAt,
       updatedAt: u.updatedAt,
       painted: { total, gps, manual: total - gps },
@@ -195,6 +197,46 @@ adminRouter.post("/users/:id/role", async (c) => {
   if (updated.length === 0) return c.json({ error: "not found" }, 404);
 
   return c.json({ ok: true, id, role });
+});
+
+// ユーザー個別の Web 広告配信の上書き設定（user.ad_settings）を更新する。
+// body: { auto?: boolean | null, reward?: boolean | null }
+//   true/false … 全体設定を上書きして強制 ON / OFF
+//   null       … 上書きを解除して全体設定（app_settings.webAds）に従う
+//   undefined（キー無し）… その項目は変更しない
+adminRouter.post("/users/:id/ads", async (c) => {
+  const guard = await requireDeveloper(c);
+  if (guard) return guard;
+
+  const id = c.req.param("id");
+  const body = (await c.req.json().catch(() => null)) as
+    | { auto?: unknown; reward?: unknown }
+    | null;
+  if (!body) return c.json({ error: "bad request" }, 400);
+
+  const rows = await db
+    .select({ adSettings: user.adSettings })
+    .from(user)
+    .where(eq(user.id, id));
+  if (rows.length === 0) return c.json({ error: "not found" }, 404);
+
+  const next = { ...((rows[0].adSettings ?? {}) as Record<string, unknown>) };
+  let touched = false;
+  for (const key of ["auto", "reward"] as const) {
+    const raw = body[key];
+    if (raw === undefined) continue;
+    if (raw === null) delete next[key]; // 上書き解除＝全体設定に従う
+    else if (typeof raw === "boolean") next[key] = raw;
+    else return c.json({ error: "bad request" }, 400);
+    touched = true;
+  }
+  if (!touched) return c.json({ error: "bad request" }, 400);
+
+  await db
+    .update(user)
+    .set({ adSettings: next, updatedAt: new Date() })
+    .where(eq(user.id, id));
+  return c.json({ ok: true, id, adSettings: next });
 });
 
 // ポイント / レベル / 経験値を任意の値にセットする（指定したフィールドのみ更新）。

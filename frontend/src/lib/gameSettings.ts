@@ -64,12 +64,81 @@ export function resolveRipple(s: RippleSettings | undefined): ResolvedRipple {
   };
 }
 
+// 動画リワード（広告を見て回復）の運用設定。backend（points.ts の getVideoRewardConfig）が
+// リワード系リクエストのたびに読むので、保存すると即・全ユーザーに効く。
+export type VideoRewardSettings = {
+  cooldownWebSec?: number; // Web 版のみの視聴クールダウン（秒）。アプリ（Unity Ads）は常に 0
+  amountMode?: 'full' | 'half' | 'fixed'; // 回復量：満タン分／満タンの50%（切り上げ）／固定値
+  fixedAmount?: number; // amountMode='fixed' のときの回復ポイント
+};
+
+export type ResolvedVideoReward = Required<VideoRewardSettings>;
+
+// 動画リワードの既定値。backend（points.ts の VIDEO_REWARD_DEFAULTS）と揃えること。
+export const DEFAULT_VIDEO_REWARD: ResolvedVideoReward = {
+  cooldownWebSec: 300, // 5分
+  amountMode: 'full',
+  fixedAmount: 10,
+};
+
+// サーバー設定（部分的＝未設定キーあり）を既定値で埋めて確定値にする。
+export function resolveVideoReward(
+  s: VideoRewardSettings | undefined
+): ResolvedVideoReward {
+  return {
+    cooldownWebSec:
+      typeof s?.cooldownWebSec === 'number' && s.cooldownWebSec >= 0
+        ? Math.floor(s.cooldownWebSec)
+        : DEFAULT_VIDEO_REWARD.cooldownWebSec,
+    amountMode:
+      s?.amountMode === 'full' || s?.amountMode === 'half' || s?.amountMode === 'fixed'
+        ? s.amountMode
+        : DEFAULT_VIDEO_REWARD.amountMode,
+    fixedAmount:
+      typeof s?.fixedAmount === 'number' && s.fixedAmount >= 1
+        ? Math.floor(s.fixedAmount)
+        : DEFAULT_VIDEO_REWARD.fixedAmount,
+  };
+}
+
+// Web 広告配信（AdSense）の全体 ON/OFF。autoEnabled=自動広告（adsbygoogle.js の読み込み）、
+// rewardEnabled=「広告を見て回復」（Web 版のディスプレイ広告リワード）。アプリ版（Unity Ads）は
+// 対象外。ユーザー個別の上書き（user.ad_settings・管理画面のユーザー一覧から編集）があれば
+// そちらが優先される。実効値の解決はサーバー（/api/backend/user/me/ads）が行う。
+export type WebAdsSettings = {
+  autoEnabled?: boolean; // 自動広告を配信するか（既定 true）
+  rewardEnabled?: boolean; // 「広告を見て回復」を有効にするか（既定 true）
+};
+
+export type ResolvedWebAds = Required<WebAdsSettings>;
+
+// Web 広告の既定値（未設定・取得失敗時は従来どおり両方 ON）。
+// backend（lib/webAds.ts の WEB_ADS_DEFAULTS）と揃えること。
+export const DEFAULT_WEB_ADS: ResolvedWebAds = {
+  autoEnabled: true,
+  rewardEnabled: true,
+};
+
+// サーバー設定（部分的＝未設定キーあり）を既定値で埋めて確定値にする。
+export function resolveWebAds(s: WebAdsSettings | undefined): ResolvedWebAds {
+  return {
+    autoEnabled:
+      typeof s?.autoEnabled === 'boolean' ? s.autoEnabled : DEFAULT_WEB_ADS.autoEnabled,
+    rewardEnabled:
+      typeof s?.rewardEnabled === 'boolean'
+        ? s.rewardEnabled
+        : DEFAULT_WEB_ADS.rewardEnabled,
+  };
+}
+
 // ゲーム共通設定（十字キー移動スピード・波紋演出など）。項目が増えてもここに1キー足すだけ。
 // DB はスキーマ変更不要（jsonb に丸ごと入る）。
 export type GameSettings = {
   moveSpeed?: number; // デバッグ十字キー移動：通常移動 m/s
   sprintSpeed?: number; // デバッグ十字キー移動：Shift（加速）時 m/s
   ripple?: RippleSettings; // 塗りの波紋演出（全ユーザーに効く）
+  videoReward?: VideoRewardSettings; // 動画リワードのクールダウン・回復量（全ユーザーに効く）
+  webAds?: WebAdsSettings; // Web 広告配信の全体 ON/OFF（個別上書きは user.ad_settings）
 };
 
 // サーバーに保存されたゲーム共通設定を取得する。開発者でなければ／失敗時は空オブジェクト。

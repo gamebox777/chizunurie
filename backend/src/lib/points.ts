@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { user, userPoints } from "../db/schema.js";
+import { appSettings, user, userPoints } from "../db/schema.js";
 
 // ── 塗りポイントの調整パラメータ（今後バランス調整予定） ──────────────
 export const INITIAL_POINTS = 10; // 登録時（初回）に付与される残高
@@ -48,13 +48,67 @@ export function expToNext(level: number): number {
 export const MAX_HEARTBEAT_DELTA_SEC = 120;
 
 // ── 動画リワード（動画視聴で塗りポイントを回復） ──────────────────────
-// 動画を1本見ると「そのレベルの満タン分（= maxPointsForLevel(level)）」を残高に加算する。
-// 自然回復（REGEN_INTERVAL_MS で 1pt）と同等量を一気に得られる位置づけ。
+// 動画を1本見ると回復量設定（amountMode）に応じたポイントを残高に加算する。
 // 不正・乱用対策として「クールダウン」と「1日の上限回数」を併用する。
-// クールダウンは廃止（0）：連続視聴の抑制は「広告在庫のプリロード完了までボタンを
-// 非活性にする」クライアント側の制御（nativeAdReady）と1日上限に任せる。
-export const VIDEO_REWARD_COOLDOWN_MS = 0;
+//
+// クールダウンと回復量は app_settings（jsonb の videoReward キー・管理画面で編集）で
+// ゲーム全体に対して変更できる。クールダウンは Web（GPT/AdSense オーバーレイ）のみに
+// 適用し、アプリ（Unity Ads）は従来どおり 0（連続視聴の抑制は広告在庫のプリロード完了
+// までボタンを非活性にするクライアント側の制御 nativeAdReady と1日上限に任せる）。
 export const VIDEO_REWARD_MAX_PER_DAY = 100; // 1日（JST）に受け取れる上限回数
+
+// リワード請求の出どころ。Web のみクールダウンを適用する（クライアントが自己申告で送る。
+// 偽装は可能だが nonce と同レベルの「直接POST乱用への歯止め」という位置づけ）。
+export type VideoRewardPlatform = "web" | "app";
+
+// 回復量の決め方：full=そのレベルの満タン分／half=満タンの半分（切り上げ）／fixed=固定値。
+export type VideoRewardAmountMode = "full" | "half" | "fixed";
+
+export type VideoRewardConfig = {
+  cooldownWebMs: number; // Web の視聴クールダウン（アプリは常に 0）
+  amountMode: VideoRewardAmountMode;
+  fixedAmount: number; // amountMode="fixed" のときの回復ポイント
+};
+
+// app_settings 未設定時の既定値：Web は5分クールダウン・回復量は満タン分（従来挙動）。
+export const VIDEO_REWARD_DEFAULTS: VideoRewardConfig = {
+  cooldownWebMs: 5 * 60 * 1000,
+  amountMode: "full",
+  fixedAmount: 10,
+};
+
+// app_settings（単一行 id=1 の jsonb）の videoReward キーから設定を読む。
+// 管理画面の保存が即・全ユーザーに効くよう、リワード系のリクエストごとに読み直す
+// （リワードはユーザー操作起点で頻度が低いので SELECT 1回の追加は許容）。
+export async function getVideoRewardConfig(
+  tx: DbExecutor = db
+): Promise<VideoRewardConfig> {
+  const rows = await tx
+    .select({ settings: appSettings.settings })
+    .from(appSettings)
+    .where(eq(appSettings.id, 1));
+  const raw = (rows[0]?.settings as Record<string, unknown> | undefined)
+    ?.videoReward as
+    | { cooldownWebSec?: unknown; amountMode?: unknown; fixedAmount?: unknown }
+    | undefined;
+  const cooldownSec = Number(raw?.cooldownWebSec);
+  const fixed = Number(raw?.fixedAmount);
+  const mode = raw?.amountMode;
+  return {
+    cooldownWebMs:
+      Number.isFinite(cooldownSec) && cooldownSec >= 0
+        ? Math.floor(cooldownSec) * 1000
+        : VIDEO_REWARD_DEFAULTS.cooldownWebMs,
+    amountMode:
+      mode === "full" || mode === "half" || mode === "fixed"
+        ? mode
+        : VIDEO_REWARD_DEFAULTS.amountMode,
+    fixedAmount:
+      Number.isFinite(fixed) && fixed >= 1
+        ? Math.floor(fixed)
+        : VIDEO_REWARD_DEFAULTS.fixedAmount,
+  };
+}
 // 視聴開始時に発行する nonce の有効期間。広告の表示〜視聴完了に十分な余裕を持たせる。
 export const VIDEO_REWARD_NONCE_TTL_MS = 10 * 60 * 1000;
 
@@ -378,11 +432,13 @@ export type VideoRewardNonceResult =
   | { ok: false; reason: "cooldown" | "daily_limit"; status: VideoRewardStatus };
 
 // 行の動画リワードメタ（受領時刻・当日回数）から現在の利用可否を組み立てる。
+// cooldownMs はプラットフォームに応じて呼び出し側が決める（Web=設定値／アプリ=0）。
 function buildVideoRewardStatus(
   now: number,
   lastVideoRewardAt: Date | null,
   videoRewardCount: number,
-  videoRewardDay: string | null
+  videoRewardDay: string | null,
+  cooldownMs: number
 ): VideoRewardStatus {
   const today = jstDayString(now);
   // 当日ぶんの回数（日付が変わっていたら 0 とみなす）
@@ -390,20 +446,26 @@ function buildVideoRewardStatus(
   const remainingToday = Math.max(0, VIDEO_REWARD_MAX_PER_DAY - countToday);
 
   const cooldownUntil =
-    lastVideoRewardAt === null
-      ? 0
-      : lastVideoRewardAt.getTime() + VIDEO_REWARD_COOLDOWN_MS;
+    lastVideoRewardAt === null ? 0 : lastVideoRewardAt.getTime() + cooldownMs;
   const inCooldown = now < cooldownUntil;
   const reachedDailyLimit = remainingToday <= 0;
 
   return {
     maxPerDay: VIDEO_REWARD_MAX_PER_DAY,
     remainingToday,
-    cooldownMs: VIDEO_REWARD_COOLDOWN_MS,
+    cooldownMs,
     nextAvailableAt: inCooldown ? cooldownUntil : null,
     resetAt: reachedDailyLimit ? jstNextMidnight(now) : null,
     available: !inCooldown && !reachedDailyLimit,
   };
+}
+
+// プラットフォームに応じて適用するクールダウン長を返す（Web のみ・アプリは 0）。
+function cooldownMsFor(
+  platform: VideoRewardPlatform,
+  cfg: VideoRewardConfig
+): number {
+  return platform === "app" ? 0 : cfg.cooldownWebMs;
 }
 
 // userPoints 行の動画リワード列だけを読む（無ければ null）。
@@ -435,9 +497,10 @@ async function selectRewardMeta(
 export async function issueVideoRewardNonce(
   userId: string,
   now: number,
+  platform: VideoRewardPlatform,
   tx: DbExecutor = db
 ): Promise<VideoRewardNonceResult> {
-  const status = await getVideoRewardStatus(userId, now, tx);
+  const status = await getVideoRewardStatus(userId, now, platform, tx);
   if (status.nextAvailableAt !== null) {
     return { ok: false, reason: "cooldown", status };
   }
@@ -456,29 +519,34 @@ export async function issueVideoRewardNonce(
 export async function getVideoRewardStatus(
   userId: string,
   now: number,
+  platform: VideoRewardPlatform,
   tx: DbExecutor = db
 ): Promise<VideoRewardStatus> {
   await ensurePoints(userId, now, tx); // 行を作成＋回復を確定
   const meta = await selectRewardMeta(userId, tx);
+  const cfg = await getVideoRewardConfig(tx);
   return buildVideoRewardStatus(
     now,
     meta?.lastVideoRewardAt ?? null,
     meta?.videoRewardCount ?? 0,
-    meta?.videoRewardDay ?? null
+    meta?.videoRewardDay ?? null,
+    cooldownMsFor(platform, cfg)
   );
 }
 
-// 動画視聴の報酬を受け取る。「そのレベルの満タン分」を残高に加算する。
+// 動画視聴の報酬を受け取る。回復量設定（amountMode）に応じたポイントを残高に加算する。
 // クールダウン中・1日上限到達なら ok:false を返して付与しない。
-// 付与後は残高が満タン以上になるため回復時計は now にそろえる（addExp の満タン時と同様）。
 export async function claimVideoReward(
   userId: string,
   now: number,
   nonce: string | null,
+  platform: VideoRewardPlatform,
   tx: DbExecutor = db
 ): Promise<VideoRewardResult> {
   const state = await ensurePoints(userId, now, tx); // 行を作成＋回復を確定
   const meta = await selectRewardMeta(userId, tx);
+  const cfg = await getVideoRewardConfig(tx);
+  const cooldownMs = cooldownMsFor(platform, cfg);
   const lastVideoRewardAt = meta?.lastVideoRewardAt ?? null;
   const today = jstDayString(now);
   const countToday =
@@ -488,7 +556,8 @@ export async function claimVideoReward(
     now,
     lastVideoRewardAt,
     meta?.videoRewardCount ?? 0,
-    meta?.videoRewardDay ?? null
+    meta?.videoRewardDay ?? null,
+    cooldownMs
   );
 
   // 上限・クールダウンのチェック（クールダウンを先に見て理由を明確にする）
@@ -511,10 +580,26 @@ export async function claimVideoReward(
     return { ok: false, reason: "invalid_nonce", status };
   }
 
-  // 付与：そのレベルの満タン分（= 自然回復の上限と同量）を加算する。
-  const granted = maxPointsForLevel(state.level);
-  const nextPoints = state.points + granted; // 必ず max 以上になる（満タン扱い）
-  const updatedAt = new Date(now); // 満タン以上なので回復時計を now にそろえる
+  // 付与：回復量設定に応じて加算する。
+  //   full  = そのレベルの満タン分（= 自然回復の上限と同量・従来挙動）
+  //   half  = 満タンの半分（切り上げ）
+  //   fixed = 固定値
+  const max = maxPointsForLevel(state.level);
+  const granted =
+    cfg.amountMode === "fixed"
+      ? cfg.fixedAmount
+      : cfg.amountMode === "half"
+        ? Math.ceil(max / 2)
+        : max;
+  const nextPoints = state.points + granted;
+  // 満タン以上になったら回復時計を now にそろえる（addExp の満タン時と同様）。
+  // 満タン未満（half/fixed で少量回復）の場合は進行中の回復アンカーを保つ。
+  const updatedAt =
+    nextPoints >= max
+      ? new Date(now)
+      : new Date(
+          state.regenAt === null ? now : state.regenAt - REGEN_INTERVAL_MS
+        );
 
   const nextCount = countToday + 1;
   await tx
@@ -522,7 +607,9 @@ export async function claimVideoReward(
     .set({
       points: nextPoints,
       updatedAt,
-      lastVideoRewardAt: updatedAt,
+      // 受領時刻（クールダウンの起点）は常に now。updatedAt は回復時計のアンカーなので
+      // 満タン未満の回復では now にならないことがある（上の分岐参照）。
+      lastVideoRewardAt: new Date(now),
       videoRewardCount: nextCount,
       videoRewardDay: today,
       // 使った nonce は消す（単回使用＝同じ視聴で二重に受け取れない）。
@@ -540,6 +627,12 @@ export async function claimVideoReward(
     state.totalExp
   );
   // 付与後の利用可否を計算し直して返す（クールダウン開始・残回数を反映）
-  const nextStatus = buildVideoRewardStatus(now, updatedAt, nextCount, today);
+  const nextStatus = buildVideoRewardStatus(
+    now,
+    new Date(now), // lastVideoRewardAt は now で更新した（updatedAt は回復時計用で別物）
+    nextCount,
+    today,
+    cooldownMs
+  );
   return { ok: true, state: nextState, granted, status: nextStatus };
 }

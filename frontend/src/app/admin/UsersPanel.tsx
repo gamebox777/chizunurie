@@ -7,6 +7,7 @@ import {
   fetchUsers,
   setPoints,
   setRole,
+  setUserAds,
   type AdminUser,
 } from './api';
 import UserFilter from './UserFilter';
@@ -44,7 +45,25 @@ function formatPlayTime(sec: number): string {
   return parts.join('');
 }
 
-// 1ユーザー分の行。権限変更・ポイント編集・塗り全削除を担う。
+// ユーザー個別の Web 広告上書き設定の選択値（select の値）。
+// 'default'=全体設定に従う（上書きなし）/ 'on'=強制 ON / 'off'=強制 OFF。
+type AdOverrideSel = 'default' | 'on' | 'off';
+
+function toAdSel(v: boolean | undefined): AdOverrideSel {
+  return v === undefined ? 'default' : v ? 'on' : 'off';
+}
+
+// 一覧セル用の短い表示。上書きなしは「既定」、上書きありは ON/OFF を色付きで出す。
+function AdOverrideBadge({ value }: { value: boolean | undefined }) {
+  if (value === undefined) return <span className="text-gray-400">既定</span>;
+  return value ? (
+    <span className="font-semibold text-emerald-600">ON</span>
+  ) : (
+    <span className="font-semibold text-red-600">OFF</span>
+  );
+}
+
+// 1ユーザー分の行。権限変更・ポイント編集・広告設定・塗り全削除を担う。
 function UserRow({
   u,
   onChanged,
@@ -62,6 +81,11 @@ function UserRow({
   const [, bumpTick] = useState(0);
   const [points, setPointsField] = useState(String(u.points?.points ?? 0));
   const [level, setLevel] = useState(String(u.points?.level ?? 1));
+  // Web 広告の個別上書き（個別＞全体）。'default' は上書きなし＝全体設定に従う。
+  const [adAuto, setAdAuto] = useState<AdOverrideSel>(() => toAdSel(u.adSettings?.auto));
+  const [adReward, setAdReward] = useState<AdOverrideSel>(() =>
+    toAdSel(u.adSettings?.reward)
+  );
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -92,6 +116,16 @@ function UserRow({
       await setPoints(u.id, {
         points: Number(points),
         level: Number(level),
+      });
+      setEditing(false);
+    });
+
+  // Web 広告の個別上書きを保存する。'default' は null（上書き解除＝全体設定に従う）として送る。
+  const saveAds = () =>
+    run(async () => {
+      await setUserAds(u.id, {
+        auto: adAuto === 'default' ? null : adAuto === 'on',
+        reward: adReward === 'default' ? null : adReward === 'on',
       });
       setEditing(false);
     });
@@ -134,6 +168,15 @@ function UserRow({
         <td className="px-3 py-2 text-xs text-gray-600 whitespace-nowrap">
           {u.country ?? '-'}
         </td>
+        {/* Web 広告の個別上書き（自動広告 / 広告で回復）。「既定」は全体設定に従う。 */}
+        <td className="px-3 py-2 text-xs whitespace-nowrap">
+          <div>
+            自動: <AdOverrideBadge value={u.adSettings?.auto} />
+          </div>
+          <div>
+            回復: <AdOverrideBadge value={u.adSettings?.reward} />
+          </div>
+        </td>
         <td className="px-3 py-2 text-right tabular-nums">{u.points?.level ?? '-'}</td>
         <td className="px-3 py-2 text-right tabular-nums">{u.points?.points ?? '-'}</td>
         <td className="px-3 py-2 text-right tabular-nums">
@@ -163,7 +206,7 @@ function UserRow({
             onClick={() => setEditing((v) => !v)}
             className="rounded px-2 py-1 text-sm text-blue-600 hover:bg-blue-50 disabled:opacity-50"
           >
-            {editing ? '閉じる' : 'ポイント編集'}
+            {editing ? '閉じる' : '編集'}
           </button>
           <button
             disabled={busy}
@@ -176,7 +219,7 @@ function UserRow({
       </tr>
       {editing && (
         <tr className="border-t border-gray-100 bg-blue-50/40">
-          <td colSpan={13} className="px-3 py-3">
+          <td colSpan={14} className="px-3 py-3">
             <div className="flex flex-wrap items-end gap-3">
               <label className="text-xs text-gray-600">
                 ポイント
@@ -204,6 +247,39 @@ function UserRow({
                 className="rounded-lg bg-blue-500 px-4 py-1.5 text-sm text-white hover:bg-blue-600 disabled:opacity-50"
               >
                 保存
+              </button>
+              {/* Web 広告の個別上書き（個別＞全体）。「既定」にすると全体設定に従う。 */}
+              <span className="mx-2 hidden h-9 w-px bg-gray-200 sm:block" />
+              <label className="text-xs text-gray-600">
+                自動広告
+                <select
+                  value={adAuto}
+                  onChange={(e) => setAdAuto(e.target.value as AdOverrideSel)}
+                  className="mt-1 block rounded border border-gray-300 bg-white px-2 py-1 text-sm"
+                >
+                  <option value="default">既定（全体設定に従う）</option>
+                  <option value="on">ON（強制配信）</option>
+                  <option value="off">OFF（強制停止）</option>
+                </select>
+              </label>
+              <label className="text-xs text-gray-600">
+                広告で回復
+                <select
+                  value={adReward}
+                  onChange={(e) => setAdReward(e.target.value as AdOverrideSel)}
+                  className="mt-1 block rounded border border-gray-300 bg-white px-2 py-1 text-sm"
+                >
+                  <option value="default">既定（全体設定に従う）</option>
+                  <option value="on">ON（強制配信）</option>
+                  <option value="off">OFF（強制停止）</option>
+                </select>
+              </label>
+              <button
+                disabled={busy}
+                onClick={saveAds}
+                className="rounded-lg bg-blue-500 px-4 py-1.5 text-sm text-white hover:bg-blue-600 disabled:opacity-50"
+              >
+                広告設定を保存
               </button>
             </div>
           </td>
@@ -391,6 +467,7 @@ export default function UsersPanel() {
               <th className="px-3 py-2 font-medium">ユーザー</th>
               <th className="px-3 py-2 font-medium">権限</th>
               <th className="px-3 py-2 font-medium">国</th>
+              <th className="px-3 py-2 font-medium">広告</th>
               <th className="px-3 py-2 text-right font-medium">Lv</th>
               <th className="px-3 py-2 text-right font-medium">ポイント</th>
               <th className="px-3 py-2 text-right font-medium">塗り</th>
@@ -414,7 +491,7 @@ export default function UsersPanel() {
             ))}
             {total === 0 && (
               <tr>
-                <td colSpan={13} className="px-3 py-6 text-center text-gray-400">
+                <td colSpan={14} className="px-3 py-6 text-center text-gray-400">
                   ユーザーがいません
                 </td>
               </tr>

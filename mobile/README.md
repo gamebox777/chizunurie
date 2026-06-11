@@ -157,8 +157,10 @@ bash geo.sh 34.6873 135.5259   # 例：大阪城
 - **リワードはプリロード制**：プラグインがアプリ起動時から1本ロードしておき、在庫の有無を
   `getRewardedStatus()` と `rewardedStatus` イベント（`notifyListeners`）で frontend へ通知。
   `Map.tsx` は在庫が準備できるまで「広告を見て回復」ボタンを非活性（「広告を準備中…」）にする。
-  視聴・失敗のたびに次の1本を自動ロード、在庫なしは30秒おきに再試行。これに伴い backend の
-  視聴クールダウン（旧1分・`VIDEO_REWARD_COOLDOWN_MS`）は 0 にした（1日上限は維持）。
+  視聴・失敗のたびに次の1本を自動ロード、在庫なしは30秒おきに再試行。backend の視聴
+  クールダウンは **Web 版のみ**適用（既定5分・`app_settings` の `videoReward` キーで
+  管理画面から変更可）。アプリは 0 のまま＝このプリロード制御と1日上限に任せる
+  （platform はクライアント自己申告で送る）。
 - **フッターバナー**：`showBanner()` が 320x50 の `BannerView` を画面下中央に表示し、
   **WebView を bottomMargin で持ち上げて場所を確保**（Web 側の CSS 調整不要）。フロントは
   `frontend/src/lib/nativeBannerAd.ts` ＋ `Map.tsx` がアプリ内のみマウント時に自動表示。
@@ -175,3 +177,22 @@ bash geo.sh 34.6873 135.5259   # 例：大阪城
   本広告で在庫が来ない（本番 Game ID 6133603 の「Network error」等）の切り分けに使う。
   「バナー表示を再試行」ボタン付き。取得ついでに止まっていたプリロードも再起動する。
 - Game ID `6133603`（Android）・Placement `Rewarded_Android` は UnityAdsPlugin.java に定数で記載。
+
+## バックグラウンドGPS塗り（Android）
+
+アプリ版のみ、画面OFF・アプリ裏でも歩いた場所を塗れる（Web/PWA の `watchPosition` は
+バックグラウンドで止まるため Web 版は Wake Lock＝画面点けっぱなしの緩和策のみ）。
+
+- プラグイン：`@capgo/background-geolocation`（mobile/ に npm 導入・`cap sync` で自動登録）。
+  Android は**フォアグラウンドサービス＋通知方式**で、`ACCESS_BACKGROUND_LOCATION` 権限は
+  不要（Play の重い背景位置情報審査を回避できる）。必要な権限・service 宣言はプラグインの
+  マニフェストが自動マージされる（手書きの `AndroidManifest.xml` への追記は無し）。
+- フロント側：`frontend/src/lib/nativeBackgroundGeolocation.ts` が
+  `window.Capacitor.Plugins.BackgroundGeolocation` の `start(options, callback)`/`stop()` を
+  呼ぶ。`Map.tsx` が GPS 追跡の開始/終了（`trackuserlocationstart`/`end`）に合わせて並走させ、
+  届いた位置は実GPSと同じ `handleGpsPosition` → `paintGpsAt` に流す（`distanceFilter: 25m`・
+  前面では watchPosition と二重に届くがセル・細セル単位の間引きで実害なし）。
+- 追跡中は「現在地を記録中」の通知（i18n の `bgGeoTitle`/`bgGeoMessage`）が出る。
+  Web 版・プラグイン未搭載の旧 APK では no-op。iOS は未対応（Info.plist 未設定）。
+- 動作確認：`npm run play:dev` で起動 → GPSボタンで追跡開始 → ホームボタンでアプリを
+  裏に回し `bash geo.sh <緯度> <経度>` で位置を動かす → アプリに戻ると塗られている。
