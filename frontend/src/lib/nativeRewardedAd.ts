@@ -20,6 +20,9 @@ export type NativeRewardedAdDetail =
 export type NativeRewardedAdResult = {
   outcome: RewardedAdOutcome;
   detail?: NativeRewardedAdDetail;
+  // 失敗時の診断スナップショット（getAdDebugInfo の内容＋例外メッセージ）。
+  // 操作ログ（video_reward の meta.debug）に残して失敗原因の切り分けに使う。
+  debug?: Record<string, unknown>;
 };
 
 // プラグインの addListener が返すハンドル（Capacitor のバージョンにより
@@ -80,6 +83,15 @@ function getUnityAdsPlugin(): UnityAdsPlugin | undefined {
   return cap?.Plugins?.UnityAds;
 }
 
+// 失敗時のログ用に SDK の診断情報（初期化状態・直近の load エラー等）を best-effort で取る。
+async function collectDebug(extra?: Record<string, unknown>): Promise<
+  Record<string, unknown> | undefined
+> {
+  const info = await getNativeAdDebugInfo();
+  if (!info && !extra) return undefined;
+  return { ...(info ?? {}), ...(extra ?? {}) };
+}
+
 /** ネイティブのリワード動画を 1 本表示し、視聴結果を返す（広告 UI は Unity Ads SDK が描画）。 */
 export async function showNativeRewardedAd(): Promise<NativeRewardedAdResult> {
   const plugin = getUnityAdsPlugin();
@@ -99,12 +111,22 @@ export async function showNativeRewardedAd(): Promise<NativeRewardedAdResult> {
       return {
         outcome,
         detail: ret.detail as NativeRewardedAdDetail | undefined,
+        // 視聴完了以外は SDK の診断情報を添えて失敗原因を残す。
+        debug: outcome === "granted" ? undefined : await collectDebug(),
       };
     }
-    return { outcome: "error", detail: "bridge_error" };
+    return {
+      outcome: "error",
+      detail: "bridge_error",
+      debug: await collectDebug({ rawOutcome: outcome ?? null }),
+    };
   } catch (e) {
     console.warn("native rewarded ad failed", e);
-    return { outcome: "error", detail: "bridge_error" };
+    return {
+      outcome: "error",
+      detail: "bridge_error",
+      debug: await collectDebug({ error: String(e) }),
+    };
   }
 }
 

@@ -15,6 +15,8 @@ const ALLOWED_ACTIONS = new Set([
     // 動画リワード広告の各段階（meta.event で start/granted/dismissed/… を区別）。
     "video_reward",
 ]);
+// クライアントが申告できるプラットフォーム種別（それ以外の値は捨てる）。
+const PLATFORMS = new Set(["web", "pwa", "ios", "android"]);
 // 緯度経度の妥当性チェック（範囲外・非数値は null にする）。
 function toCoord(v, max) {
     if (typeof v !== "number" || !Number.isFinite(v))
@@ -37,12 +39,20 @@ logRouter.post("/", async (c) => {
     const municipality = typeof body?.municipality === "string" && body.municipality.length <= 128
         ? body.municipality
         : null;
+    const platform = typeof body?.platform === "string" && PLATFORMS.has(body.platform)
+        ? body.platform
+        : null;
+    const appVersion = typeof body?.appVersion === "string" && body.appVersion.length <= 128
+        ? body.appVersion
+        : null;
     await logEvent(c, {
         userId: user.id,
         action,
         lat,
         lng,
         municipality,
+        platform,
+        appVersion,
         meta: body?.meta ?? null,
     });
     return c.json({ ok: true });

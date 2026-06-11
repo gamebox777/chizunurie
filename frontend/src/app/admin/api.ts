@@ -90,6 +90,9 @@ export type UserLog = {
   action: string;
   ipAddress: string | null;
   userAgent: string | null;
+  // クライアント申告の実行プラットフォーム（web/pwa/ios/android）とバージョン表記。
+  platform: string | null;
+  appVersion: string | null;
   lat: number | null;
   lng: number | null;
   municipality: string | null;

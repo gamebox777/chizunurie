@@ -43,6 +43,33 @@ export function isPwa(): boolean {
   );
 }
 
+/** ログ記録用のプラットフォーム種別。アプリ内は OS 名、ブラウザは PWA かどうかで分ける。 */
+export function appPlatform(): "web" | "pwa" | "ios" | "android" {
+  const p = nativePlatform();
+  if (p !== "web") return p;
+  return isPwa() ? "pwa" : "web";
+}
+
+/**
+ * ログ記録用のバージョン表記（SettingsMenu の表示と同じ情報源を1文字列にしたもの）。
+ * Web は build 時に焼き込んだ NEXT_PUBLIC_BUILD_TIME、アプリ内はネイティブ版
+ * （versionName (versionCode)）を併記する（リモートURL方式で APK と Web の版は独立に上がるため）。
+ * 例: web "web 2026-06-10 23:45" ／ アプリ "app 1.3 (4) / web 2026-06-10 23:45"
+ */
+let versionPromise: Promise<string | null> | null = null;
+export function appVersionString(): Promise<string | null> {
+  if (versionPromise) return versionPromise;
+  versionPromise = (async () => {
+    const web = process.env.NEXT_PUBLIC_BUILD_TIME
+      ? `web ${process.env.NEXT_PUBLIC_BUILD_TIME}`
+      : null;
+    const native = await nativeAppVersion();
+    if (native) return web ? `app ${native} / ${web}` : `app ${native}`;
+    return web;
+  })();
+  return versionPromise;
+}
+
 /**
  * ネイティブアプリのバージョン表記（例 "1.3 (4)" = versionName (versionCode)）。
  * アプリ外・@capacitor/app 未搭載の旧 APK では null。

@@ -23,8 +23,13 @@ type LogBody = {
   lat?: unknown;
   lng?: unknown;
   municipality?: unknown;
+  platform?: unknown;
+  appVersion?: unknown;
   meta?: unknown;
 };
+
+// クライアントが申告できるプラットフォーム種別（それ以外の値は捨てる）。
+const PLATFORMS = new Set(["web", "pwa", "ios", "android"]);
 
 // 緯度経度の妥当性チェック（範囲外・非数値は null にする）。
 function toCoord(v: unknown, max: number): number | null {
@@ -49,6 +54,14 @@ logRouter.post("/", async (c) => {
     typeof body?.municipality === "string" && body.municipality.length <= 128
       ? body.municipality
       : null;
+  const platform =
+    typeof body?.platform === "string" && PLATFORMS.has(body.platform)
+      ? body.platform
+      : null;
+  const appVersion =
+    typeof body?.appVersion === "string" && body.appVersion.length <= 128
+      ? body.appVersion
+      : null;
 
   await logEvent(c, {
     userId: user.id,
@@ -56,6 +69,8 @@ logRouter.post("/", async (c) => {
     lat,
     lng,
     municipality,
+    platform,
+    appVersion,
     meta: body?.meta ?? null,
   });
   return c.json({ ok: true });

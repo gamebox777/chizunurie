@@ -50,6 +50,14 @@ const VIDEO_DETAIL_LABEL: Record<string, string> = {
   invalid_nonce: 'nonce不正',
 };
 
+// 実行プラットフォーム（user_logs.platform）の表示ラベル。
+const PLATFORM_LABEL: Record<string, string> = {
+  web: 'Web',
+  pwa: 'PWA',
+  ios: 'iOS',
+  android: 'Android',
+};
+
 // 絞り込み用の選択肢
 const ACTION_OPTIONS = Object.keys(ACTION_LABEL);
 
@@ -68,7 +76,8 @@ function actionBadge(action: string) {
   );
 }
 
-// meta（任意の付帯情報）を1行に整形する。検索クエリなどを見やすく出す。
+// meta（任意の付帯情報）の日本語サマリーを作る。検索クエリ・動画リワードの段階など。
+// サマリーで言い換えたキー以外（debug・net 等）は MetaCell が JSON 全文で添える。
 function formatMeta(meta: unknown): string {
   if (meta == null) return '';
   if (typeof meta === 'object' && meta !== null && 'query' in meta) {
@@ -97,11 +106,54 @@ function formatMeta(meta: unknown): string {
       return label;
     }
   }
+  // オブジェクトは MetaCell の「詳細データ」（JSON 全文）に任せて二重表示を避ける。
+  if (typeof meta === 'object') return '';
   try {
     return JSON.stringify(meta);
   } catch {
     return '';
   }
+}
+
+// formatMeta のサマリーが言い換え済みのキー。これ以外が meta にあれば JSON 全文も出す。
+const SUMMARIZED_META_KEYS = new Set(['event', 'detail', 'reason', 'granted', 'query']);
+
+// meta のうちサマリーに含まれない残り（debug・net・message 等）の JSON。無ければ null。
+function metaExtrasJson(meta: unknown): string | null {
+  if (typeof meta !== 'object' || meta === null) return null;
+  const extras = Object.fromEntries(
+    Object.entries(meta as Record<string, unknown>).filter(
+      ([k]) => !SUMMARIZED_META_KEYS.has(k)
+    )
+  );
+  if (Object.keys(extras).length === 0) return null;
+  try {
+    return JSON.stringify(extras);
+  } catch {
+    return null;
+  }
+}
+
+// 詳細セル：日本語サマリー＋（あれば）meta 残りの JSON 全文。
+// debug トレースが長くなるため、JSON は <details> で折りたたんで全文を見られるようにする。
+function MetaCell({ meta }: { meta: unknown }) {
+  const summary = formatMeta(meta);
+  const extras = metaExtrasJson(meta);
+  return (
+    <>
+      {summary}
+      {extras && (
+        <details className="mt-0.5">
+          <summary className="cursor-pointer text-[10px] text-gray-400 select-none">
+            詳細データ
+          </summary>
+          <pre className="mt-0.5 max-w-xl whitespace-pre-wrap break-all text-[10px] text-gray-400">
+            {extras}
+          </pre>
+        </details>
+      )}
+    </>
+  );
 }
 
 export default function LogsPanel() {
@@ -190,6 +242,7 @@ export default function LogsPanel() {
                 <th className="px-3 py-2 font-medium">ユーザー</th>
                 <th className="px-3 py-2 font-medium">アクション</th>
                 <th className="px-3 py-2 font-medium">詳細</th>
+                <th className="px-3 py-2 font-medium">環境</th>
                 <th className="px-3 py-2 font-medium">市区町村</th>
                 <th className="px-3 py-2 font-medium">IP</th>
                 <th className="px-3 py-2 font-medium">UserAgent</th>
@@ -206,7 +259,16 @@ export default function LogsPanel() {
                     <div className="text-xs text-gray-400">{l.userEmail}</div>
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">{actionBadge(l.action)}</td>
-                  <td className="px-3 py-2 text-xs text-gray-600">{formatMeta(l.meta)}</td>
+                  <td className="px-3 py-2 text-xs text-gray-600">
+                    <MetaCell meta={l.meta} />
+                  </td>
+                  {/* プラットフォーム＋バージョン表記（旧ログ・未申告は -） */}
+                  <td className="px-3 py-2 text-xs text-gray-600 whitespace-nowrap">
+                    <div>{l.platform ? (PLATFORM_LABEL[l.platform] ?? l.platform) : '-'}</div>
+                    {l.appVersion && (
+                      <div className="text-[10px] text-gray-400">{l.appVersion}</div>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-xs text-gray-600">
                     {l.municipality ?? '-'}
                   </td>
@@ -220,7 +282,7 @@ export default function LogsPanel() {
               ))}
               {logs.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-3 py-6 text-center text-gray-400">
+                  <td colSpan={8} className="px-3 py-6 text-center text-gray-400">
                     ログがありません
                   </td>
                 </tr>

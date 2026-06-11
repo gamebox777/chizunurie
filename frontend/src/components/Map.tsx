@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
 import { useSession } from '@/lib/auth-client';
-import { logEvent, setLastKnownLocation } from '@/lib/userlog';
+import { connectionMeta, logEvent, setLastKnownLocation } from '@/lib/userlog';
 import { updateMyCountry } from '@/lib/userApi';
 import {
   fetchGameSettings,
@@ -1258,7 +1258,8 @@ export default function MapView() {
     videoBusyRef.current = true;
     setVideoPhase('loading');
     // ボタン押下（視聴フロー開始）を記録。以降の各段階も video_reward で残す。
-    logEvent('video_reward', { meta: { event: 'start' } });
+    // 回線状態（net）は在庫なし/タイムアウトの切り分け用に各段階へ添える。
+    logEvent('video_reward', { meta: { event: 'start', net: connectionMeta() } });
     try {
       // 1) nonce 発行（視聴前のクールダウン・上限チェックを兼ねる）
       const nonceRes = await fetch(`${POINTS_API}/reward/video/nonce`, {
@@ -1293,14 +1294,20 @@ export default function MapView() {
       // 2) 広告表示。ネイティブアプリ内は Unity Ads（UnityAdsPlugin 経由）、
       //    ブラウザは GPT（全画面オーバーレイを GPT 自身が描画）。
       //    どちらも同じ { outcome, detail? } を返すので以降の流れは共通。
-      const { outcome, detail } = isNativeApp()
+      const { outcome, detail, debug } = isNativeApp()
         ? await showNativeRewardedAd()
         : await showRewardedAd(REWARDED_AD_UNIT_PATH);
       if (outcome !== 'granted') {
         // 途中キャンセル（dismissed）・在庫なし/非対応（unavailable）・エラー（error）。
-        // detail に具体的な失敗理由（gpt_load_failed / ready_timeout 等）を残す。
+        // detail に具体的な失敗理由（gpt_load_failed / ready_timeout 等）、debug に
+        // 表示フローの詳細トレース（GPT のイベント時系列・Unity Ads の診断情報）を残す。
         logEvent('video_reward', {
-          meta: { event: outcome, ...(detail ? { detail } : {}) },
+          meta: {
+            event: outcome,
+            ...(detail ? { detail } : {}),
+            ...(debug ? { debug } : {}),
+            net: connectionMeta(),
+          },
         });
         showToast(
           outcome === 'dismissed'
@@ -1345,15 +1352,21 @@ export default function MapView() {
       };
       if (ok.points) applyServerPoints(ok.points);
       if (ok.status) setRewardStatus(ok.status);
-      // 視聴完了＋報酬付与まで成功。回復量を meta に残す。
+      // 視聴完了＋報酬付与まで成功。回復量と表示フローのトレースを meta に残す。
       logEvent('video_reward', {
-        meta: { event: 'granted', granted: ok.granted ?? 0 },
+        meta: {
+          event: 'granted',
+          granted: ok.granted ?? 0,
+          ...(debug ? { debug } : {}),
+        },
       });
       // 画面中央の派手な獲得演出（トーストではなくレベルアップ同様のポップ）。
       showRewardPop(ok.granted ?? 0);
     } catch (err) {
       console.warn('video reward failed', err);
-      logEvent('video_reward', { meta: { event: 'error' } });
+      logEvent('video_reward', {
+        meta: { event: 'error', message: String(err), net: connectionMeta() },
+      });
       showToast(tRef.current('recoverFailed'));
     } finally {
       setVideoPhase(null);

@@ -5,7 +5,7 @@ import { useEffect, useRef } from 'react';
 import Header from '@/components/Header';
 import SiteFooter from '@/components/SiteFooter';
 import { signIn, useSession } from '@/lib/auth-client';
-import { logEvent, recordAccess } from '@/lib/userlog';
+import { clientEnvMeta, logEvent, recordAccess } from '@/lib/userlog';
 
 const Map = dynamic(() => import('@/components/Map'), { ssr: false });
 
@@ -50,7 +50,8 @@ export default function Home() {
   useEffect(() => {
     if (session?.user && !session.user.isAnonymous && !loggedSessionStart.current) {
       loggedSessionStart.current = true;
-      logEvent('session_start');
+      // 端末環境の概要（画面サイズ・言語・タイムゾーン・回線）も meta に残す。
+      logEvent('session_start', { meta: clientEnvMeta() });
     }
   }, [session]);
 

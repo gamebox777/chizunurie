@@ -316,6 +316,8 @@ adminRouter.get("/logs", async (c) => {
       action: userLogs.action,
       ipAddress: userLogs.ipAddress,
       userAgent: userLogs.userAgent,
+      platform: userLogs.platform,
+      appVersion: userLogs.appVersion,
       lat: userLogs.lat,
       lng: userLogs.lng,
       municipality: userLogs.municipality,

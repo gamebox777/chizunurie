@@ -32,15 +32,39 @@ export type RewardedAdDetail =
   | 'slot_null' // リワード非対応・スロット重複で slot が null
   | 'ready_timeout'; // 一定時間 ready にならず在庫なし扱い
 
+// 表示フローの詳細トレース。失敗の切り分け用に操作ログ（video_reward の meta.debug）へ残す。
+// trail は「経過ms イベント名」の時系列。renderIsEmpty=true は GPT が応答したが在庫ゼロ
+// （本当の no fill）、slotRenderEnded 自体が無いままの ready_timeout はリクエストが
+// 返ってきていない（ブロック・回線）ことを示す。
+export type RewardedAdDebug = {
+  trail: string[];
+  renderIsEmpty?: boolean;
+  lineItemId?: number | null;
+  creativeId?: number | null;
+  size?: string | null;
+  reward?: { type?: string; amount?: number } | null;
+};
+
 // 表示結果。granted 以外のとき detail に具体的な失敗理由を添える。
 export type RewardedAdResult = {
   outcome: RewardedAdOutcome;
   detail?: RewardedAdDetail;
+  debug?: RewardedAdDebug;
 };
 
 // 使う範囲だけの最小 googletag 型（@types/google-publisher-tag を追加せずに済ませる）。
 type GptSlot = { addService: (service: GptPubAds) => GptSlot };
-type GptEvent = { slot: GptSlot; makeRewardedVisible?: () => void };
+type GptEvent = {
+  slot: GptSlot;
+  makeRewardedVisible?: () => void;
+  // slotRenderEnded（応答の中身。isEmpty=true は在庫ゼロ＝no fill）
+  isEmpty?: boolean;
+  lineItemId?: number | null;
+  creativeId?: number | null;
+  size?: number[] | string | null;
+  // rewardedSlotGranted の報酬内容（例 {type:'coins', amount:1}）
+  payload?: { type?: string; amount?: number } | null;
+};
 type GptPubAds = {
   addEventListener: (type: string, listener: (e: GptEvent) => void) => void;
   removeEventListener: (type: string, listener: (e: GptEvent) => void) => void;
@@ -88,16 +112,23 @@ function loadGpt(): Promise<void> {
 }
 
 // リワード広告を 1 本表示し、結果を返す。広告 UI（全画面オーバーレイ）は GPT 自身が生成する。
+// debug にイベントの時系列トレースを残す（呼び出し側が操作ログの meta に添える）。
 export async function showRewardedAd(
   adUnitPath: string
 ): Promise<RewardedAdResult> {
-  dbg('showRewardedAd start', { adUnitPath });
+  const t0 = performance.now();
+  const debug: RewardedAdDebug = { trail: [] };
+  const mark = (label: string, ...args: unknown[]) => {
+    debug.trail.push(`${Math.round(performance.now() - t0)}ms ${label}`);
+    dbg(label, ...args);
+  };
+  mark('start');
   try {
     await loadGpt();
-    dbg('gpt.js loaded');
+    mark('gpt_loaded');
   } catch (e) {
-    dbg('gpt.js load FAILED (ad blocker?)', e);
-    return { outcome: 'error', detail: 'gpt_load_failed' };
+    mark('gpt_load_failed (ad blocker?)', e);
+    return { outcome: 'error', detail: 'gpt_load_failed', debug };
   }
   const googletag = getGoogletag();
 
@@ -110,14 +141,14 @@ export async function showRewardedAd(
           googletag.enums.OutOfPageFormat.REWARDED
         );
       } catch (e) {
-        dbg('defineOutOfPageSlot threw', e);
-        resolve({ outcome: 'error', detail: 'define_threw' });
+        mark('define_threw', e);
+        resolve({ outcome: 'error', detail: 'define_threw', debug });
         return;
       }
       // ブラウザ／環境がリワードに非対応のとき null が返る。
       if (!slot) {
-        dbg('defineOutOfPageSlot returned null (rewarded unsupported / already active)');
-        resolve({ outcome: 'unavailable', detail: 'slot_null' });
+        mark('slot_null (rewarded unsupported / already active)');
+        resolve({ outcome: 'unavailable', detail: 'slot_null', debug });
         return;
       }
       const activeSlot = slot;
@@ -128,6 +159,28 @@ export async function showRewardedAd(
       let settled = false;
       let readyTimer: number | null = null;
 
+      // 自スロットのイベントだけ trail に積む共通リスナー（リクエスト〜描画の各段階）。
+      const traceListeners: Array<[string, (e: GptEvent) => void]> = [
+        'slotRequested',
+        'slotResponseReceived',
+        'slotOnload',
+        'impressionViewable',
+      ].map((type): [string, (e: GptEvent) => void] => [
+        type,
+        (e) => {
+          if (e.slot === activeSlot) mark(type);
+        },
+      ]);
+      // slotRenderEnded は応答の中身（在庫の有無・配信された広告）も控える。
+      const onRenderEnded = (e: GptEvent) => {
+        if (e.slot !== activeSlot) return;
+        debug.renderIsEmpty = e.isEmpty === true;
+        debug.lineItemId = e.lineItemId ?? null;
+        debug.creativeId = e.creativeId ?? null;
+        debug.size = e.size != null ? String(e.size) : null;
+        mark(`slotRenderEnded isEmpty=${String(e.isEmpty)}`);
+      };
+
       const cleanup = () => {
         if (readyTimer !== null) {
           window.clearTimeout(readyTimer);
@@ -136,22 +189,27 @@ export async function showRewardedAd(
         pubads.removeEventListener('rewardedSlotReady', onReady);
         pubads.removeEventListener('rewardedSlotGranted', onGranted);
         pubads.removeEventListener('rewardedSlotClosed', onClosed);
+        pubads.removeEventListener('slotRenderEnded', onRenderEnded);
+        for (const [type, fn] of traceListeners) {
+          pubads.removeEventListener(type, fn);
+        }
       };
       const settle = (outcome: RewardedAdOutcome, detail?: RewardedAdDetail) => {
         if (settled) return;
         settled = true;
+        mark(`settle ${outcome}${detail ? ` (${detail})` : ''}`);
         cleanup();
         try {
           googletag.destroySlot(activeSlot);
         } catch {
           /* 破棄失敗は無視（次回 define で作り直す） */
         }
-        resolve({ outcome, detail });
+        resolve({ outcome, detail, debug });
       };
 
       const onReady = (e: GptEvent) => {
         if (e.slot !== activeSlot) return;
-        dbg('rewardedSlotReady → makeRewardedVisible');
+        mark('rewardedSlotReady → makeRewardedVisible');
         if (readyTimer !== null) {
           window.clearTimeout(readyTimer);
           readyTimer = null;
@@ -160,26 +218,31 @@ export async function showRewardedAd(
       };
       const onGranted = (e: GptEvent) => {
         if (e.slot !== activeSlot) return;
-        dbg('rewardedSlotGranted');
+        debug.reward = e.payload ?? null;
+        mark('rewardedSlotGranted');
         granted = true;
       };
       const onClosed = (e: GptEvent) => {
         if (e.slot !== activeSlot) return;
-        dbg('rewardedSlotClosed', { granted });
+        mark(`rewardedSlotClosed granted=${String(granted)}`);
         settle(granted ? 'granted' : 'dismissed');
       };
 
       pubads.addEventListener('rewardedSlotReady', onReady);
       pubads.addEventListener('rewardedSlotGranted', onGranted);
       pubads.addEventListener('rewardedSlotClosed', onClosed);
+      pubads.addEventListener('slotRenderEnded', onRenderEnded);
+      for (const [type, fn] of traceListeners) {
+        pubads.addEventListener(type, fn);
+      }
 
       googletag.enableServices();
       googletag.display(activeSlot);
-      dbg('display() called, waiting for rewardedSlotReady…');
+      mark('display() called, waiting for rewardedSlotReady…');
 
       // 一定時間内に ready にならなければ在庫なし扱いで終える。
       readyTimer = window.setTimeout(() => {
-        dbg(`READY timeout (${READY_TIMEOUT_MS}ms) → unavailable (no fill?)`);
+        mark(`ready_timeout (${READY_TIMEOUT_MS}ms) → unavailable (no fill?)`);
         settle('unavailable', 'ready_timeout');
       }, READY_TIMEOUT_MS);
     });

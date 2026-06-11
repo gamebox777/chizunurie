@@ -162,6 +162,11 @@ export const userLogs = pgTable(
     action: text("action").notNull(),
     ipAddress: text("ip_address"),
     userAgent: text("user_agent"),
+    // クライアントの実行プラットフォーム（web / pwa / ios / android）。クライアント申告。
+    platform: text("platform"),
+    // クライアントのバージョン表記（例 "app 1.3 (4) / web 2026-06-10 23:45"）。
+    // アプリ版は APK と Web の版が独立に上がるため両方を1文字列で持つ。
+    appVersion: text("app_version"),
     lat: doublePrecision("lat"),
     lng: doublePrecision("lng"),
     municipality: text("municipality"),

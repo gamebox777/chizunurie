@@ -78,6 +78,13 @@
       "when": 1781016896182,
       "tag": "0010_steady_norrin_radd",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1781145118174,
+      "tag": "0011_pink_sebastian_shaw",
+      "breakpoints": true
     }
   ]
 }

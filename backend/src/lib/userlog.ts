@@ -34,6 +34,9 @@ export type LogEventInput = {
   lat?: number | null;
   lng?: number | null;
   municipality?: string | null;
+  // クライアント申告の実行プラットフォーム（web/pwa/ios/android）とバージョン表記。
+  platform?: string | null;
+  appVersion?: string | null;
   meta?: unknown;
 };
 
@@ -50,6 +53,8 @@ export async function logEvent(c: Context, input: LogEventInput): Promise<void> 
       lat: input.lat ?? null,
       lng: input.lng ?? null,
       municipality: input.municipality ?? null,
+      platform: input.platform ?? null,
+      appVersion: input.appVersion ?? null,
       meta: input.meta ?? null,
     });
     // ユーザーテーブルに「最新の接続元」を上書き保存する（アクションのたびに更新）。
