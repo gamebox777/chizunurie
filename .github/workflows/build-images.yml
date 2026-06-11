@@ -35,6 +35,7 @@ jobs:
             # rewrites() の中継先はビルド時に焼き込まれる。compose のサービス名は backend。
             build_args: |
               BACKEND_URL=http://backend:3001
+              NEXT_PUBLIC_BUILD_ID=${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
 

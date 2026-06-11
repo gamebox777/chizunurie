@@ -95,5 +95,48 @@ export default function ReloadManager() {
     localStorage.setItem('chizunurie_was_logged_in', currentIsLoggedIn ? 'true' : 'false');
   }, [session, isPending]);
 
+  // 3. Deployed version check
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const clientVersion = process.env.NEXT_PUBLIC_BUILD_ID || 'development';
+    if (clientVersion === 'development') return; // Skip in local development
+
+    const checkVersion = async () => {
+      try {
+        const res = await fetch(`/api/version?t=${Date.now()}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const serverVersion = data.version;
+
+        if (serverVersion && serverVersion !== 'development' && serverVersion !== clientVersion) {
+          console.log(`New version detected (client: ${clientVersion}, server: ${serverVersion}). Force reloading...`);
+          // Set daily reload timestamp so we don't trigger that immediately after
+          localStorage.setItem('chizunurie_last_daily_reload', Date.now().toString());
+          forceReload();
+        }
+      } catch (err) {
+        console.error('Failed to check deployed version:', err);
+      }
+    };
+
+    checkVersion();
+
+    // Check when user returns/resumes the app or tab
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkVersion();
+      }
+    };
+
+    // Check every 10 minutes
+    const interval = setInterval(checkVersion, 10 * 60 * 1000);
+
+    window.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
   return null;
 }

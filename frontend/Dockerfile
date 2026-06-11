@@ -18,6 +18,8 @@ ENV BACKEND_URL=$BACKEND_URL
 # 既定は本番(production)。フル Docker 版は compose 側で 'docker' を渡す。
 ARG NEXT_PUBLIC_APP_ENV=production
 ENV NEXT_PUBLIC_APP_ENV=$NEXT_PUBLIC_APP_ENV
+ARG NEXT_PUBLIC_BUILD_ID=development
+ENV NEXT_PUBLIC_BUILD_ID=$NEXT_PUBLIC_BUILD_ID
 ENV NEXT_TELEMETRY_DISABLED=1
 # backend と同様、Coolify 環境では .bin/PATH 経由の解決が効かず exit 127 になるため、
 # next 本体を node で直接叩く。
