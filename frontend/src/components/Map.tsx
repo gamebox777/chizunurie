@@ -4728,13 +4728,13 @@ export default function MapView() {
                 </div>
               </div>
               {/* 動画リワード：広告を見てそのレベルの満タン分を回復。
-                  広告在庫が準備できるまで（プリロード未完了）・クールダウン中・
-                  1日上限はボタンを無効化して理由を表示する。
-                  出し分け（@/lib/platform の isNativeApp()）：
-                  - ネイティブアプリ（mobile/）＝ Unity Ads（事前審査不要）なので表示する。
-                  - ブラウザ＝ GPT/AdSense。サイト審査が通って広告を配信できるようになるまで
-                    非表示（審査通過後に条件へ「|| true」相当の Web 表示を戻すこと）。 */}
-              {isNativeApp() && (() => {
+                  クールダウン中・1日上限はボタンを無効化して理由を表示する。
+                  - ネイティブアプリ（mobile/）＝ Unity Ads。起動時からプリロードしており、
+                    在庫が ready になるまで（adPreparing）も無効化する。
+                  - ブラウザ/PWA ＝ GPT（rewardedAd.ts）。プリロードは無く押した時点で
+                    load→show が走るので、ボタンは常に活性（在庫なしは ready_timeout で
+                    unavailable トーストになり、video_reward ログに detail が残る）。 */}
+              {(() => {
                 const cooldownLeft =
                   rewardStatus?.nextAvailableAt != null
                     ? rewardStatus.nextAvailableAt - nowTick
@@ -4742,7 +4742,7 @@ export default function MapView() {
                 const onCooldown = cooldownLeft > 0;
                 const dailyLimit =
                   rewardStatus != null && rewardStatus.remainingToday <= 0;
-                const adPreparing = !nativeAdReady;
+                const adPreparing = isNativeApp() && !nativeAdReady;
                 const disabled =
                   adPreparing || onCooldown || dailyLimit || videoPhase !== null;
                 return (

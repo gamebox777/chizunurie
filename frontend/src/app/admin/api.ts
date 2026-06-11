@@ -145,6 +145,14 @@ export function fetchPaintedLog(params: {
 export type VideoStats = {
   days: number | null;
   byEvent: Record<string, { count: number; users: number }>;
+  // 失敗の具体的な原因の内訳（meta.detail / claim_failed は meta.reason）。件数降順。
+  details: {
+    event: string;
+    detail: string;
+    count: number;
+    users: number;
+    lastAt: string; // 最終発生日時（ISO）
+  }[];
   funnel: {
     start: number;
     granted: number;

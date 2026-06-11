@@ -319,6 +319,20 @@ adminRouter.get("/video-stats", async (c) => {
         .from(userLogs)
         .where(and(...conds))
         .groupBy(sql `${userLogs.meta}->>'event'`);
+    // 失敗の具体的な原因の内訳。unavailable/error は meta.detail（ready_timeout・
+    // gpt_load_failed・load_failed 等）、claim_failed は meta.reason を原因として数える。
+    const detailRows = await db
+        .select({
+        event: sql `${userLogs.meta}->>'event'`,
+        detail: sql `coalesce(${userLogs.meta}->>'detail', ${userLogs.meta}->>'reason')`,
+        count: sql `count(*)::int`,
+        users: sql `count(distinct ${userLogs.userId})::int`,
+        lastAt: sql `max(${userLogs.createdAt})::text`,
+    })
+        .from(userLogs)
+        .where(and(...conds, sql `coalesce(${userLogs.meta}->>'detail', ${userLogs.meta}->>'reason') is not null`))
+        .groupBy(sql `${userLogs.meta}->>'event'`, sql `coalesce(${userLogs.meta}->>'detail', ${userLogs.meta}->>'reason')`)
+        .orderBy(sql `count(*) desc`);
     // event → {count, users} のマップに整える（null event は "unknown" にまとめる）。
     const byEvent = {};
     for (const r of rows) {
@@ -338,6 +352,7 @@ adminRouter.get("/video-stats", async (c) => {
     return c.json({
         days,
         byEvent,
+        details: detailRows,
         funnel: {
             start, // 「動画を見る」ボタン押下
             granted, // 視聴完了＋報酬付与

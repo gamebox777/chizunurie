@@ -31,12 +31,23 @@ const VIDEO_EVENT_LABEL: Record<string, string> = {
   claim_failed: '報酬請求失敗',
 };
 
-// 動画リワード失敗時の具体的な原因（meta.detail）の日本語ラベル。
+// 動画リワード失敗時の具体的な原因（meta.detail / meta.reason）の日本語ラベル。
 const VIDEO_DETAIL_LABEL: Record<string, string> = {
+  // Web GPT（rewardedAd.ts）
   gpt_load_failed: 'gpt.js読込失敗（広告ブロッカー等）',
   define_threw: 'スロット定義で例外',
   slot_null: 'リワード非対応・スロット重複',
-  ready_timeout: '在庫なし（タイムアウト）',
+  ready_timeout: '在庫なし（readyタイムアウト）',
+  // ネイティブ Unity Ads（nativeRewardedAd.ts）
+  plugin_missing: 'プラグイン無し（旧APK等）',
+  init_failed: 'SDK初期化失敗',
+  load_failed: '在庫なし・読込失敗',
+  show_failed: '表示失敗',
+  bridge_error: 'プラグイン呼び出し例外',
+  // claim_failed の reason
+  cooldown: 'クールダウン',
+  daily_limit: '1日上限',
+  invalid_nonce: 'nonce不正',
 };
 
 // 絞り込み用の選択肢
@@ -81,7 +92,7 @@ function formatMeta(meta: unknown): string {
       // 報酬請求失敗（claim_failed）は reason（cooldown 等）を添える。
       const reason = (meta as { reason?: unknown }).reason;
       if (typeof reason === 'string') {
-        return `${label}：${reason}`;
+        return `${label}：${VIDEO_DETAIL_LABEL[reason] ?? reason}`;
       }
       return label;
     }
