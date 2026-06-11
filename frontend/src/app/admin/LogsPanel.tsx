@@ -281,10 +281,15 @@ const columns = [
       const { lat, lng } = row.original;
       if (lat == null || lng == null) return '-';
       return (
-        <div className="flex flex-col gap-0.5">
-          <div>{lat}</div>
-          <div>{lng}</div>
-        </div>
+        <a
+          href={`https://www.google.com/maps?q=${lat},${lng}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-600 hover:underline flex flex-col gap-0.5"
+        >
+          <span>{lat.toFixed(5)}</span>
+          <span>{lng.toFixed(5)}</span>
+        </a>
       );
     },
     meta: { tdClass: 'text-xs text-gray-500 whitespace-nowrap font-mono' },

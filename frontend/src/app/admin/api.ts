@@ -15,6 +15,8 @@ export type AdminUser = {
   // 直近のアクション時に観測した IP / UserAgent（最新）。
   lastIpAddress: string | null;
   lastUserAgent: string | null;
+  lastLat: number | null;
+  lastLng: number | null;
   // このユーザー個別の Web 広告配信の上書き設定。キーが無い項目は全体設定
   // （app_settings.webAds）に従い、true/false が入っていれば全体設定より優先される。
   adSettings: { auto?: boolean; reward?: boolean };

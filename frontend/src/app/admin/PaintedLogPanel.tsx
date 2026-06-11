@@ -96,7 +96,20 @@ const columns = [
   columnHelper.display({
     id: 'latlng',
     header: '緯度経度',
-    cell: ({ row }) => formatLatLng(row.original.lat, row.original.lng),
+    cell: ({ row }) => {
+      const { lat, lng } = row.original;
+      if (lat == null || lng == null) return '-';
+      return (
+        <a
+          href={`https://www.google.com/maps?q=${lat},${lng}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-600 hover:underline"
+        >
+          {lat.toFixed(5)}, {lng.toFixed(5)}
+        </a>
+      );
+    },
     meta: { tdClass: 'text-xs text-gray-500 whitespace-nowrap tabular-nums font-mono' },
   }),
 ];

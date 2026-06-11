@@ -47,13 +47,20 @@ export async function logEvent(c, input) {
         // ユーザーテーブルに「最新の接続元」を上書き保存する（アクションのたびに更新）。
         // updatedAt も併せて進める＝管理画面の「更新日」（最後にアクションした日時）になる。
         if (input.userId) {
-            await db
-                .update(user)
-                .set({
+            const updateData = {
                 lastIpAddress: ipAddress,
                 lastUserAgent: userAgent,
                 updatedAt: new Date(),
-            })
+            };
+            if (input.lat !== undefined && input.lat !== null) {
+                updateData.lastLat = input.lat;
+            }
+            if (input.lng !== undefined && input.lng !== null) {
+                updateData.lastLng = input.lng;
+            }
+            await db
+                .update(user)
+                .set(updateData)
                 .where(eq(user.id, input.userId));
         }
     }

@@ -180,6 +180,20 @@ function UserRow({
         <td className="px-3 py-2 text-xs text-gray-600 whitespace-nowrap">
           {u.country ?? '-'}
         </td>
+        <td className="px-3 py-2 text-xs whitespace-nowrap">
+          {u.lastLat !== null && u.lastLng !== null ? (
+            <a
+              href={`https://www.google.com/maps?q=${u.lastLat},${u.lastLng}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 hover:underline"
+            >
+              {u.lastLat.toFixed(5)}, {u.lastLng.toFixed(5)}
+            </a>
+          ) : (
+            '-'
+          )}
+        </td>
         {/* Web 広告の個別上書き（自動広告 / 広告で回復）。「既定」は全体設定に従う。 */}
         <td className="px-3 py-2 text-xs whitespace-nowrap">
           <div>
@@ -205,14 +219,6 @@ function UserRow({
         <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap tabular-nums">
           {formatDateTime(u.updatedAt)}
         </td>
-        <td className="px-3 py-2 text-xs text-gray-600 whitespace-nowrap tabular-nums">
-          {u.lastIpAddress ?? '-'}
-        </td>
-        <td className="px-3 py-2 text-xs text-gray-500">
-          <div className="max-w-[16rem] truncate" title={u.lastUserAgent ?? ''}>
-            {u.lastUserAgent ?? '-'}
-          </div>
-        </td>
         <td className="px-3 py-2 whitespace-nowrap text-right">
           <button
             disabled={busy}
@@ -229,10 +235,16 @@ function UserRow({
             塗り全削除
           </button>
         </td>
+        <td className="px-3 py-2 text-xs text-gray-600 whitespace-nowrap tabular-nums">
+          {u.lastIpAddress ?? '-'}
+        </td>
+        <td className="px-3 py-2 text-xs text-gray-500 break-all">
+          {u.lastUserAgent ?? '-'}
+        </td>
       </tr>
       {editing && (
         <tr className="border-t border-gray-100 bg-blue-50/40">
-          <td colSpan={13} className="px-3 py-3">
+          <td colSpan={14} className="px-3 py-3">
             <div className="flex flex-wrap items-end gap-3">
               <label className="text-xs text-gray-600">
                 ポイント
@@ -386,6 +398,11 @@ export default function UsersPanel() {
         header: '国',
         sortingFn: jaSort,
       }),
+      columnHelper.accessor((u) => u.lastLat !== null && u.lastLng !== null ? `${u.lastLat}, ${u.lastLng}` : '', {
+        id: 'lastLocation',
+        header: '緯度経度',
+        sortingFn: jaSort,
+      }),
       columnHelper.display({ id: 'ads', header: '広告' }),
       columnHelper.accessor((u) => u.points?.level ?? -1, {
         id: 'level',
@@ -411,6 +428,11 @@ export default function UsersPanel() {
         id: 'updatedAt',
         header: '更新日',
       }),
+      columnHelper.display({
+        id: 'actions',
+        header: '操作',
+        meta: { align: 'right' as const },
+      }),
       columnHelper.accessor((u) => u.lastIpAddress ?? '', {
         id: 'ip',
         header: 'IP',
@@ -420,11 +442,6 @@ export default function UsersPanel() {
         id: 'userAgent',
         header: 'UserAgent',
         sortingFn: jaSort,
-      }),
-      columnHelper.display({
-        id: 'actions',
-        header: '操作',
-        meta: { align: 'right' as const },
       }),
     ],
     [selectedIds]
@@ -537,7 +554,7 @@ export default function UsersPanel() {
             ))}
             {visibleUsers.length === 0 && (
               <tr>
-                <td colSpan={13} className="px-3 py-6 text-center text-gray-400">
+                <td colSpan={14} className="px-3 py-6 text-center text-gray-400">
                   ユーザーがいません
                 </td>
               </tr>

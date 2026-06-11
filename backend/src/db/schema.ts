@@ -41,6 +41,8 @@ export const user = pgTable("user", {
   // （logEvent が userId つきで呼ばれるたびに更新）。閲覧は開発者向け管理画面のみ。
   lastIpAddress: text("last_ip_address"),
   lastUserAgent: text("last_user_agent"),
+  lastLat: doublePrecision("last_lat"),
+  lastLng: doublePrecision("last_lng"),
   // ユーザー設定（効果音・BGM・バイブ・地図オーバーレイ・言語など）を1つの JSON にまとめて保存する。
   // 設定項目は今後増減するため、項目ごとにカラム＝マイグレーションを増やすのを避け jsonb に全部入れる。
   settings: jsonb("settings").notNull().default({}),

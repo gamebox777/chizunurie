@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
 import { getSessionUser, isDeveloper } from "../lib/auth.js";
 import { db } from "../db/index.js";
-import { paintedRegions } from "../db/schema.js";
+import { paintedRegions, user as userTable } from "../db/schema.js";
 import { ALLOWED_COSTS, COST_ADJACENT, addExp, ensurePoints, getExpConfig, spendPoints, } from "../lib/points.js";
 export const paintedRouter = new Hono();
 // 'mesh' が現行の塗り単位。'municipalities'/'chocho' は旧データ互換のため許可
@@ -111,6 +111,21 @@ paintedRouter.post("/", async (c) => {
     };
     // 経験値・レベル設定を1回だけ読む（トランザクション内で渡して再読みを防ぐ）。
     const expCfg = await getExpConfig();
+    if (parsed.lat !== null && parsed.lng !== null) {
+        try {
+            await db
+                .update(userTable)
+                .set({
+                lastLat: parsed.lat,
+                lastLng: parsed.lng,
+                updatedAt: new Date(now),
+            })
+                .where(eq(userTable.id, user.id));
+        }
+        catch (err) {
+            console.warn("failed to update user last coordinates", err);
+        }
+    }
     if (parsed.mode === "gps") {
         // GPS（実際の移動）はポイント無料。最優先なので既存（manual含む）があれば gps に昇格。
         // 「実際に訪れる」と経験値を獲得する。歩き塗りは1kmを 8×8=64 の細セル（125m）に分け、
