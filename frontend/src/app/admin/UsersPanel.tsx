@@ -18,7 +18,7 @@ import {
   setUserAds,
   type AdminUser,
 } from './api';
-import { jaTextSort, SortableHeaderRow, TablePager } from './table';
+import { jaTextSort, SortableHeaderRow, TablePager, SyncedScrollContainer } from './table';
 import UserFilter from './UserFilter';
 
 function formatDate(iso: string): string {
@@ -156,6 +156,9 @@ function UserRow({
             aria-label="選択"
           />
         </td>
+        <td className="px-3 py-2 text-[10px] text-gray-400 font-mono whitespace-nowrap">
+          {u.id}
+        </td>
         <td className="px-3 py-2">
           <div className="font-medium text-gray-800">{u.name || '(未設定)'}</div>
           {u.realName && (
@@ -197,6 +200,12 @@ function UserRow({
         <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">
           {formatPlayTime(u.playTimeSec)}
         </td>
+        <td className="px-3 py-2 text-xs text-gray-400 whitespace-nowrap tabular-nums">
+          {formatDateTime(u.createdAt)}
+        </td>
+        <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap tabular-nums">
+          {formatDateTime(u.updatedAt)}
+        </td>
         <td className="px-3 py-2 text-xs text-gray-600 whitespace-nowrap tabular-nums">
           {u.lastIpAddress ?? '-'}
         </td>
@@ -204,10 +213,6 @@ function UserRow({
           <div className="max-w-[16rem] truncate" title={u.lastUserAgent ?? ''}>
             {u.lastUserAgent ?? '-'}
           </div>
-        </td>
-        <td className="px-3 py-2 text-xs text-gray-400">{formatDate(u.createdAt)}</td>
-        <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap tabular-nums">
-          {formatDateTime(u.updatedAt)}
         </td>
         <td className="px-3 py-2 whitespace-nowrap text-right">
           <button
@@ -228,7 +233,7 @@ function UserRow({
       </tr>
       {editing && (
         <tr className="border-t border-gray-100 bg-blue-50/40">
-          <td colSpan={14} className="px-3 py-3">
+          <td colSpan={15} className="px-3 py-3">
             <div className="flex flex-wrap items-end gap-3">
               <label className="text-xs text-gray-600">
                 ポイント
@@ -371,6 +376,11 @@ export default function UsersPanel() {
           );
         },
       }),
+      columnHelper.accessor('id', {
+        id: 'id',
+        header: 'ID',
+        meta: { tdClass: 'text-[10px] text-gray-400 whitespace-nowrap font-mono' },
+      }),
       columnHelper.accessor((u) => u.name || u.email, {
         id: 'name',
         header: 'ユーザー',
@@ -403,6 +413,14 @@ export default function UsersPanel() {
         header: 'プレイ時間',
         meta: { align: 'right' as const },
       }),
+      columnHelper.accessor((u) => new Date(u.createdAt).getTime() || 0, {
+        id: 'createdAt',
+        header: '登録日',
+      }),
+      columnHelper.accessor((u) => new Date(u.updatedAt).getTime() || 0, {
+        id: 'updatedAt',
+        header: '更新日',
+      }),
       columnHelper.accessor((u) => u.lastIpAddress ?? '', {
         id: 'ip',
         header: 'IP',
@@ -412,14 +430,6 @@ export default function UsersPanel() {
         id: 'userAgent',
         header: 'UserAgent',
         sortingFn: jaSort,
-      }),
-      columnHelper.accessor((u) => new Date(u.createdAt).getTime() || 0, {
-        id: 'createdAt',
-        header: '登録日',
-      }),
-      columnHelper.accessor((u) => new Date(u.updatedAt).getTime() || 0, {
-        id: 'updatedAt',
-        header: '更新日',
       }),
       columnHelper.display({
         id: 'actions',
@@ -520,7 +530,7 @@ export default function UsersPanel() {
 
       <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="border-b border-gray-100">{pager}</div>
-      <div className="overflow-x-auto">
+      <SyncedScrollContainer className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <SortableHeaderRow table={table} />
@@ -537,14 +547,14 @@ export default function UsersPanel() {
             ))}
             {visibleUsers.length === 0 && (
               <tr>
-                <td colSpan={14} className="px-3 py-6 text-center text-gray-400">
+                <td colSpan={15} className="px-3 py-6 text-center text-gray-400">
                   ユーザーがいません
                 </td>
               </tr>
             )}
           </tbody>
         </table>
-      </div>
+      </SyncedScrollContainer>
         <div className="border-t border-gray-100">{pager}</div>
       </div>
     </div>

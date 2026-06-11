@@ -1480,7 +1480,8 @@ export default function MapView() {
   // データ詳細パネルを開く（カスタムコントロールから呼ばれる）
   const openStats = useCallback(() => {
     setStatsOpen(true);
-  }, []);
+    logEvent('stats', { meta: { action: 'open', view: statsView } });
+  }, [statsView]);
   useEffect(() => {
     openStatsRef.current = openStats;
   }, [openStats]);
@@ -1488,7 +1489,8 @@ export default function MapView() {
   // ランキングパネルを開く（カスタムコントロールから呼ばれる）
   const openRankings = useCallback(() => {
     setRankingsOpen(true);
-  }, []);
+    logEvent('ranking', { meta: { action: 'open', tab: rankingsTab, period: rankingsPeriod } });
+  }, [rankingsTab, rankingsPeriod]);
   useEffect(() => {
     openRankingsRef.current = openRankings;
   }, [openRankings]);
@@ -1624,6 +1626,7 @@ export default function MapView() {
 
   // データ詳細パネルで都道府県名を押したとき、その県の塗ったセル全体が収まる範囲へ寄せる。
   const flyToPref = useCallback((prefName: string) => {
+    logEvent('stats', { meta: { action: 'fly_to_pref', pref: prefName } });
     const map = mapRef.current;
     if (!map) return;
     const lookup = muniByPaintedCellRef.current;
@@ -1646,6 +1649,7 @@ export default function MapView() {
   // データ詳細パネル（世界タブ）で国名を押したとき、その国の塗ったセル全体が収まる範囲へ寄せる。
   // 都道府県（flyToPref）と同じく、塗り済みセルから bbox を作るのでタイル未ロードでも飛べる。
   const flyToCountry = useCallback((a3: string) => {
+    logEvent('stats', { meta: { action: 'fly_to_country', country: a3 } });
     const map = mapRef.current;
     if (!map) return;
     const lookup = regionByPaintedCellRef.current;
@@ -5555,13 +5559,14 @@ export default function MapView() {
               </button>
             </div>
 
-            {/* 自国／世界 切り替え。自国は日本なら都道府県、それ以外はその国の州・県内訳。
-                世界は各国の塗り％だけを出す。 */}
             <div className="flex rounded-lg bg-gray-100 p-0.5 mb-4 text-sm font-medium select-none">
               <button
                 type="button"
                 aria-pressed={statsView === 'home'}
-                onClick={() => setStatsView('home')}
+                onClick={() => {
+                  setStatsView('home');
+                  logEvent('stats', { meta: { action: 'switch_view', view: 'home' } });
+                }}
                 className={`flex-1 rounded-md px-3 py-1.5 transition-colors ${
                   statsView === 'home'
                     ? 'bg-white text-gray-900 shadow-sm'
@@ -5573,7 +5578,10 @@ export default function MapView() {
               <button
                 type="button"
                 aria-pressed={statsView === 'world'}
-                onClick={() => setStatsView('world')}
+                onClick={() => {
+                  setStatsView('world');
+                  logEvent('stats', { meta: { action: 'switch_view', view: 'world' } });
+                }}
                 className={`flex-1 rounded-md px-3 py-1.5 transition-colors ${
                   statsView === 'world'
                     ? 'bg-white text-gray-900 shadow-sm'
@@ -5939,7 +5947,10 @@ export default function MapView() {
                   key={key}
                   type="button"
                   aria-pressed={rankingsPeriod === key}
-                  onClick={() => setRankingsPeriod(key)}
+                  onClick={() => {
+                    setRankingsPeriod(key);
+                    logEvent('ranking', { meta: { action: 'switch_period', period: key } });
+                  }}
                   className={`flex-1 rounded-md px-2 py-1.5 transition-colors ${
                     rankingsPeriod === key
                       ? 'bg-white text-gray-900 shadow-sm'
@@ -5968,7 +5979,10 @@ export default function MapView() {
                   key={key}
                   type="button"
                   aria-pressed={rankingsTab === key}
-                  onClick={() => setRankingsTab(key)}
+                  onClick={() => {
+                    setRankingsTab(key);
+                    logEvent('ranking', { meta: { action: 'switch_tab', tab: key } });
+                  }}
                   className={`rounded-md px-2 py-1.5 transition-colors ${
                     rankingsTab === key
                       ? 'bg-white text-gray-900 shadow-sm'
@@ -5999,11 +6013,15 @@ export default function MapView() {
                       aria-label={t('rankRegionSelect')}
                       className="mb-3 w-full rounded-md border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-800"
                       value={regionKey ?? regionRanking.key ?? ''}
-                      onChange={(e) => setRegionKey(e.target.value)}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setRegionKey(val);
+                        logEvent('ranking', { meta: { action: 'switch_region', region: val, type: rankingsTab } });
+                      }}
                     >
                       {regionRanking.regions.map((r) => (
                         <option key={r.key} value={r.key}>
-                          {regionName(r.key)}
+                           {regionName(r.key)}
                         </option>
                       ))}
                     </select>

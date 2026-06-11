@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   createColumnHelper,
   getCoreRowModel,
@@ -8,7 +8,7 @@ import {
   type SortingState,
 } from '@tanstack/react-table';
 import { fetchLogs, type UserLog } from './api';
-import { SortableHeaderRow, TableBody, TablePager } from './table';
+import { SortableHeaderRow, TableBody, TablePager, SyncedScrollContainer } from './table';
 import UserFilter from './UserFilter';
 
 const PAGE_SIZE = 100;
@@ -22,6 +22,8 @@ const ACTION_LABEL: Record<string, string> = {
   search: '検索',
   gps: '現在地取得',
   video_reward: '動画広告',
+  stats: 'データ詳細',
+  ranking: 'ランキング',
 };
 
 // 動画リワード（video_reward）の meta.event の日本語ラベル。
@@ -72,6 +74,12 @@ function formatDateTime(iso: string): string {
   if (Number.isNaN(d.getTime())) return '-';
   return d.toLocaleString('ja-JP');
 }
+
+function formatLatLng(lat: number | null | undefined, lng: number | null | undefined): string {
+  if (lat == null || lng == null) return '-';
+  return `${lat}, ${lng}`;
+}
+
 
 function actionBadge(action: string) {
   const label = ACTION_LABEL[action] ?? action;
@@ -208,20 +216,18 @@ const columns = [
     cell: (info) => formatDateTime(info.getValue()),
     meta: { tdClass: 'text-xs text-gray-500 whitespace-nowrap' },
   }),
-  columnHelper.accessor((l) => l.userName || l.userEmail || '', {
+  columnHelper.accessor((l) => l.userName || l.userEmail || l.userId || '', {
     id: 'user',
     header: 'ユーザー',
     cell: ({ row }) => (
-      <>
+      <div className="flex flex-col gap-0.5">
         <div className="font-medium text-gray-800">{row.original.userName || '(未設定)'}</div>
-        <div className="text-xs text-gray-400">{row.original.userEmail}</div>
-      </>
+        {row.original.userEmail && (
+          <div className="text-xs text-gray-400">{row.original.userEmail}</div>
+        )}
+        <div className="text-[10px] text-gray-400 font-mono">{row.original.userId || '-'}</div>
+      </div>
     ),
-  }),
-  columnHelper.accessor((l) => l.userId ?? '-', {
-    id: 'userId',
-    header: 'ユーザーID',
-    meta: { tdClass: 'text-[10px] text-gray-400 whitespace-nowrap font-mono' },
   }),
   columnHelper.accessor('action', {
     id: 'action',
@@ -235,44 +241,43 @@ const columns = [
     cell: ({ row }) => <MetaCell meta={row.original.meta} />,
     meta: { tdClass: 'text-xs text-gray-600' },
   }),
-  // プラットフォーム＋バージョン表記（旧ログ・未申告は -）
+  // 環境（プラットフォーム＋アプリバージョン ＆ サーバー環境）
   columnHelper.accessor((l) => l.platform ?? '', {
     id: 'platform',
     header: '環境',
     cell: ({ row }) => (
-      <>
-        <div>
-          {row.original.platform
-            ? (PLATFORM_LABEL[row.original.platform] ?? row.original.platform)
-            : '-'}
+      <div className="flex flex-col gap-0.5">
+        <div className="flex items-center gap-1.5 whitespace-nowrap">
+          <span>
+            {row.original.platform
+              ? (PLATFORM_LABEL[row.original.platform] ?? row.original.platform)
+              : '-'}
+          </span>
+          {row.original.environment && (
+            <EnvironmentBadge env={row.original.environment} />
+          )}
         </div>
         {row.original.appVersion && (
           <div className="text-[10px] text-gray-400">{row.original.appVersion}</div>
         )}
-      </>
+      </div>
     ),
-    meta: { tdClass: 'text-xs text-gray-600 whitespace-nowrap' },
+    meta: { tdClass: 'text-xs text-gray-600' },
   }),
-  // サーバー環境（dev / docker / production）。バッジで色分け表示。
-  columnHelper.accessor((l) => l.environment ?? '', {
-    id: 'environment',
-    header: 'サーバー環境',
-    cell: ({ row }) => <EnvironmentBadge env={row.original.environment} />,
-    meta: { tdClass: 'whitespace-nowrap' },
+  columnHelper.accessor((l) => l.url ?? '-', {
+    id: 'url',
+    header: 'URL',
+    meta: { tdClass: 'text-xs text-gray-500 break-all max-w-[200px]' },
   }),
   columnHelper.accessor((l) => l.municipality ?? '-', {
     id: 'municipality',
     header: '市区町村',
     meta: { tdClass: 'text-xs text-gray-600 whitespace-nowrap' },
   }),
-  columnHelper.accessor((l) => l.lat != null ? String(l.lat) : '-', {
-    id: 'lat',
-    header: '緯度',
-    meta: { tdClass: 'text-xs text-gray-500 whitespace-nowrap font-mono' },
-  }),
-  columnHelper.accessor((l) => l.lng != null ? String(l.lng) : '-', {
-    id: 'lng',
-    header: '経度',
+  columnHelper.display({
+    id: 'latlng',
+    header: '緯度・経度',
+    cell: ({ row }) => formatLatLng(row.original.lat, row.original.lng),
     meta: { tdClass: 'text-xs text-gray-500 whitespace-nowrap font-mono' },
   }),
   columnHelper.accessor((l) => l.ipAddress ?? '-', {
@@ -311,71 +316,7 @@ function CopyButton({ log }: { log: UserLog }) {
   );
 }
 
-// 上下スクロールバー同期コンテナ。上にもスクロールバーを配置し、
-// 下のスクロールバーと連動させる。
-function SyncedScrollContainer({ children }: { children: React.ReactNode }) {
-  const topRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const [contentWidth, setContentWidth] = useState(0);
-  const syncing = useRef(false);
 
-  // テーブルの実コンテンツ幅を監視して上のダミーバーに反映する。
-  useEffect(() => {
-    const bottom = bottomRef.current;
-    if (!bottom) return;
-    const update = () => {
-      const inner = bottom.scrollWidth;
-      if (inner !== contentWidth) setContentWidth(inner);
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(bottom);
-    // テーブル内の子要素のサイズ変化も拾う
-    const first = bottom.firstElementChild;
-    if (first) ro.observe(first);
-    return () => ro.disconnect();
-  }, [contentWidth]);
-
-  const onTopScroll = useCallback(() => {
-    if (syncing.current) return;
-    syncing.current = true;
-    if (bottomRef.current && topRef.current) {
-      bottomRef.current.scrollLeft = topRef.current.scrollLeft;
-    }
-    syncing.current = false;
-  }, []);
-
-  const onBottomScroll = useCallback(() => {
-    if (syncing.current) return;
-    syncing.current = true;
-    if (topRef.current && bottomRef.current) {
-      topRef.current.scrollLeft = bottomRef.current.scrollLeft;
-    }
-    syncing.current = false;
-  }, []);
-
-  return (
-    <>
-      {/* 上部スクロールバー（ダミー） */}
-      <div
-        ref={topRef}
-        onScroll={onTopScroll}
-        className="overflow-x-auto"
-        style={{ height: 16 }}
-      >
-        <div style={{ width: contentWidth, height: 1 }} />
-      </div>
-      {/* テーブル本体 */}
-      <div
-        ref={bottomRef}
-        onScroll={onBottomScroll}
-        className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm"
-      >
-        {children}
-      </div>
-    </>
-  );
-}
 
 export default function LogsPanel() {
   const [logs, setLogs] = useState<UserLog[] | null>(null);

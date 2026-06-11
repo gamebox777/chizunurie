@@ -5,6 +5,7 @@
 // ページャーをここから使う。クライアント側ソート（ユーザー管理）と
 // サーバー側ソート（塗りログ・ユーザーログ＝manual モード）の両方で同じ見た目になる。
 
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { flexRender, type RowData, type SortingFn, type Table } from '@tanstack/react-table';
 
 // columnDef.meta で列の寄せ（既定は左寄せ）と、flexRender で tbody を描く
@@ -147,3 +148,76 @@ export function TablePager<T>({
     </div>
   );
 }
+
+// 上下スクロールバー同期コンテナ。上にもスクロールバーを配置し、
+// 下のスクロールバーと連動させる。
+export function SyncedScrollContainer({
+  children,
+  className = 'overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm',
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const topRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const [contentWidth, setContentWidth] = useState(0);
+  const syncing = useRef(false);
+
+  // テーブルの実コンテンツ幅を監視して上のダミーバーに反映する。
+  useEffect(() => {
+    const bottom = bottomRef.current;
+    if (!bottom) return;
+    const update = () => {
+      const inner = bottom.scrollWidth;
+      if (inner !== contentWidth) setContentWidth(inner);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(bottom);
+    // テーブル内の子要素のサイズ変化も拾う
+    const first = bottom.firstElementChild;
+    if (first) ro.observe(first);
+    return () => ro.disconnect();
+  }, [contentWidth]);
+
+  const onTopScroll = useCallback(() => {
+    if (syncing.current) return;
+    syncing.current = true;
+    if (bottomRef.current && topRef.current) {
+      bottomRef.current.scrollLeft = topRef.current.scrollLeft;
+    }
+    syncing.current = false;
+  }, []);
+
+  const onBottomScroll = useCallback(() => {
+    if (syncing.current) return;
+    syncing.current = true;
+    if (topRef.current && bottomRef.current) {
+      topRef.current.scrollLeft = bottomRef.current.scrollLeft;
+    }
+    syncing.current = false;
+  }, []);
+
+  return (
+    <div className="space-y-1">
+      {/* 上部スクロールバー（ダミー） */}
+      <div
+        ref={topRef}
+        onScroll={onTopScroll}
+        className="overflow-x-auto"
+        style={{ height: 12 }}
+      >
+        <div style={{ width: contentWidth, height: 1 }} />
+      </div>
+      {/* テーブル本体 */}
+      <div
+        ref={bottomRef}
+        onScroll={onBottomScroll}
+        className={className}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+

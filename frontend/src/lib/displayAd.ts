@@ -32,7 +32,7 @@ function dbg(...args: unknown[]) {
  */
 export function showDisplayAdOverlay(slot: string): Promise<RewardedAdResult> {
   const t0 = performance.now();
-  const debug: RewardedAdDebug = { trail: [] };
+  const debug: RewardedAdDebug = { trail: [], isMock: DEBUG_AD };
   const mark = (label: string, ...args: unknown[]) => {
     debug.trail.push(`${Math.round(performance.now() - t0)}ms ${label}`);
     dbg(label, ...args);

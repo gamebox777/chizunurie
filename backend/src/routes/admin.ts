@@ -360,6 +360,7 @@ const LOG_SORTABLE: Record<string, AnyColumn> = {
   municipality: userLogs.municipality,
   ip: userLogs.ipAddress,
   userAgent: userLogs.userAgent,
+  url: userLogs.url,
 };
 
 // ユーザー行動ログ（user_logs）を返す（既定は新しい順）。userId / action で絞り込め、
@@ -394,6 +395,7 @@ adminRouter.get("/logs", async (c) => {
       lng: userLogs.lng,
       municipality: userLogs.municipality,
       meta: userLogs.meta,
+      url: userLogs.url,
       environment: userLogs.environment,
       createdAt: userLogs.createdAt,
     })

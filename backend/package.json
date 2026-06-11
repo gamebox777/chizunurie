@@ -8,8 +8,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:push": "drizzle-kit push",
+    "db:migrate": "node --env-file=.env ./node_modules/.bin/drizzle-kit migrate",
+    "db:push": "node --env-file=.env ./node_modules/.bin/drizzle-kit push",
     "db:studio": "node --env-file=.env ./node_modules/.bin/drizzle-kit studio",
     "seed:rankings": "tsx --env-file=.env scripts/seed-rankings.ts"
   },

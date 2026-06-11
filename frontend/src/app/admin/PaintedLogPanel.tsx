@@ -8,7 +8,7 @@ import {
   type SortingState,
 } from '@tanstack/react-table';
 import { fetchPaintedLog, type PaintedLog } from './api';
-import { SortableHeaderRow, TableBody, TablePager } from './table';
+import { SortableHeaderRow, TableBody, TablePager, SyncedScrollContainer } from './table';
 import UserFilter from './UserFilter';
 
 const PAGE_SIZE = 100;
@@ -182,14 +182,14 @@ export default function PaintedLogPanel() {
       {rows && (
         <div className="space-y-3">
           {pager}
-          <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+          <SyncedScrollContainer>
             <table className="w-full text-sm">
               <thead>
                 <SortableHeaderRow table={table} />
               </thead>
               <TableBody table={table} empty="塗りログがありません" />
             </table>
-          </div>
+          </SyncedScrollContainer>
           {pager}
         </div>
       )}

@@ -16,6 +16,8 @@ const ALLOWED_ACTIONS = new Set([
   "gps",
   // 動画リワード広告の各段階（meta.event で start/granted/dismissed/… を区別）。
   "video_reward",
+  "stats",
+  "ranking",
 ]);
 
 type LogBody = {
@@ -26,6 +28,7 @@ type LogBody = {
   platform?: unknown;
   appVersion?: unknown;
   meta?: unknown;
+  url?: unknown;
 };
 
 // クライアントが申告できるプラットフォーム種別（それ以外の値は捨てる）。
@@ -62,6 +65,10 @@ logRouter.post("/", async (c) => {
     typeof body?.appVersion === "string" && body.appVersion.length <= 128
       ? body.appVersion
       : null;
+  const url =
+    typeof body?.url === "string" && body.url.length <= 1024
+      ? body.url
+      : null;
 
   await logEvent(c, {
     userId: user.id,
@@ -72,6 +79,7 @@ logRouter.post("/", async (c) => {
     platform,
     appVersion,
     meta: body?.meta ?? null,
+    url,
   });
   return c.json({ ok: true });
 });

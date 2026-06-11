@@ -116,6 +116,7 @@ export type UserLog = {
   lng: number | null;
   municipality: string | null;
   meta: unknown;
+  url: string | null;
   // ログ記録時のサーバー実行環境（dev / docker / production）。
   environment: string | null;
   createdAt: string;

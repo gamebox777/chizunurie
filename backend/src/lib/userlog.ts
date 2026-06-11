@@ -39,6 +39,7 @@ export type LogEventInput = {
   platform?: string | null;
   appVersion?: string | null;
   meta?: unknown;
+  url?: string | null;
 };
 
 // ユーザーログを1行記録する。ip/ua はリクエストから補完する。
@@ -57,6 +58,7 @@ export async function logEvent(c: Context, input: LogEventInput): Promise<void> 
       platform: input.platform ?? null,
       appVersion: input.appVersion ?? null,
       meta: input.meta ?? null,
+      url: input.url ?? null,
       environment: RUN_MODE,
     });
     // ユーザーテーブルに「最新の接続元」を上書き保存する（アクションのたびに更新）。

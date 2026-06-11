@@ -1,0 +1,1 @@
+ALTER TABLE "user_logs" ADD COLUMN "url" text;

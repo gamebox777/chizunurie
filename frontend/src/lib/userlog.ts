@@ -23,7 +23,9 @@ export type LogAction =
   | 'session_start'
   | 'search'
   | 'gps'
-  | 'video_reward';
+  | 'video_reward'
+  | 'stats'
+  | 'ranking';
 
 type LngLatMuni = { lat: number; lng: number; municipality: string | null };
 
@@ -107,6 +109,7 @@ export function logEvent(action: LogAction, opts?: LogEventOptions): Promise<voi
           platform: appPlatform(),
           appVersion,
           meta: opts?.meta ?? null,
+          url: typeof window !== 'undefined' ? window.location.href : null,
         }),
       })
     )

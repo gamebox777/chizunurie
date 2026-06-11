@@ -54,6 +54,7 @@ export type RewardedAdDebug = {
   boxDimensions?: { width: number; height: number };
   insDimensions?: { width: number; height: number };
   pushError?: { name: string; message: string; stack?: string } | null;
+  isMock?: boolean;
 };
 
 // 表示結果。granted 以外のとき detail に具体的な失敗理由を添える。

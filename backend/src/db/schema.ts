@@ -177,6 +177,8 @@ export const userLogs = pgTable(
     municipality: text("municipality"),
     // 検索クエリ等の任意付帯情報
     meta: jsonb("meta"),
+    // アクションが実行された際のクライアントのURL
+    url: text("url"),
     // ログ記録時のサーバー実行環境（dev / docker / production）。
     // どの環境で発生したアクションかを管理画面で判別するため記録する。
     environment: text("environment"),

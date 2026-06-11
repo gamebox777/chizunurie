@@ -314,6 +314,7 @@ const LOG_SORTABLE = {
     municipality: userLogs.municipality,
     ip: userLogs.ipAddress,
     userAgent: userLogs.userAgent,
+    url: userLogs.url,
 };
 // ユーザー行動ログ（user_logs）を返す（既定は新しい順）。userId / action で絞り込め、
 // sort / dir / offset で任意の列のソートとページ送りができる。
@@ -346,6 +347,8 @@ adminRouter.get("/logs", async (c) => {
         lng: userLogs.lng,
         municipality: userLogs.municipality,
         meta: userLogs.meta,
+        url: userLogs.url,
+        environment: userLogs.environment,
         createdAt: userLogs.createdAt,
     })
         .from(userLogs)

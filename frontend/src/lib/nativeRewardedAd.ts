@@ -108,11 +108,22 @@ export async function showNativeRewardedAd(): Promise<NativeRewardedAdResult> {
       outcome === "unavailable" ||
       outcome === "error"
     ) {
+      let isMock = false;
+      try {
+        const testModeInfo = await plugin.getAdTestMode?.();
+        isMock = testModeInfo?.effectiveTestMode === true || testModeInfo?.testMode === true;
+      } catch {
+        // ignore
+      }
+
       return {
         outcome,
         detail: ret.detail as NativeRewardedAdDetail | undefined,
         // 視聴完了以外は SDK の診断情報を添えて失敗原因を残す。
-        debug: outcome === "granted" ? undefined : await collectDebug(),
+        // ただし、isMock の情報は完了時であっても debug.isMock に含めて返す。
+        debug: outcome === "granted"
+          ? { isMock }
+          : await collectDebug({ isMock }),
       };
     }
     return {
