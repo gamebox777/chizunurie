@@ -16,7 +16,6 @@ export default function Header() {
   const [modal, setModal] = useState<ModalTab | null>(null);
   const [editingNickname, setEditingNickname] = useState(false);
   const [guestNoticeDismissed, setGuestNoticeDismissed] = useState(false);
-
   // 匿名（ゲスト）セッションは「ログイン済み」ではなく未ログイン扱いにする：
   // ヘッダーはログイン/新規登録ボタンを出し、ニックネーム入力も促さない。
   const realUser = !!session && !session.user.isAnonymous;

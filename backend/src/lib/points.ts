@@ -4,43 +4,78 @@ import { db } from "../db/index.js";
 import { appSettings, user, userPoints } from "../db/schema.js";
 
 // ── 塗りポイントの調整パラメータ（今後バランス調整予定） ──────────────
-export const INITIAL_POINTS = 10; // 登録時（初回）に付与される残高
-export const REGEN_INTERVAL_MS = 10 * 60 * 1000; // 10分で1ポイント回復
-
 // 塗りのコスト（クライアントが隣接判定して送る。サーバーは残高のみ権威的に管理する）
 export const COST_ADJACENT = 1; // 塗り済みに隣接する場所
 export const COST_FAR = 10; // 離れた場所（確認ダイアログ付き）
 // 許可するコスト（0 は Shift+クリックのデバッグ塗り用＝無料）
 export const ALLOWED_COSTS = new Set([0, COST_ADJACENT, COST_FAR]);
 
-// ── レベル / 経験値の調整パラメータ ──────────────────────────────
-// 塗りポイントの最大値（時間回復の上限）はレベルに応じて増える。
-//   level 1 = 10、以降レベルが上がるごとに +1。
-const BASE_MAX_POINTS = 10; // level 1 のときの最大塗りポイント
-// 次のレベルに必要な経験値。level 1→2 で 500、以降レベルが上がるごとに +100。
-const BASE_EXP_TO_NEXT = 500;
-const EXP_TO_NEXT_STEP = 100;
+// ── 経験値・レベル・ポイント設定（app_settings の expConfig キーで動的変更可能） ──────────
+// 全フィールドは管理画面の設定タブから変更でき、保存すると全ユーザーに即反映される。
+// DB 未設定時は下記の既定値（EXP_CONFIG_DEFAULTS）が使われる。
 
-// 塗りで得られる経験値
-export const EXP_VISIT = 100; // 実際に訪れる（GPS塗り・manual→gps 昇格・再訪）＝1km初訪問ボーナス
-export const EXP_PAINT = 50; // となり塗り／離れた場所塗り（manual・有料）
-// GPS歩き塗りで、既に取得済み（gps）の1km内の「新しい細セル（125m）」を初めて踏んだとき。
-// 1km初訪問の EXP_VISIT(+100) とは別に、歩くたびに少しずつ伸びるよう小さめに与える。
-export const EXP_FINE = 5;
+export type ExpConfig = {
+  expVisit: number;            // GPS 訪問・昇格・全面セル再訪の経験値
+  expPaint: number;            // 手動塗り（となり塗り）の経験値
+  expFine: number;             // 125m 細セル初踏みの経験値
+  expFineRevisit: number;      // 125m 細セル再訪の経験値（クールダウン経過後）
+  baseMaxPoints: number;       // level 1 の最大塗りポイント（回復上限）
+  baseExpToNext: number;       // level 1→2 に必要な経験値
+  expToNextStep: number;       // レベルが上がるごとに増える必要経験値の増分
+  initialPoints: number;       // 新規ユーザーの初期塗りポイント残高
+  regenIntervalSec: number;    // 1ポイント回復するまでの秒数
+  revisitCooldownSec: number;  // 再訪クールダウン：既訪セルへ GPS で入り直したとき再び XP を付与するまでの待ち時間
+};
 
-// 再訪クールダウン：既に gps 済みのセルへ GPS で入り直した時、前回の訪問から
-// この時間が経過していれば再び EXP_VISIT を付与する。GPS は静止中も連続発火するため、
-// この間隔で「再訪あたり1回」に制限して無限獲得を防ぐ（painted_regions.lastVisitAt で判定）。
-export const REVISIT_EXP_COOLDOWN_MS = 60 * 60 * 1000; // 1時間に1回
+export const EXP_CONFIG_DEFAULTS: ExpConfig = {
+  expVisit: 100,
+  expPaint: 50,
+  expFine: 5,
+  expFineRevisit: 5,
+  baseMaxPoints: 10,
+  baseExpToNext: 500,
+  expToNextStep: 100,
+  initialPoints: 10,
+  regenIntervalSec: 600,
+  revisitCooldownSec: 3600,
+};
+
+// app_settings（単一行 id=1 の jsonb）の expConfig キーから設定を読む。
+// 未設定・値が不正なキーは既定値にフォールバックする。
+// painted リクエストごとに1回読む（動画リワードと同じパターン）。
+export async function getExpConfig(tx: DbExecutor = db): Promise<ExpConfig> {
+  const rows = await tx
+    .select({ settings: appSettings.settings })
+    .from(appSettings)
+    .where(eq(appSettings.id, 1));
+  const raw = (rows[0]?.settings as Record<string, unknown> | undefined)
+    ?.expConfig as Record<string, unknown> | undefined;
+  function numOr(v: unknown, min: number, def: number): number {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= min ? Math.floor(n) : def;
+  }
+  return {
+    expVisit: numOr(raw?.expVisit, 0, EXP_CONFIG_DEFAULTS.expVisit),
+    expPaint: numOr(raw?.expPaint, 0, EXP_CONFIG_DEFAULTS.expPaint),
+    expFine: numOr(raw?.expFine, 0, EXP_CONFIG_DEFAULTS.expFine),
+    expFineRevisit: numOr(raw?.expFineRevisit, 0, EXP_CONFIG_DEFAULTS.expFineRevisit),
+    baseMaxPoints: numOr(raw?.baseMaxPoints, 1, EXP_CONFIG_DEFAULTS.baseMaxPoints),
+    baseExpToNext: numOr(raw?.baseExpToNext, 1, EXP_CONFIG_DEFAULTS.baseExpToNext),
+    expToNextStep: numOr(raw?.expToNextStep, 0, EXP_CONFIG_DEFAULTS.expToNextStep),
+    initialPoints: numOr(raw?.initialPoints, 0, EXP_CONFIG_DEFAULTS.initialPoints),
+    regenIntervalSec: numOr(raw?.regenIntervalSec, 1, EXP_CONFIG_DEFAULTS.regenIntervalSec),
+    revisitCooldownSec: numOr(raw?.revisitCooldownSec, 0, EXP_CONFIG_DEFAULTS.revisitCooldownSec),
+  };
+}
 
 // level のときの最大塗りポイント（回復上限）
-export function maxPointsForLevel(level: number): number {
-  return BASE_MAX_POINTS + (level - 1);
+export function maxPointsForLevel(level: number, cfg: ExpConfig): number {
+  return cfg.baseMaxPoints + (level - 1);
 }
 
 // level → level+1 に必要な経験値
-export function expToNext(level: number): number {
-  return BASE_EXP_TO_NEXT + (level - 1) * EXP_TO_NEXT_STEP;
+export function expToNext(level: number, cfg: ExpConfig): number {
+  return cfg.baseExpToNext + (level - 1) * cfg.expToNextStep;
 }
 
 // 1回のハートビートで加算を許可する最大秒数。クライアントは約1分ごとに送るため、
@@ -149,21 +184,23 @@ function regen(
   points: number,
   updatedAt: Date,
   now: number,
-  level: number
+  level: number,
+  cfg: ExpConfig
 ): { points: number; updatedAt: Date } {
-  const max = maxPointsForLevel(level);
+  const max = maxPointsForLevel(level, cfg);
+  const regenIntervalMs = cfg.regenIntervalSec * 1000;
   if (points >= max) {
     return { points, updatedAt: new Date(now) };
   }
   const elapsed = now - updatedAt.getTime();
-  const gained = Math.floor(elapsed / REGEN_INTERVAL_MS);
+  const gained = Math.floor(elapsed / regenIntervalMs);
   if (gained <= 0) return { points, updatedAt };
   const next = Math.min(max, points + gained);
   // 満タンに達したら now にリセット。未満なら回復した整数時間ぶんだけ進める（端数は繰り越し）。
   const nextUpdatedAt =
     next >= max
       ? new Date(now)
-      : new Date(updatedAt.getTime() + gained * REGEN_INTERVAL_MS);
+      : new Date(updatedAt.getTime() + gained * regenIntervalMs);
   return { points: next, updatedAt: nextUpdatedAt };
 }
 
@@ -173,16 +210,18 @@ function toState(
   level: number,
   exp: number,
   playTimeSec: number,
-  totalExp: number
+  totalExp: number,
+  cfg: ExpConfig
 ): PointsState {
-  const max = maxPointsForLevel(level);
+  const max = maxPointsForLevel(level, cfg);
+  const regenIntervalMs = cfg.regenIntervalSec * 1000;
   return {
     points,
     max,
-    regenAt: points >= max ? null : updatedAt.getTime() + REGEN_INTERVAL_MS,
+    regenAt: points >= max ? null : updatedAt.getTime() + regenIntervalMs,
     level,
     exp,
-    expToNext: expToNext(level),
+    expToNext: expToNext(level, cfg),
     totalExp,
     playTimeSec,
   };
@@ -195,28 +234,31 @@ function applyExp(
   points: number,
   level: number,
   exp: number,
-  gainedExp: number
+  gainedExp: number,
+  cfg: ExpConfig
 ): { points: number; level: number; exp: number } {
   let nextPoints = points;
   let nextLevel = level;
   let nextExp = exp + gainedExp;
   // 一度の加算で複数レベル上がる可能性に備えてループ
-  while (nextExp >= expToNext(nextLevel)) {
-    nextExp -= expToNext(nextLevel);
+  while (nextExp >= expToNext(nextLevel, cfg)) {
+    nextExp -= expToNext(nextLevel, cfg);
     nextLevel += 1;
     // レベルアップ時、新レベルの最大塗りポイントぶんポイントを加算（上限を超えてよい）
-    nextPoints += maxPointsForLevel(nextLevel);
+    nextPoints += maxPointsForLevel(nextLevel, cfg);
   }
   return { points: nextPoints, level: nextLevel, exp: nextExp };
 }
 
 // ユーザーのポイント行を取得（無ければ初期値で作成）し、回復を反映して確定・永続化する。
-// 任意で同一トランザクション（tx）上で実行できる。
+// 任意で同一トランザクション（tx）上で実行できる。cfg 省略時は DB から読む。
 export async function ensurePoints(
   userId: string,
   now: number,
-  tx: DbExecutor = db
+  tx: DbExecutor = db,
+  cfg?: ExpConfig
 ): Promise<PointsState> {
+  const resolvedCfg = cfg ?? (await getExpConfig(tx));
   const rows = await tx
     .select()
     .from(userPoints)
@@ -228,18 +270,18 @@ export async function ensurePoints(
       .insert(userPoints)
       .values({
         userId,
-        points: INITIAL_POINTS,
+        points: resolvedCfg.initialPoints,
         level: 1,
         exp: 0,
         totalExp: 0,
         updatedAt,
       })
       .onConflictDoNothing();
-    return toState(INITIAL_POINTS, updatedAt, 1, 0, 0, 0);
+    return toState(resolvedCfg.initialPoints, updatedAt, 1, 0, 0, 0, resolvedCfg);
   }
 
   const row = rows[0];
-  const r = regen(row.points, row.updatedAt, now, row.level);
+  const r = regen(row.points, row.updatedAt, now, row.level, resolvedCfg);
   if (
     r.points !== row.points ||
     r.updatedAt.getTime() !== row.updatedAt.getTime()
@@ -255,33 +297,36 @@ export async function ensurePoints(
     row.level,
     row.exp,
     row.playTimeSec,
-    row.totalExp
+    row.totalExp,
+    resolvedCfg
   );
 }
 
 // 経験値を加算する。回復を反映したうえで加算し、レベルアップを処理して永続化する。
 // 加算量が 0 以下なら現在の状態をそのまま返す（課金なしのデバッグ塗り等）。
+// cfg 省略時は DB から読む。painted.ts など呼び出し元でまとめて取得して渡すと DB 読みが減る。
 export async function addExp(
   userId: string,
   gainedExp: number,
   now: number,
-  tx: DbExecutor = db
+  tx: DbExecutor = db,
+  cfg?: ExpConfig
 ): Promise<PointsState> {
-  const state = await ensurePoints(userId, now, tx); // 行を作成＋回復を確定
+  const resolvedCfg = cfg ?? (await getExpConfig(tx));
+  const state = await ensurePoints(userId, now, tx, resolvedCfg); // 行を作成＋回復を確定
   if (gainedExp <= 0) return state;
 
-  const next = applyExp(state.points, state.level, state.exp, gainedExp);
+  const next = applyExp(state.points, state.level, state.exp, gainedExp, resolvedCfg);
   // 累計獲得経験値は獲得ぶんをそのまま足す（レベルアップで目減りしない記録）。
   const nextTotalExp = state.totalExp + gainedExp;
   const leveledUp = next.level > state.level;
+  const regenIntervalMs = resolvedCfg.regenIntervalSec * 1000;
   // レベルアップで上限超過の残高が生じうるので、その場合は回復時計を now に張り直す
   // （超過ぶんは時間回復で増えないため、満タン基準のアンカーにそろえる）。
   const updatedAt =
-    leveledUp && next.points >= maxPointsForLevel(next.level)
+    leveledUp && next.points >= maxPointsForLevel(next.level, resolvedCfg)
       ? new Date(now)
-      : new Date(
-          state.regenAt === null ? now : state.regenAt - REGEN_INTERVAL_MS
-        );
+      : new Date(state.regenAt === null ? now : state.regenAt - regenIntervalMs);
   await tx
     .update(userPoints)
     .set({
@@ -298,7 +343,8 @@ export async function addExp(
     next.level,
     next.exp,
     state.playTimeSec,
-    nextTotalExp
+    nextTotalExp,
+    resolvedCfg
   );
 }
 
@@ -310,7 +356,8 @@ export async function setPoints(
   now: number,
   tx: DbExecutor = db
 ): Promise<PointsState> {
-  const state = await ensurePoints(userId, now, tx); // 行が無ければ初期化しておく
+  const resolvedCfg = await getExpConfig(tx);
+  const state = await ensurePoints(userId, now, tx, resolvedCfg); // 行が無ければ初期化しておく
   const updatedAt = new Date(now);
   await tx
     .update(userPoints)
@@ -322,7 +369,8 @@ export async function setPoints(
     state.level,
     state.exp,
     state.playTimeSec,
-    state.totalExp
+    state.totalExp,
+    resolvedCfg
   );
 }
 
@@ -333,12 +381,13 @@ export async function resetPoints(
   now: number,
   tx: DbExecutor = db
 ): Promise<PointsState> {
-  await ensurePoints(userId, now, tx); // 行が無ければ初期化しておく
+  const resolvedCfg = await getExpConfig(tx);
+  await ensurePoints(userId, now, tx, resolvedCfg); // 行が無ければ初期化しておく
   const updatedAt = new Date(now);
   await tx
     .update(userPoints)
     .set({
-      points: INITIAL_POINTS,
+      points: resolvedCfg.initialPoints,
       level: 1,
       exp: 0,
       totalExp: 0,
@@ -346,27 +395,31 @@ export async function resetPoints(
       updatedAt,
     })
     .where(eq(userPoints.userId, userId));
-  return toState(INITIAL_POINTS, updatedAt, 1, 0, 0, 0);
+  return toState(resolvedCfg.initialPoints, updatedAt, 1, 0, 0, 0, resolvedCfg);
 }
 
 // cost ぶんポイントを消費する。残高不足なら null を返す（呼び出し側でロールバック）。
 // 満タンから消費する場合は回復時計を now から始める。
+// cfg 省略時は DB から読む。painted.ts など呼び出し元でまとめて取得して渡すと DB 読みが減る。
 export async function spendPoints(
   userId: string,
   cost: number,
   now: number,
-  tx: DbExecutor = db
+  tx: DbExecutor = db,
+  cfg?: ExpConfig
 ): Promise<PointsState | null> {
-  const state = await ensurePoints(userId, now, tx);
+  const resolvedCfg = cfg ?? (await getExpConfig(tx));
+  const state = await ensurePoints(userId, now, tx, resolvedCfg);
   if (cost <= 0) return state; // 無料（デバッグ）
   if (state.points < cost) return null; // 残高不足
 
   const remaining = state.points - cost;
+  const regenIntervalMs = resolvedCfg.regenIntervalSec * 1000;
   // 消費前が満タンだった（regenAt === null）なら、回復時計を now から開始する。
   const updatedAt =
     state.regenAt === null
       ? new Date(now)
-      : new Date(state.regenAt - REGEN_INTERVAL_MS);
+      : new Date(state.regenAt - regenIntervalMs);
   await tx
     .update(userPoints)
     .set({ points: remaining, updatedAt })
@@ -377,7 +430,8 @@ export async function spendPoints(
     state.level,
     state.exp,
     state.playTimeSec,
-    state.totalExp
+    state.totalExp,
+    resolvedCfg
   );
 }
 
@@ -543,7 +597,8 @@ export async function claimVideoReward(
   platform: VideoRewardPlatform,
   tx: DbExecutor = db
 ): Promise<VideoRewardResult> {
-  const state = await ensurePoints(userId, now, tx); // 行を作成＋回復を確定
+  const expCfg = await getExpConfig(tx);
+  const state = await ensurePoints(userId, now, tx, expCfg); // 行を作成＋回復を確定
   const meta = await selectRewardMeta(userId, tx);
   const cfg = await getVideoRewardConfig(tx);
   const cooldownMs = cooldownMsFor(platform, cfg);
@@ -584,7 +639,7 @@ export async function claimVideoReward(
   //   full  = そのレベルの満タン分（= 自然回復の上限と同量・従来挙動）
   //   half  = 満タンの半分（切り上げ）
   //   fixed = 固定値
-  const max = maxPointsForLevel(state.level);
+  const max = maxPointsForLevel(state.level, expCfg);
   const granted =
     cfg.amountMode === "fixed"
       ? cfg.fixedAmount
@@ -592,14 +647,13 @@ export async function claimVideoReward(
         ? Math.ceil(max / 2)
         : max;
   const nextPoints = state.points + granted;
+  const regenIntervalMs = expCfg.regenIntervalSec * 1000;
   // 満タン以上になったら回復時計を now にそろえる（addExp の満タン時と同様）。
   // 満タン未満（half/fixed で少量回復）の場合は進行中の回復アンカーを保つ。
   const updatedAt =
     nextPoints >= max
       ? new Date(now)
-      : new Date(
-          state.regenAt === null ? now : state.regenAt - REGEN_INTERVAL_MS
-        );
+      : new Date(state.regenAt === null ? now : state.regenAt - regenIntervalMs);
 
   const nextCount = countToday + 1;
   await tx
@@ -624,7 +678,8 @@ export async function claimVideoReward(
     state.level,
     state.exp,
     state.playTimeSec,
-    state.totalExp
+    state.totalExp,
+    expCfg
   );
   // 付与後の利用可否を計算し直して返す（クールダウン開始・残回数を反映）
   const nextStatus = buildVideoRewardStatus(

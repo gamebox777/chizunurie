@@ -2400,6 +2400,17 @@ export default function MapView() {
       'top-right'
     );
 
+    // スマホ：コントロールボタン（+/-・GPS 等）のタッチがマップの HandlerManager へ
+    // バブルしてズームが乱れる問題を防ぐ。stopPropagation のみで preventDefault は不要。
+    const ctrlTopRight = map.getContainer().querySelector('.maplibregl-ctrl-top-right');
+    if (ctrlTopRight) {
+      const stopBubble = (e: Event) => e.stopPropagation();
+      ctrlTopRight.addEventListener('touchstart', stopBubble);
+      ctrlTopRight.addEventListener('touchend', stopBubble);
+      ctrlTopRight.addEventListener('touchmove', stopBubble);
+      ctrlTopRight.addEventListener('touchcancel', stopBubble);
+    }
+
     // デバッグメニュー（レンチ）は開発者のみ表示。下の useEffect で権限に応じて付け外しする。
 
     map.on('zoom', () => {

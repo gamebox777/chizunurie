@@ -7,14 +7,17 @@ import {
   DEFAULT_RIPPLE,
   DEFAULT_VIDEO_REWARD,
   DEFAULT_WEB_ADS,
+  DEFAULT_EXP_CONFIG,
   resolveRipple,
   resolveVideoReward,
   resolveWebAds,
+  resolveExpConfig,
   rippleRgba,
   type ResolvedRipple,
   type ResolvedRippleMode,
   type ResolvedVideoReward,
   type ResolvedWebAds,
+  type ResolvedExpConfig,
 } from '@/lib/gameSettings';
 
 // 塗りの波紋（paint-ripple）演出を調整する管理画面パネル（開発者専用）。
@@ -26,6 +29,7 @@ import {
 // 数値スライダー1本ぶんの定義（最小・最大・刻み・単位・説明）。
 type NumField = {
   key: 'durationMs' | 'maxScale' | 'lifetimeMs';
+  varName: string;
   label: string;
   min: number;
   max: number;
@@ -37,6 +41,7 @@ type NumField = {
 const NUM_FIELDS: NumField[] = [
   {
     key: 'durationMs',
+    varName: 'durationMs',
     label: '広がるスピード',
     min: 100,
     max: 3000,
@@ -46,6 +51,7 @@ const NUM_FIELDS: NumField[] = [
   },
   {
     key: 'maxScale',
+    varName: 'maxScale',
     label: 'サイズ（最大倍率）',
     min: 2,
     max: 40,
@@ -55,6 +61,7 @@ const NUM_FIELDS: NumField[] = [
   },
   {
     key: 'lifetimeMs',
+    varName: 'lifetimeMs',
     label: '表示時間',
     min: 300,
     max: 5000,
@@ -73,11 +80,13 @@ const MODES: { key: 'manual' | 'gps'; title: string; desc: string }[] = [
 function ModeEditor({
   title,
   desc,
+  modeKey,
   cfg,
   onChange,
 }: {
   title: string;
   desc: string;
+  modeKey: 'manual' | 'gps';
   cfg: ResolvedRippleMode;
   onChange: (next: ResolvedRippleMode) => void;
 }) {
@@ -93,7 +102,10 @@ function ModeEditor({
           {NUM_FIELDS.map((f) => (
             <div key={f.key}>
               <div className="flex items-baseline justify-between">
-                <label className="text-sm font-medium text-gray-700">{f.label}</label>
+                <label className="text-sm font-medium text-gray-700">
+                  {f.label}
+                  <span className="ml-1.5 font-mono text-xs text-gray-400">ripple.{modeKey}.{f.varName}</span>
+                </label>
                 <span className="font-mono text-sm text-gray-700">
                   {cfg[f.key]} {f.unit}
                 </span>
@@ -113,7 +125,10 @@ function ModeEditor({
 
           {/* 色 */}
           <div>
-            <label className="text-sm font-medium text-gray-700">色</label>
+            <label className="text-sm font-medium text-gray-700">
+              色
+              <span className="ml-1.5 font-mono text-xs text-gray-400">ripple.{modeKey}.color</span>
+            </label>
             <div className="mt-2 flex items-center gap-3">
               <input
                 type="color"
@@ -128,7 +143,10 @@ function ModeEditor({
           {/* 半透明値 */}
           <div>
             <div className="flex items-baseline justify-between">
-              <label className="text-sm font-medium text-gray-700">半透明値（不透明度）</label>
+              <label className="text-sm font-medium text-gray-700">
+                半透明値（不透明度）
+                <span className="ml-1.5 font-mono text-xs text-gray-400">ripple.{modeKey}.alpha</span>
+              </label>
               <span className="font-mono text-sm text-gray-700">{cfg.alpha.toFixed(2)}</span>
             </div>
             <input
@@ -197,16 +215,19 @@ function WebAdsEditor({
   const ITEMS: {
     key: keyof ResolvedWebAds;
     label: string;
+    varName: string;
     desc: string;
   }[] = [
     {
       key: 'autoEnabled',
       label: '自動広告（AdSense）',
+      varName: 'webAds.autoEnabled',
       desc: 'ページ内の自動広告。OFF にすると adsbygoogle.js 自体を読み込みません。',
     },
     {
       key: 'rewardEnabled',
       label: '広告で回復（リワード）',
+      varName: 'webAds.rewardEnabled',
       desc: 'Web 版の「広告を見て回復」ボタン。OFF にするとボタンを表示せず、サーバーでも報酬請求を拒否します。',
     },
   ];
@@ -232,6 +253,7 @@ function WebAdsEditor({
             <span>
               <span className="text-sm text-gray-700">
                 {item.label}
+                <span className="ml-1.5 font-mono text-xs text-gray-400">{item.varName}</span>
                 <span
                   className={`ml-2 rounded px-1.5 py-0.5 text-xs font-bold ${
                     cfg[item.key]
@@ -284,7 +306,10 @@ function VideoRewardEditor({
         {/* クールタイム（Web のみ） */}
         <div>
           <div className="flex items-baseline justify-between">
-            <label className="text-sm font-medium text-gray-700">クールタイム（Web 版・秒）</label>
+            <label className="text-sm font-medium text-gray-700">
+              クールタイム（Web 版・秒）
+              <span className="ml-1.5 font-mono text-xs text-gray-400">videoReward.cooldownWebSec</span>
+            </label>
             <span className="font-mono text-sm text-gray-700">
               {cfg.cooldownWebSec} 秒（{(cfg.cooldownWebSec / 60).toFixed(1)} 分）
             </span>
@@ -309,7 +334,10 @@ function VideoRewardEditor({
 
         {/* 回復量 */}
         <div>
-          <label className="text-sm font-medium text-gray-700">回復量</label>
+          <label className="text-sm font-medium text-gray-700">
+            回復量
+            <span className="ml-1.5 font-mono text-xs text-gray-400">videoReward.amountMode</span>
+          </label>
           <div className="mt-2 space-y-2">
             {AMOUNT_MODES.map((m) => (
               <label key={m.key} className="flex cursor-pointer items-start gap-2">
@@ -343,8 +371,183 @@ function VideoRewardEditor({
                 className="w-28 rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
               />
               <span className="text-sm text-gray-600">ポイント</span>
+              <span className="font-mono text-xs text-gray-400">videoReward.fixedAmount</span>
             </div>
           )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// 経験値・レベル・ポイントのゲームバランス設定を編集するセクション。
+// 保存すると全ユーザーに即反映される（backend が painted リクエストのたびに読む）。
+function ExpConfigEditor({
+  cfg,
+  onChange,
+}: {
+  cfg: ResolvedExpConfig;
+  onChange: (next: ResolvedExpConfig) => void;
+}) {
+  type Field = {
+    key: keyof ResolvedExpConfig;
+    varName: string;
+    label: string;
+    hint: string;
+    min: number;
+    step: number;
+    unit: string;
+  };
+
+  const XP_FIELDS: Field[] = [
+    {
+      key: 'expVisit',
+      varName: 'expConfig.expVisit',
+      label: 'GPS 訪問・昇格・全面セル再訪 XP',
+      hint: '実際に現地を訪れたとき（GPS塗り新規・manual→gps昇格・全面セル再訪クールダウン経過後）に付与される経験値。',
+      min: 0,
+      step: 5,
+      unit: 'XP',
+    },
+    {
+      key: 'expPaint',
+      varName: 'expConfig.expPaint',
+      label: '手動塗り XP',
+      hint: 'となり塗り・離れた場所塗り（manual）の新規セルに付与される経験値。',
+      min: 0,
+      step: 5,
+      unit: 'XP',
+    },
+    {
+      key: 'expFine',
+      varName: 'expConfig.expFine',
+      label: '125m 細セル初踏み XP',
+      hint: '歩き GPS 塗りで 1km 内の新しい 125m 細セルを初めて踏んだときの経験値。',
+      min: 0,
+      step: 1,
+      unit: 'XP',
+    },
+    {
+      key: 'expFineRevisit',
+      varName: 'expConfig.expFineRevisit',
+      label: '125m 細セル再訪 XP',
+      hint: '歩き GPS 塗りで既に踏んだ 125m 細セルへ再び入ったとき（再訪クールダウン経過後）に付与される経験値。',
+      min: 0,
+      step: 1,
+      unit: 'XP',
+    },
+  ];
+
+  const LEVEL_FIELDS: Field[] = [
+    {
+      key: 'baseExpToNext',
+      varName: 'expConfig.baseExpToNext',
+      label: 'レベルアップ経験値（level 1→2）',
+      hint: 'level 1 から level 2 に上がるのに必要な経験値。レベルが上がるごとに「増分」ぶん増える。',
+      min: 1,
+      step: 50,
+      unit: 'XP',
+    },
+    {
+      key: 'expToNextStep',
+      varName: 'expConfig.expToNextStep',
+      label: 'レベルアップ経験値の増分',
+      hint: 'レベルが1上がるごとに次のレベルアップに必要な経験値が増える量。0 で全レベル均一。',
+      min: 0,
+      step: 10,
+      unit: 'XP/lv',
+    },
+    {
+      key: 'baseMaxPoints',
+      varName: 'expConfig.baseMaxPoints',
+      label: '最大塗りポイント（level 1）',
+      hint: 'level 1 のときの塗りポイント回復上限。レベルが上がるごとに +1 増える。',
+      min: 1,
+      step: 1,
+      unit: 'pt',
+    },
+    {
+      key: 'initialPoints',
+      varName: 'expConfig.initialPoints',
+      label: '新規ユーザーの初期塗りポイント',
+      hint: '新規登録・ゲストアカウント作成時に付与される初期の塗りポイント残高。',
+      min: 0,
+      step: 1,
+      unit: 'pt',
+    },
+    {
+      key: 'regenIntervalSec',
+      varName: 'expConfig.regenIntervalSec',
+      label: '1ポイント回復間隔（秒）',
+      hint: '塗りポイントが 1 増えるまでの秒数。600 = 10分（既定）。小さいほど早く回復する。',
+      min: 1,
+      step: 30,
+      unit: '秒',
+    },
+    {
+      key: 'revisitCooldownSec',
+      varName: 'expConfig.revisitCooldownSec',
+      label: '再訪クールダウン（秒）',
+      hint: '既に GPS 塗り済みのセルへ入り直したとき、前回訪問からこの秒数が経過していれば再び XP を付与する。3600 = 1時間（既定）。0 で即付与。',
+      min: 0,
+      step: 60,
+      unit: '秒',
+    },
+  ];
+
+  function NumInput({ field }: { field: Field }) {
+    return (
+      <div>
+        <div className="flex items-baseline justify-between">
+          <label className="text-sm font-medium text-gray-700">
+            {field.label}
+            <span className="ml-1.5 font-mono text-xs text-gray-400">{field.varName}</span>
+          </label>
+          <span className="font-mono text-sm text-gray-700">
+            {cfg[field.key]} {field.unit}
+          </span>
+        </div>
+        <input
+          type="number"
+          min={field.min}
+          step={field.step}
+          value={cfg[field.key]}
+          onChange={(e) => {
+            const n = Math.max(field.min, Math.floor(Number(e.target.value) || field.min));
+            onChange({ ...cfg, [field.key]: n });
+          }}
+          className="mt-1 w-36 rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+        />
+        <p className="mt-1 text-xs text-gray-400">{field.hint}</p>
+      </div>
+    );
+  }
+
+  return (
+    <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <h3 className="text-sm font-semibold text-gray-700">経験値・レベル・ポイント設定（全ユーザー）</h3>
+      <p className="mt-1 text-xs text-gray-400">
+        保存すると全ユーザーに即反映されます（painted リクエストのたびに backend が読みます）。
+        レベルや経験値の蓄積には遡って影響しません。
+      </p>
+
+      <div className="mt-5 space-y-6">
+        <div>
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500">経験値入手量</p>
+          <div className="space-y-4">
+            {XP_FIELDS.map((f) => (
+              <NumInput key={f.key} field={f} />
+            ))}
+          </div>
+        </div>
+
+        <div className="border-t border-gray-100 pt-5">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500">レベル・ポイント</p>
+          <div className="space-y-4">
+            {LEVEL_FIELDS.map((f) => (
+              <NumInput key={f.key} field={f} />
+            ))}
+          </div>
         </div>
       </div>
     </section>
@@ -357,6 +560,9 @@ export default function SettingsPanel() {
     resolveVideoReward(undefined)
   );
   const [webAds, setWebAds] = useState<ResolvedWebAds>(() => resolveWebAds(undefined));
+  const [expConfig, setExpConfig] = useState<ResolvedExpConfig>(() =>
+    resolveExpConfig(undefined)
+  );
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -368,6 +574,7 @@ export default function SettingsPanel() {
         setCfg(resolveRipple(s.ripple));
         setVideoReward(resolveVideoReward(s.videoReward));
         setWebAds(resolveWebAds(s.webAds));
+        setExpConfig(resolveExpConfig(s.expConfig));
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
@@ -378,7 +585,7 @@ export default function SettingsPanel() {
     setError('');
     try {
       // このパネルが扱うキーだけ送る（サーバーが既存設定に浅くマージするので移動スピード等は消えない）。
-      await saveGameSettings({ ripple: cfg, videoReward, webAds });
+      await saveGameSettings({ ripple: cfg, videoReward, webAds, expConfig });
       setSavedAt(Date.now());
     } catch (e) {
       setError((e as Error).message);
@@ -393,7 +600,7 @@ export default function SettingsPanel() {
     <div className="max-w-4xl space-y-6">
       <p className="text-xs text-gray-400">
         ゲーム全体に効く共通設定です。保存すると全ユーザーに反映されます
-        （波紋は各端末の次回読み込み時・動画リワードは次のリクエストから）。
+        （波紋は各端末の次回読み込み時・動画リワードと経験値は次のリクエストから）。
       </p>
 
       <WebAdsEditor cfg={webAds} onChange={(next) => {
@@ -406,11 +613,17 @@ export default function SettingsPanel() {
         setSavedAt(null);
       }} />
 
+      <ExpConfigEditor cfg={expConfig} onChange={(next) => {
+        setExpConfig(next);
+        setSavedAt(null);
+      }} />
+
       {MODES.map((m) => (
         <ModeEditor
           key={m.key}
           title={m.title}
           desc={m.desc}
+          modeKey={m.key}
           cfg={cfg[m.key]}
           onChange={(next) => {
             setCfg((prev) => ({ ...prev, [m.key]: next }));
@@ -432,6 +645,7 @@ export default function SettingsPanel() {
             setCfg({ manual: { ...DEFAULT_RIPPLE.manual }, gps: { ...DEFAULT_RIPPLE.gps } });
             setVideoReward({ ...DEFAULT_VIDEO_REWARD });
             setWebAds({ ...DEFAULT_WEB_ADS });
+            setExpConfig({ ...DEFAULT_EXP_CONFIG });
             setSavedAt(null);
           }}
           className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"

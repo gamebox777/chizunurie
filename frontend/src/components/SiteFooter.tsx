@@ -37,7 +37,7 @@ export default function SiteFooter({ variant = 'block' }: Props) {
   if (variant === 'bar') {
     if (hideBar) return null;
     return (
-      <footer className="shrink-0 bg-white border-t border-gray-200 px-3 py-1 sm:py-1.5 overflow-x-auto">
+      <footer className="hidden sm:block shrink-0 bg-white border-t border-gray-200 px-3 py-1 sm:py-1.5 overflow-x-auto">
         <nav className="flex items-center gap-3 sm:gap-5 whitespace-nowrap text-[11px] leading-4 sm:text-sm sm:leading-5 text-gray-500">
           {links.map((l) => (
             <Link key={l.href} href={l.href} className="hover:text-gray-700 hover:underline shrink-0">
@@ -51,7 +51,7 @@ export default function SiteFooter({ variant = 'block' }: Props) {
   }
 
   return (
-    <footer className="mt-12 border-t border-gray-200 pt-5 pb-8 text-sm sm:text-base text-gray-500">
+    <footer className="hidden sm:block mt-12 border-t border-gray-200 pt-5 pb-8 text-sm sm:text-base text-gray-500">
       <nav className="flex flex-wrap gap-x-4 gap-y-2">
         {links.map((l) => (
           <Link key={l.href} href={l.href} className="hover:text-gray-700 hover:underline">

@@ -131,6 +131,56 @@ export function resolveWebAds(s: WebAdsSettings | undefined): ResolvedWebAds {
   };
 }
 
+// 経験値・レベル・ポイントのゲームバランス設定（backend の ExpConfig と同構造）。
+// 保存すると全ユーザーに即反映される（painted リクエストのたびに backend が読む）。
+// backend（lib/points.ts の EXP_CONFIG_DEFAULTS）と既定値を揃えること。
+export type ExpConfigSettings = {
+  expVisit?: number;              // GPS 訪問・昇格・再訪の経験値（既定 100）
+  expPaint?: number;              // 手動塗り（となり塗り）の経験値（既定 50）
+  expFine?: number;               // 125m 細セル初踏みの経験値（既定 5）
+  expFineRevisit?: number;        // 125m 細セル再訪の経験値（既定 5）
+  baseMaxPoints?: number;         // level 1 の最大塗りポイント（回復上限）（既定 10）
+  baseExpToNext?: number;         // level 1→2 に必要な経験値（既定 500）
+  expToNextStep?: number;         // レベルが上がるごとに増える必要経験値の増分（既定 100）
+  initialPoints?: number;         // 新規ユーザーの初期塗りポイント残高（既定 10）
+  regenIntervalSec?: number;      // 1ポイント回復するまでの秒数（既定 600）
+  revisitCooldownSec?: number;    // 再訪クールダウン（秒）（既定 3600）
+};
+
+export type ResolvedExpConfig = Required<ExpConfigSettings>;
+
+export const DEFAULT_EXP_CONFIG: ResolvedExpConfig = {
+  expVisit: 100,
+  expPaint: 50,
+  expFine: 5,
+  expFineRevisit: 5,
+  baseMaxPoints: 10,
+  baseExpToNext: 500,
+  expToNextStep: 100,
+  initialPoints: 10,
+  regenIntervalSec: 600,
+  revisitCooldownSec: 3600,
+};
+
+export function resolveExpConfig(s: ExpConfigSettings | undefined): ResolvedExpConfig {
+  function numOr(v: unknown, min: number, def: number): number {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= min ? Math.floor(n) : def;
+  }
+  return {
+    expVisit: numOr(s?.expVisit, 0, DEFAULT_EXP_CONFIG.expVisit),
+    expPaint: numOr(s?.expPaint, 0, DEFAULT_EXP_CONFIG.expPaint),
+    expFine: numOr(s?.expFine, 0, DEFAULT_EXP_CONFIG.expFine),
+    expFineRevisit: numOr(s?.expFineRevisit, 0, DEFAULT_EXP_CONFIG.expFineRevisit),
+    baseMaxPoints: numOr(s?.baseMaxPoints, 1, DEFAULT_EXP_CONFIG.baseMaxPoints),
+    baseExpToNext: numOr(s?.baseExpToNext, 1, DEFAULT_EXP_CONFIG.baseExpToNext),
+    expToNextStep: numOr(s?.expToNextStep, 0, DEFAULT_EXP_CONFIG.expToNextStep),
+    initialPoints: numOr(s?.initialPoints, 0, DEFAULT_EXP_CONFIG.initialPoints),
+    regenIntervalSec: numOr(s?.regenIntervalSec, 1, DEFAULT_EXP_CONFIG.regenIntervalSec),
+    revisitCooldownSec: numOr(s?.revisitCooldownSec, 0, DEFAULT_EXP_CONFIG.revisitCooldownSec),
+  };
+}
+
 // ゲーム共通設定（十字キー移動スピード・波紋演出など）。項目が増えてもここに1キー足すだけ。
 // DB はスキーマ変更不要（jsonb に丸ごと入る）。
 export type GameSettings = {
@@ -139,6 +189,7 @@ export type GameSettings = {
   ripple?: RippleSettings; // 塗りの波紋演出（全ユーザーに効く）
   videoReward?: VideoRewardSettings; // 動画リワードのクールダウン・回復量（全ユーザーに効く）
   webAds?: WebAdsSettings; // Web 広告配信の全体 ON/OFF（個別上書きは user.ad_settings）
+  expConfig?: ExpConfigSettings; // 経験値・レベル・ポイントのゲームバランス（全ユーザーに効く）
 };
 
 // サーバーに保存されたゲーム共通設定を取得する。開発者でなければ／失敗時は空オブジェクト。
