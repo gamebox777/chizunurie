@@ -1,8 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import {
+  createColumnHelper,
+  getCoreRowModel,
+  useReactTable,
+  type SortingState,
+} from '@tanstack/react-table';
 import { fetchPaintedLog, type PaintedLog } from './api';
-import Pager from './Pager';
+import { SortableHeaderRow, TableBody, TablePager } from './table';
 import UserFilter from './UserFilter';
 
 const PAGE_SIZE = 100;
@@ -32,56 +38,135 @@ function formatLatLng(lat: number | null, lng: number | null): string {
   return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
 }
 
+// 列定義。ソートはサーバー側（manual モード）なので、ソート可能列の id は
+// backend/routes/admin.ts の PAINTED_SORTABLE のキーと一致させる。
+const columnHelper = createColumnHelper<PaintedLog>();
+const columns = [
+  columnHelper.accessor('paintedAt', {
+    id: 'date',
+    header: '日時',
+    sortDescFirst: true,
+    cell: (info) => formatDateTime(info.getValue()),
+    meta: { tdClass: 'text-xs text-gray-500 whitespace-nowrap' },
+  }),
+  columnHelper.accessor((p) => p.userName || p.userEmail || '', {
+    id: 'user',
+    header: 'ユーザー',
+    cell: ({ row }) => (
+      <>
+        <div className="font-medium text-gray-800">{row.original.userName || '(未設定)'}</div>
+        <div className="text-xs text-gray-400">{row.original.userEmail}</div>
+      </>
+    ),
+  }),
+  columnHelper.accessor('keyCode', {
+    id: 'keyCode',
+    header: 'メッシュ',
+    meta: { tdClass: 'text-xs text-gray-600 tabular-nums' },
+  }),
+  columnHelper.accessor('mode', {
+    id: 'mode',
+    header: 'モード',
+    cell: (info) => modeBadge(info.getValue()),
+    meta: { tdClass: 'whitespace-nowrap' },
+  }),
+  columnHelper.accessor((p) => p.country ?? '-', {
+    id: 'country',
+    header: '国',
+    meta: { tdClass: 'text-xs text-gray-600 whitespace-nowrap' },
+  }),
+  columnHelper.accessor((p) => p.municipality ?? '-', {
+    id: 'municipality',
+    header: '市区町村',
+    meta: { tdClass: 'text-xs text-gray-600' },
+  }),
+  columnHelper.display({
+    id: 'latlng',
+    header: '緯度経度',
+    cell: ({ row }) => formatLatLng(row.original.lat, row.original.lng),
+    meta: { tdClass: 'text-xs text-gray-500 whitespace-nowrap tabular-nums' },
+  }),
+];
+
 export default function PaintedLogPanel() {
   const [rows, setRows] = useState<PaintedLog[] | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [page, setPage] = useState(0);
-  const [hasNext, setHasNext] = useState(false);
   const [total, setTotal] = useState(0);
   // ユーザー絞り込み：選択中の userId。
   const [userId, setUserId] = useState('');
   // モード絞り込み：''（すべて）／'gps'／'manual'。
   const [mode, setMode] = useState<'' | 'gps' | 'manual'>('');
-  // cursorsRef[i] = ページ i の beforeId（先頭は undefined）。次へ進むたびに末尾 id を覚える。
-  const cursorsRef = useRef<(number | undefined)[]>([undefined]);
+  // ソート・ページング状態（サーバー側で処理。初期値は新しい順）。
+  const [sorting, setSorting] = useState<SortingState>([{ id: 'date', desc: true }]);
+  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: PAGE_SIZE });
 
-  const loadPage = useCallback(
-    (p: number) => {
-      setLoading(true);
-      setError('');
-      const beforeId = cursorsRef.current[p];
-      fetchPaintedLog({ userId: userId || undefined, mode: mode || undefined, beforeId, limit: PAGE_SIZE })
-        .then((r) => {
-          setRows(r.painted);
-          setTotal(r.total);
-          setHasNext(r.painted.length === PAGE_SIZE);
-          if (r.painted.length > 0) {
-            cursorsRef.current[p + 1] = r.painted[r.painted.length - 1].id;
-          }
-          setPage(p);
-        })
-        .catch((e: Error) => setError(e.message))
-        .finally(() => setLoading(false));
-    },
-    [userId, mode]
-  );
-
-  // 絞り込み（ユーザー・モード）が変わったらカーソルを捨てて先頭ページから読み直す。
+  // 絞り込み・ソート・ページが変わるたびにサーバーから読み直す。
   useEffect(() => {
-    cursorsRef.current = [undefined];
-    loadPage(0);
-  }, [loadPage]);
+    let cancelled = false;
+    setLoading(true);
+    setError('');
+    const s = sorting[0];
+    fetchPaintedLog({
+      userId: userId || undefined,
+      mode: mode || undefined,
+      limit: PAGE_SIZE,
+      offset: pagination.pageIndex * PAGE_SIZE,
+      sort: s?.id,
+      dir: s ? (s.desc ? 'desc' : 'asc') : undefined,
+    })
+      .then((r) => {
+        if (cancelled) return;
+        setRows(r.painted);
+        setTotal(r.total);
+      })
+      .catch((e: Error) => {
+        if (!cancelled) setError(e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, mode, sorting, pagination.pageIndex]);
+
+  const table = useReactTable({
+    data: rows ?? [],
+    columns,
+    state: { sorting, pagination },
+    manualSorting: true,
+    manualPagination: true,
+    rowCount: total,
+    onSortingChange: (updater) => {
+      setSorting(updater);
+      setPagination((p) => ({ ...p, pageIndex: 0 }));
+    },
+    onPaginationChange: setPagination,
+    getRowId: (r) => String(r.id),
+    getCoreRowModel: getCoreRowModel(),
+  });
+
+  const pager = <TablePager table={table} loading={loading} />;
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-4">
-        <UserFilter userId={userId} onChange={setUserId} />
+        <UserFilter
+          userId={userId}
+          onChange={(id) => {
+            setUserId(id);
+            setPagination((p) => ({ ...p, pageIndex: 0 }));
+          }}
+        />
         <div className="flex items-center gap-2">
           <label className="text-xs text-gray-600">モード</label>
           <select
             value={mode}
-            onChange={(e) => setMode(e.target.value as '' | 'gps' | 'manual')}
+            onChange={(e) => {
+              setMode(e.target.value as '' | 'gps' | 'manual');
+              setPagination((p) => ({ ...p, pageIndex: 0 }));
+            }}
             className="rounded border border-gray-300 bg-white px-2 py-1 text-sm"
           >
             <option value="">すべて</option>
@@ -95,105 +180,19 @@ export default function PaintedLogPanel() {
       {!rows && !error && <p className="text-sm text-gray-500">読み込み中…</p>}
 
       {rows && (
-        <PaintedLogTable
-          rows={rows}
-          page={page}
-          hasNext={hasNext}
-          loading={loading}
-          total={total}
-          onPrev={() => loadPage(page - 1)}
-          onNext={() => loadPage(page + 1)}
-        />
+        <div className="space-y-3">
+          {pager}
+          <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+            <table className="w-full text-sm">
+              <thead>
+                <SortableHeaderRow table={table} />
+              </thead>
+              <TableBody table={table} empty="塗りログがありません" />
+            </table>
+          </div>
+          {pager}
+        </div>
       )}
-    </div>
-  );
-}
-
-function PaintedLogTable({
-  rows,
-  page,
-  hasNext,
-  loading,
-  total,
-  onPrev,
-  onNext,
-}: {
-  rows: PaintedLog[];
-  page: number;
-  hasNext: boolean;
-  loading: boolean;
-  total: number;
-  onPrev: () => void;
-  onNext: () => void;
-}) {
-  return (
-    <div className="space-y-3">
-      <Pager
-        page={page}
-        hasNext={hasNext}
-        loading={loading}
-        total={total}
-        pageSize={PAGE_SIZE}
-        count={rows.length}
-        onPrev={onPrev}
-        onNext={onNext}
-      />
-
-      <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs text-gray-500">
-              <th className="px-3 py-2 font-medium whitespace-nowrap">日時</th>
-              <th className="px-3 py-2 font-medium">ユーザー</th>
-              <th className="px-3 py-2 font-medium">メッシュ</th>
-              <th className="px-3 py-2 font-medium">モード</th>
-              <th className="px-3 py-2 font-medium">国</th>
-              <th className="px-3 py-2 font-medium">市区町村</th>
-              <th className="px-3 py-2 font-medium">緯度経度</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((p) => (
-              <tr key={p.id} className="border-t border-gray-100 hover:bg-gray-50 align-top">
-                <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">
-                  {formatDateTime(p.paintedAt)}
-                </td>
-                <td className="px-3 py-2">
-                  <div className="font-medium text-gray-800">{p.userName || '(未設定)'}</div>
-                  <div className="text-xs text-gray-400">{p.userEmail}</div>
-                </td>
-                <td className="px-3 py-2 text-xs text-gray-600 tabular-nums">{p.keyCode}</td>
-                <td className="px-3 py-2 whitespace-nowrap">{modeBadge(p.mode)}</td>
-                <td className="px-3 py-2 text-xs text-gray-600 whitespace-nowrap">
-                  {p.country ?? '-'}
-                </td>
-                <td className="px-3 py-2 text-xs text-gray-600">{p.municipality ?? '-'}</td>
-                <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap tabular-nums">
-                  {formatLatLng(p.lat, p.lng)}
-                </td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-gray-400">
-                  塗りログがありません
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      <Pager
-        page={page}
-        hasNext={hasNext}
-        loading={loading}
-        total={total}
-        pageSize={PAGE_SIZE}
-        count={rows.length}
-        onPrev={onPrev}
-        onNext={onNext}
-      />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, desc, eq, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { getSessionUser, isDeveloper } from "../lib/auth.js";
 import { db } from "../db/index.js";
 import { paintedRegions, siteVisits, user, userLogs, userPoints, } from "../db/schema.js";
@@ -288,31 +288,49 @@ adminRouter.delete("/users/:id", async (c) => {
         return c.json({ error: "not found" }, 404);
     return c.json({ ok: true, id });
 });
-// limit（既定100・上限200）と beforeId（id < beforeId のカーソル）を取り出す。
-function parsePaging(c) {
+// 一覧 API 共通のクエリ（limit 既定100・上限200、offset、ソート列キーと方向）を取り出す。
+// 任意の列でソートできるようにするため、ページングはカーソル（beforeId）でなく offset。
+function parseListQuery(c) {
     const limitRaw = Number(c.req.query("limit"));
     const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(200, Math.floor(limitRaw)) : 100;
-    const beforeRaw = Number(c.req.query("beforeId"));
-    const beforeId = Number.isFinite(beforeRaw) && beforeRaw > 0 ? Math.floor(beforeRaw) : null;
-    return { limit, beforeId };
+    const offsetRaw = Number(c.req.query("offset"));
+    const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? Math.floor(offsetRaw) : 0;
+    const sort = c.req.query("sort") ?? null;
+    const dir = c.req.query("dir") === "asc" ? "asc" : "desc";
+    return { limit, offset, sort, dir };
 }
-// ユーザー行動ログ（user_logs）を新しい順で返す。userId / action / カーソルで絞り込める。
+// sort キー（ホワイトリスト）から ORDER BY を組み立てる。並びを安定させるため
+// 第2キーとして常に id の降順を添える。未知のキーは fallback（id ＝新しい順）に倒す。
+function buildOrderBy(sortable, sort, dir, idColumn) {
+    const col = (sort && sortable[sort]) || idColumn;
+    return [dir === "asc" ? asc(col) : desc(col), desc(idColumn)];
+}
+// /logs でソートを許可する列（フロントの列 id → DB 列）。
+const LOG_SORTABLE = {
+    date: userLogs.id, // 日時順 ≒ id 順（同時刻でも安定する）
+    user: user.name,
+    action: userLogs.action,
+    platform: userLogs.platform,
+    municipality: userLogs.municipality,
+    ip: userLogs.ipAddress,
+    userAgent: userLogs.userAgent,
+};
+// ユーザー行動ログ（user_logs）を返す（既定は新しい順）。userId / action で絞り込め、
+// sort / dir / offset で任意の列のソートとページ送りができる。
 adminRouter.get("/logs", async (c) => {
     const guard = await requireDeveloper(c);
     if (guard)
         return guard;
-    const { limit, beforeId } = parsePaging(c);
+    const { limit, offset, sort, dir } = parseListQuery(c);
     const userId = c.req.query("userId");
     const action = c.req.query("action");
-    // 絞り込み条件（カーソル beforeId を含まない）。総件数の集計にも使う。
+    // 絞り込み条件。総件数の集計にも使う。
     const filterConds = [];
     if (userId)
         filterConds.push(eq(userLogs.userId, userId));
     if (action)
         filterConds.push(eq(userLogs.action, action));
     const conds = [...filterConds];
-    if (beforeId !== null)
-        conds.push(lt(userLogs.id, beforeId));
     const rows = await db
         .select({
         id: userLogs.id,
@@ -333,9 +351,10 @@ adminRouter.get("/logs", async (c) => {
         .from(userLogs)
         .leftJoin(user, eq(userLogs.userId, user.id))
         .where(conds.length ? and(...conds) : undefined)
-        .orderBy(desc(userLogs.id))
-        .limit(limit);
-    // 絞り込み後の総件数（カーソル非依存）。ページャーの「全N件」表示用。
+        .orderBy(...buildOrderBy(LOG_SORTABLE, sort, dir, userLogs.id))
+        .limit(limit)
+        .offset(offset);
+    // 絞り込み後の総件数。ページャーの「全N件」表示用。
     const [{ total }] = await db
         .select({ total: sql `count(*)::int` })
         .from(userLogs)
@@ -413,24 +432,32 @@ adminRouter.get("/video-stats", async (c) => {
         },
     });
 });
-// 塗りログ（painted_regions）を新しい順で返す。塗りの文脈（ip/ua/位置/市町村）つき。
+// /painted でソートを許可する列（フロントの列 id → DB 列）。
+const PAINTED_SORTABLE = {
+    date: paintedRegions.id, // 塗った順 ≒ id 順（paintedAt が null の旧行も安定する）
+    user: user.name,
+    keyCode: paintedRegions.keyCode,
+    mode: paintedRegions.mode,
+    country: paintedRegions.country,
+    municipality: paintedRegions.municipality,
+};
+// 塗りログ（painted_regions）を返す（既定は新しい順）。塗りの文脈（位置/市町村）つき。
+// userId / mode で絞り込め、sort / dir / offset で任意の列のソートとページ送りができる。
 adminRouter.get("/painted", async (c) => {
     const guard = await requireDeveloper(c);
     if (guard)
         return guard;
-    const { limit, beforeId } = parsePaging(c);
+    const { limit, offset, sort, dir } = parseListQuery(c);
     const userId = c.req.query("userId");
     // モード絞り込み（gps / manual）。それ以外の値は無視してすべて返す。
     const mode = c.req.query("mode");
-    // 絞り込み条件（カーソル beforeId を含まない）。総件数の集計にも使う。
+    // 絞り込み条件。総件数の集計にも使う。
     const filterConds = [];
     if (userId)
         filterConds.push(eq(paintedRegions.userId, userId));
     if (mode === "gps" || mode === "manual")
         filterConds.push(eq(paintedRegions.mode, mode));
     const conds = [...filterConds];
-    if (beforeId !== null)
-        conds.push(lt(paintedRegions.id, beforeId));
     const rows = await db
         .select({
         id: paintedRegions.id,
@@ -449,9 +476,10 @@ adminRouter.get("/painted", async (c) => {
         .from(paintedRegions)
         .leftJoin(user, eq(paintedRegions.userId, user.id))
         .where(conds.length ? and(...conds) : undefined)
-        .orderBy(desc(paintedRegions.id))
-        .limit(limit);
-    // 絞り込み後の総件数（カーソル非依存）。ページャーの「全N件」表示用。
+        .orderBy(...buildOrderBy(PAINTED_SORTABLE, sort, dir, paintedRegions.id))
+        .limit(limit)
+        .offset(offset);
+    // 絞り込み後の総件数。ページャーの「全N件」表示用。
     const [{ total }] = await db
         .select({ total: sql `count(*)::int` })
         .from(paintedRegions)

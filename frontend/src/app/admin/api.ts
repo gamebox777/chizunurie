@@ -144,21 +144,24 @@ function toQuery(params: Record<string, string | number | undefined | null>): st
   return s ? `?${s}` : '';
 }
 
-export function fetchLogs(params: {
-  userId?: string;
-  action?: string;
-  beforeId?: number;
+// 一覧 API 共通のソート/ページングパラメータ。sort はサーバー側ホワイトリストの列キー
+// （未指定・未知のキーは新しい順）。offset ページングなので任意のページへ飛べる。
+export type ListQuery = {
+  offset?: number;
   limit?: number;
-}) {
+  sort?: string;
+  dir?: 'asc' | 'desc';
+};
+
+export function fetchLogs(
+  params: { userId?: string; action?: string } & ListQuery
+) {
   return request<{ logs: UserLog[]; total: number }>(`/logs${toQuery(params)}`);
 }
 
-export function fetchPaintedLog(params: {
-  userId?: string;
-  mode?: 'gps' | 'manual';
-  beforeId?: number;
-  limit?: number;
-}) {
+export function fetchPaintedLog(
+  params: { userId?: string; mode?: 'gps' | 'manual' } & ListQuery
+) {
   return request<{ painted: PaintedLog[]; total: number }>(`/painted${toQuery(params)}`);
 }
 

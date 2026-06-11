@@ -1,6 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  createColumnHelper,
+  getCoreRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  useReactTable,
+  type SortingState,
+} from '@tanstack/react-table';
 import {
   deletePainted,
   deleteUser,
@@ -10,6 +18,7 @@ import {
   setUserAds,
   type AdminUser,
 } from './api';
+import { jaTextSort, SortableHeaderRow, TablePager } from './table';
 import UserFilter from './UserFilter';
 
 function formatDate(iso: string): string {
@@ -292,59 +301,21 @@ function UserRow({
 // 1ページあたりの表示件数。
 const PAGE_SIZE = 50;
 
-// ページ送り（前へ/次へ＋現在ページ）。一覧の上下に同じものを置く。
-function Pager({
-  page,
-  pageCount,
-  total,
-  onChange,
-}: {
-  page: number;
-  pageCount: number;
-  total: number;
-  onChange: (p: number) => void;
-}) {
-  if (total === 0) return null;
-  const start = page * PAGE_SIZE + 1;
-  const end = Math.min((page + 1) * PAGE_SIZE, total);
-  return (
-    <div className="flex items-center justify-between gap-3 px-3 py-2 text-sm text-gray-600">
-      <span className="tabular-nums">
-        {start}–{end} / {total}人
-      </span>
-      <div className="flex items-center gap-2">
-        <button
-          disabled={page <= 0}
-          onClick={() => onChange(page - 1)}
-          className="rounded border border-gray-300 px-3 py-1 hover:bg-gray-50 disabled:opacity-40"
-        >
-          前へ
-        </button>
-        <span className="tabular-nums">
-          {page + 1} / {pageCount}
-        </span>
-        <button
-          disabled={page >= pageCount - 1}
-          onClick={() => onChange(page + 1)}
-          className="rounded border border-gray-300 px-3 py-1 hover:bg-gray-50 disabled:opacity-40"
-        >
-          次へ
-        </button>
-      </div>
-    </div>
-  );
-}
+const columnHelper = createColumnHelper<AdminUser>();
+const jaSort = jaTextSort<AdminUser>();
 
 export default function UsersPanel() {
   const [users, setUsers] = useState<AdminUser[] | null>(null);
   const [error, setError] = useState('');
-  const [page, setPage] = useState(0);
   // 選択中ユーザー（空なら全員表示）。
   const [userId, setUserId] = useState('');
   // チェックボックスで削除対象に選んだユーザー ID 集合（ページをまたいで保持する）。
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // 一括削除の実行中フラグ。
   const [deleting, setDeleting] = useState(false);
+  // ソート・ページング状態（クライアント側）。ソートなしは API の返却順（塗り数の多い順）。
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: PAGE_SIZE });
 
   const load = () => {
     fetchUsers()
@@ -363,33 +334,131 @@ export default function UsersPanel() {
     });
   };
 
+  // ユーザーを選んだら、その1人だけを一覧に表示する。
+  const visibleUsers = useMemo(() => {
+    const list = users ?? [];
+    return userId ? list.filter((u) => u.id === userId) : list;
+  }, [users, userId]);
+
+  // 列定義。accessor はソート用の値、セルの描画は UserRow がまとめて担当する
+  // （編集行の開閉などの行内 state を UserRow に閉じ込めたままにするため）。
+  // 数値・日付列は TanStack の auto 判定で降順スタートになる。
+  const columns = useMemo(
+    () => [
+      columnHelper.display({
+        id: 'select',
+        meta: { align: 'center' as const },
+        // ヘッダのチェックで現在ページぶんをまとめて選択／解除する。
+        header: ({ table }) => {
+          const pageRows = table.getRowModel().rows;
+          const allSelected =
+            pageRows.length > 0 && pageRows.every((r) => selectedIds.has(r.id));
+          return (
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={() =>
+                setSelectedIds((prev) => {
+                  const next = new Set(prev);
+                  if (allSelected) pageRows.forEach((r) => next.delete(r.id));
+                  else pageRows.forEach((r) => next.add(r.id));
+                  return next;
+                })
+              }
+              className="h-4 w-4 cursor-pointer accent-red-600"
+              aria-label="このページを全選択"
+            />
+          );
+        },
+      }),
+      columnHelper.accessor((u) => u.name || u.email, {
+        id: 'name',
+        header: 'ユーザー',
+        sortingFn: jaSort,
+      }),
+      columnHelper.accessor('role', { header: '権限', sortingFn: jaSort }),
+      columnHelper.accessor((u) => u.country ?? '', {
+        id: 'country',
+        header: '国',
+        sortingFn: jaSort,
+      }),
+      columnHelper.display({ id: 'ads', header: '広告' }),
+      columnHelper.accessor((u) => u.points?.level ?? -1, {
+        id: 'level',
+        header: 'Lv',
+        meta: { align: 'right' as const },
+      }),
+      columnHelper.accessor((u) => u.points?.points ?? -1, {
+        id: 'points',
+        header: 'ポイント',
+        meta: { align: 'right' as const },
+      }),
+      columnHelper.accessor((u) => u.painted.total, {
+        id: 'painted',
+        header: '塗り',
+        meta: { align: 'right' as const },
+      }),
+      columnHelper.accessor((u) => u.playTimeSec, {
+        id: 'playTime',
+        header: 'プレイ時間',
+        meta: { align: 'right' as const },
+      }),
+      columnHelper.accessor((u) => u.lastIpAddress ?? '', {
+        id: 'ip',
+        header: 'IP',
+        sortingFn: jaSort,
+      }),
+      columnHelper.accessor((u) => u.lastUserAgent ?? '', {
+        id: 'userAgent',
+        header: 'UserAgent',
+        sortingFn: jaSort,
+      }),
+      columnHelper.accessor((u) => new Date(u.createdAt).getTime() || 0, {
+        id: 'createdAt',
+        header: '登録日',
+      }),
+      columnHelper.accessor((u) => new Date(u.updatedAt).getTime() || 0, {
+        id: 'updatedAt',
+        header: '更新日',
+      }),
+      columnHelper.display({
+        id: 'actions',
+        header: '操作',
+        meta: { align: 'right' as const },
+      }),
+    ],
+    [selectedIds]
+  );
+
+  const table = useReactTable({
+    data: visibleUsers,
+    columns,
+    state: { sorting, pagination },
+    onSortingChange: (updater) => {
+      setSorting(updater);
+      setPagination((p) => ({ ...p, pageIndex: 0 }));
+    },
+    onPaginationChange: setPagination,
+    getRowId: (u) => u.id,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    // 編集後の load() で users が入れ替わってもページ位置を保つ（クランプは下の effect で）。
+    autoResetPageIndex: false,
+  });
+
+  // データ再読込・絞り込みで件数が減っても範囲外のページに留まらないようにクランプする。
+  const pageCount = Math.max(1, Math.ceil(visibleUsers.length / PAGE_SIZE));
+  useEffect(() => {
+    setPagination((p) =>
+      p.pageIndex >= pageCount ? { ...p, pageIndex: pageCount - 1 } : p
+    );
+  }, [pageCount]);
+
   if (error) return <p className="text-sm text-red-600">読み込みに失敗しました：{error}</p>;
   if (!users) return <p className="text-sm text-gray-500">読み込み中…</p>;
 
-  // ユーザーを選んだら、その1人だけを一覧に表示する。
-  const visibleUsers = userId ? users.filter((u) => u.id === userId) : users;
-  const total = visibleUsers.length;
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  // データ再読込・絞り込みで件数が減っても範囲外に出ないようにクランプする。
-  const safePage = Math.min(page, pageCount - 1);
-  const pageUsers = visibleUsers.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
-  const pager = (
-    <Pager page={safePage} pageCount={pageCount} total={total} onChange={setPage} />
-  );
-
-  // 現在のページが全選択済みか（ヘッダのチェックボックスの状態）。
-  const allPageSelected =
-    pageUsers.length > 0 && pageUsers.every((u) => selectedIds.has(u.id));
-
-  // ヘッダのチェックで現在ページぶんをまとめて選択／解除する。
-  const toggleSelectPage = () => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (allPageSelected) pageUsers.forEach((u) => next.delete(u.id));
-      else pageUsers.forEach((u) => next.add(u.id));
-      return next;
-    });
-  };
+  const pager = <TablePager table={table} unit="人" />;
 
   // 選択したユーザーを関連データごと一括削除する。
   const deleteSelected = async () => {
@@ -424,7 +493,7 @@ export default function UsersPanel() {
         userId={userId}
         onChange={(id) => {
           setUserId(id);
-          setPage(0);
+          setPagination((p) => ({ ...p, pageIndex: 0 }));
         }}
         users={users}
       />
@@ -454,42 +523,19 @@ export default function UsersPanel() {
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-left text-xs text-gray-500">
-              <th className="px-3 py-2 text-center font-medium">
-                <input
-                  type="checkbox"
-                  checked={allPageSelected}
-                  onChange={toggleSelectPage}
-                  className="h-4 w-4 cursor-pointer accent-red-600"
-                  aria-label="このページを全選択"
-                />
-              </th>
-              <th className="px-3 py-2 font-medium">ユーザー</th>
-              <th className="px-3 py-2 font-medium">権限</th>
-              <th className="px-3 py-2 font-medium">国</th>
-              <th className="px-3 py-2 font-medium">広告</th>
-              <th className="px-3 py-2 text-right font-medium">Lv</th>
-              <th className="px-3 py-2 text-right font-medium">ポイント</th>
-              <th className="px-3 py-2 text-right font-medium">塗り</th>
-              <th className="px-3 py-2 text-right font-medium">プレイ時間</th>
-              <th className="px-3 py-2 font-medium">IP</th>
-              <th className="px-3 py-2 font-medium">UserAgent</th>
-              <th className="px-3 py-2 font-medium">登録日</th>
-              <th className="px-3 py-2 font-medium">更新日</th>
-              <th className="px-3 py-2 text-right font-medium">操作</th>
-            </tr>
+            <SortableHeaderRow table={table} />
           </thead>
           <tbody>
-            {pageUsers.map((u) => (
+            {table.getRowModel().rows.map((row) => (
               <UserRow
-                key={u.id}
-                u={u}
+                key={row.id}
+                u={row.original}
                 onChanged={load}
-                selected={selectedIds.has(u.id)}
+                selected={selectedIds.has(row.id)}
                 onToggleSelect={toggleSelect}
               />
             ))}
-            {total === 0 && (
+            {visibleUsers.length === 0 && (
               <tr>
                 <td colSpan={14} className="px-3 py-6 text-center text-gray-400">
                   ユーザーがいません
