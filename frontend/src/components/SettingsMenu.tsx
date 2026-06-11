@@ -395,6 +395,61 @@ export default function SettingsMenu({ name, email, role, onEditNickname, onSign
               </div>
             </div>
           </div>
+
+          {/* 各種情報リンク */}
+          <div className="px-4 py-2 border-b border-gray-100 flex flex-col gap-2 text-sm">
+            <Link
+              href="/about"
+              onClick={() => setOpen(false)}
+              className="text-gray-700 hover:text-blue-500 hover:underline flex items-center justify-between py-0.5"
+            >
+              <span>{t('footerAbout')}</span>
+              <svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </Link>
+            <Link
+              href="/how-to-play"
+              onClick={() => setOpen(false)}
+              className="text-gray-700 hover:text-blue-500 hover:underline flex items-center justify-between py-0.5"
+            >
+              <span>{t('footerHowTo')}</span>
+              <svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </Link>
+            <Link
+              href="/privacy"
+              onClick={() => setOpen(false)}
+              className="text-gray-700 hover:text-blue-500 hover:underline flex items-center justify-between py-0.5"
+            >
+              <span>{t('footerPrivacy')}</span>
+              <svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </Link>
+            <Link
+              href="/contact"
+              onClick={() => setOpen(false)}
+              className="text-gray-700 hover:text-blue-500 hover:underline flex items-center justify-between py-0.5"
+            >
+              <span>{t('footerContact')}</span>
+              <svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </Link>
+            <Link
+              href="/delete-account"
+              onClick={() => setOpen(false)}
+              className="text-gray-700 hover:text-blue-500 hover:underline flex items-center justify-between py-0.5"
+            >
+              <span>{t('footerDeleteAccount')}</span>
+              <svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </Link>
+          </div>
+
           {/* アカウント関連はログイン済みのみ。ゲストには出さない。 */}
           {!isGuest && (
             <button
