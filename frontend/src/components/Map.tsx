@@ -46,6 +46,11 @@ import {
   startNativeBgGeo,
   stopNativeBgGeo,
 } from '@/lib/nativeBackgroundGeolocation';
+import {
+  isNativeKeepAwakeAvailable,
+  startNativeKeepAwake,
+  stopNativeKeepAwake,
+} from '@/lib/nativeKeepAwake';
 import { isNativeApp } from '@/lib/platform';
 import { getMyWebAds, refreshMyWebAds } from '@/lib/webAds';
 import { setGpsStatus } from '@/lib/gpsStatus';
@@ -3925,7 +3930,11 @@ export default function MapView() {
       let wakeLock: WakeLockSentinel | null = null;
       let wantWakeLock = false; // GPS 追跡中＝ロックを保持したい状態か
       const requestWakeLock = async () => {
-        if (!wantWakeLock || wakeLock) return;
+        if (!wantWakeLock) return;
+        if (isNativeKeepAwakeAvailable()) {
+          void startNativeKeepAwake();
+        }
+        if (wakeLock) return;
         if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
         if (document.visibilityState !== 'visible') return; // hidden では取得できない
         try {
@@ -3942,6 +3951,9 @@ export default function MapView() {
       };
       const releaseWakeLock = () => {
         wantWakeLock = false;
+        if (isNativeKeepAwakeAvailable()) {
+          void stopNativeKeepAwake();
+        }
         wakeLock?.release().catch(() => {});
         wakeLock = null;
       };
