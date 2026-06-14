@@ -54,7 +54,7 @@ const GOOGLE_CCTLDS = [
 
 const config: CapacitorConfig = {
   appId: "jp.chizunurie.app", // ← ストア用の一意ID（逆ドメイン）。確定後に変更
-  appName: "ちず塗り絵",
+  appName: "ちずぬりえ",
   webDir: "www", // server.url を使うのでほぼダミー（オフライン時のフォールバック）
   server: {
     url: DEV ? DEV_URL : PROD_URL,
