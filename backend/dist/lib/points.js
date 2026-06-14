@@ -389,12 +389,15 @@ export async function claimVideoReward(userId, now, nonce, platform, tx = db) {
     //   full  = そのレベルの満タン分（= 自然回復の上限と同量・従来挙動）
     //   half  = 満タンの半分（切り上げ）
     //   fixed = 固定値
+    // ただしアプリ版（iOS/Android）は amountMode に関わらず常にそのレベルの満タン分を回復する。
     const max = maxPointsForLevel(state.level, expCfg);
-    const granted = cfg.amountMode === "fixed"
-        ? cfg.fixedAmount
-        : cfg.amountMode === "half"
-            ? Math.ceil(max / 2)
-            : max;
+    const granted = platform === "app"
+        ? max
+        : cfg.amountMode === "fixed"
+            ? cfg.fixedAmount
+            : cfg.amountMode === "half"
+                ? Math.ceil(max / 2)
+                : max;
     const nextPoints = state.points + granted;
     const regenIntervalMs = expCfg.regenIntervalSec * 1000;
     // 満タン以上になったら回復時計を now にそろえる（addExp の満タン時と同様）。

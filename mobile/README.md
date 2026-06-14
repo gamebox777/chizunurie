@@ -226,10 +226,14 @@ xcrun simctl location booted set 35.6812,139.7671   # 例：東京駅
 アプリ内の「▶ 広告を見て回復」は Web 版 GPT ではなく **Unity Ads SDK** で出す
 （事前審査不要。経緯は [docs/スマホアプリ広告-審査不要ネットワーク比較.md](../docs/スマホアプリ広告-審査不要ネットワーク比較.md)）。
 
-- ネイティブ側：`android/app/src/main/java/jp/chizunurie/app/UnityAdsPlugin.java`
-  （Capacitor プラグイン `UnityAds`・`showRewarded()`/`showBanner()`/`hideBanner()`/
-  `getRewardedStatus()`/`getAdTestMode()`/`setAdTestMode()`/`getAdDebugInfo()`）。
-  `MainActivity` で登録、依存は `app/build.gradle` の `com.unity3d.ads:unity-ads`。
+- ネイティブ側（**Android / iOS で API を揃えた同名プラグイン `UnityAds`**・メソッドは
+  `showRewarded()`/`showBanner()`/`hideBanner()`/`getRewardedStatus()`/`getAdTestMode()`/
+  `setAdTestMode()`/`getAdDebugInfo()`）：
+  - Android：`android/app/src/main/java/jp/chizunurie/app/UnityAdsPlugin.java`。
+    `MainActivity` で登録、依存は `app/build.gradle` の `com.unity3d.ads:unity-ads`。
+  - iOS：`ios/App/App/UnityAdsPlugin.swift`（＋ Capacitor 登録用の `UnityAdsPlugin.m`・
+    `CAP_PLUGIN` マクロで自動登録）。依存は `ios/App/Podfile` の `pod 'UnityAds'`
+    （`pod install` 済み）。`Info.plist` に Unity の `SKAdNetworkItems` を追加済み。
 - フロント側：`frontend/src/lib/nativeRewardedAd.ts` が `window.Capacitor.Plugins.UnityAds`
   を呼び、Web 版（`rewardedAd.ts`）と同じ `{ outcome, detail? }` を返す。`Map.tsx` の
   `openVideoReward` が `isNativeApp()` で出し分け。報酬付与は Web 版と同じ backend の
@@ -241,14 +245,18 @@ xcrun simctl location booted set 35.6812,139.7671   # 例：東京駅
   クールダウンは **Web 版のみ**適用（既定5分・`app_settings` の `videoReward` キーで
   管理画面から変更可）。アプリは 0 のまま＝このプリロード制御と1日上限に任せる
   （platform はクライアント自己申告で送る）。
-- **フッターバナー**：`showBanner()` が 320x50 の `BannerView` を画面下中央に表示し、
-  **WebView を bottomMargin で持ち上げて場所を確保**（Web 側の CSS 調整不要）。フロントは
+- **フッターバナー**：`showBanner()` が 320x50 のバナーを画面下中央に表示し、Web 側 UI の
+  場所を確保する（CSS 調整不要）。Android は WebView を bottomMargin で持ち上げ、**iOS は
+  Capacitor の root view が WebView 自身（`view = webView`）なので、ViewController の
+  `additionalSafeAreaInsets.bottom` をバナー高ぶん広げ、WKWebView の
+  `env(safe-area-inset-bottom)` 経由で frontend の下部 UI をバナーの上へ逃がす**。フロントは
   `frontend/src/lib/nativeBannerAd.ts` ＋ `Map.tsx` がアプリ内のみマウント時に自動表示。
   あわせてアプリ内では地図トップのサイトフッター（`SiteFooter` variant="bar"）を非表示にした。
 - **テスト広告/本広告は実行時切り替え**：既定は debug ビルド＝テスト広告・release＝本広告
   （実機で実広告を自分で視聴するとポリシー違反になり得るため）。開発者デバッグメニュー
   （レンチ→「広告モード」）から `setAdTestMode()` でどちらのビルドでも切り替えられ、
-  SharedPreferences（`unity_ads.test_mode`）に永続化される。Unity Ads SDK は同一プロセスで
+  Android は SharedPreferences（`unity_ads.test_mode`）・iOS は UserDefaults
+  （`unity_ads_test_mode`）に永続化される。Unity Ads SDK は同一プロセスで
   一度しか initialize できないため、**SDK 初期化後の切り替えはアプリ再起動後に反映**
   （`requiresRestart`・デバッグメニューに注記が出る）。
 - **広告ステータス詳細**：デバッグメニューの「広告ステータス」が `getAdDebugInfo()` で
@@ -256,7 +264,15 @@ xcrun simctl location booted set 35.6812,139.7671   # 例：東京駅
   最終試行時刻・直近の load エラー）・バナー表示状態（直近エラー）を表示する。
   本広告で在庫が来ない（本番 Game ID 6133603 の「Network error」等）の切り分けに使う。
   「バナー表示を再試行」ボタン付き。取得ついでに止まっていたプリロードも再起動する。
-- Game ID `6133603`（Android）・Placement `Rewarded_Android` は UnityAdsPlugin.java に定数で記載。
+- Game ID / Placement はプラグインに定数で記載：
+  - Android：Game ID `6133603`・`Rewarded_Chizunurie`/`Banner_Chizunurie`（UnityAdsPlugin.java）。
+  - iOS：Game ID `6133602`・`Rewarded_ios_Chizunurie`/`Banner_ios_Chizunurie`
+    （UnityAdsPlugin.swift）。当初の default 名 `Rewarded_iOS`/`Banner_iOS` は Android の
+    default 名と同じく load が internal error で fill しなかったため、別名 ad unit を
+    ダッシュボードで新規作成して差し替えた（Android の `*_Chizunurie` と同じ対処）。
+    なお Unity は旧・共有テスト用ゲーム ID（14851 等）を廃止済みで、テスト広告は
+    本番 Game ID ＋ `testMode=true` で配信される（14851 を渡すと初期化が
+    GatewayResponseError で失敗する）。
 
 ## バックグラウンドGPS塗り（Android / iOS）
 

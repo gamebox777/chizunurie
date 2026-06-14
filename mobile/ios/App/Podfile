@@ -19,6 +19,9 @@ end
 target 'App' do
   capacitor_pods
   # Add your Pods here
+  # Unity Ads SDK（リワード動画・フッターバナー）。Android の build.gradle の
+  # com.unity3d.ads:unity-ads に対応する iOS 版。UnityAdsPlugin.swift から使う。
+  pod 'UnityAds', '~> 4.18'
 end
 
 post_install do |installer|

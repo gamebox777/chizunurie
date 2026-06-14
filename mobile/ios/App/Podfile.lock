@@ -8,6 +8,9 @@ PODS:
   - CapacitorCordova (7.6.6)
   - CapgoBackgroundGeolocation (7.2.8):
     - Capacitor
+  - IronSourceAdQualitySDK (9.6.0)
+  - UnityAds (4.18.1):
+    - IronSourceAdQualitySDK (< 10.0.0)
 
 DEPENDENCIES:
   - "Capacitor (from `../../node_modules/@capacitor/ios`)"
@@ -15,6 +18,12 @@ DEPENDENCIES:
   - "CapacitorCommunityKeepAwake (from `../../node_modules/@capacitor-community/keep-awake`)"
   - "CapacitorCordova (from `../../node_modules/@capacitor/ios`)"
   - "CapgoBackgroundGeolocation (from `../../node_modules/@capgo/background-geolocation`)"
+  - UnityAds (~> 4.18)
+
+SPEC REPOS:
+  trunk:
+    - IronSourceAdQualitySDK
+    - UnityAds
 
 EXTERNAL SOURCES:
   Capacitor:
@@ -34,7 +43,9 @@ SPEC CHECKSUMS:
   CapacitorCommunityKeepAwake: 05c75aab989f60e621870cf03b24a144a5544c30
   CapacitorCordova: 3a4e0027a89a59421c918d19aee9d6ba1c7a3556
   CapgoBackgroundGeolocation: 24b2f5555dc6a9c8d2902696da217535236af203
+  IronSourceAdQualitySDK: 3723b551e1c0b2d0f026deee385d9ef4b2d41cc8
+  UnityAds: 07379b63b1044dcad98b3092319166fd6f2cfda4
 
-PODFILE CHECKSUM: de50cbc8c00f9daff0801798176f6db085f93da0
+PODFILE CHECKSUM: 1b4a4841b70c8296479787a89270bf0c7bd1880c
 
 COCOAPODS: 1.16.2
