@@ -105,10 +105,87 @@ bash geo.sh 34.6873 135.5259   # 例：大阪城
 | インストール | `adb install -r android/app/build/outputs/apk/debug/app-debug.apk` |
 | アプリ起動 | `adb shell am start -n jp.chizunurie.app/.MainActivity` |
 
+## 日々のビルド・実行（iOS・シミュレータ／コマンドだけで完結）
+
+PC（Mac）でアプリを確認する。**開く先（本番サイト or ローカルWeb）を起動コマンドで選べる**
+（Android の `play` / `play:dev` の iOS 版）：
+
+```bash
+cd mobile
+
+npm run sim        # 本番サイト（https://chizunurie.unitygamebox.com）を開く
+                   #   cap sync → ビルド → シミュレータにインストール＆起動まで一発
+
+npm run sim:dev    # ローカルWeb（http://localhost:3000）を開く（手元の変更を確認）
+                   #   = CAP_DEV=1。先に別ターミナルでローカルWebを起動しておくこと
+
+npm run ios        # GUI 派：Xcode を開く（= cap open ios）。実機実行・署名・申請はこちら
+```
+
+ローカルWebを見るときは、先に Mac 側の dev を起動しておく：
+
+```bash
+# ターミナルA：Mac 側の dev（frontend:3000 + backend:3001 + DB）
+cd .. && npm run dev
+
+# ターミナルB：dev 向きでシミュレータをビルド＆起動
+cd mobile && npm run sim:dev
+```
+
+- **iOS シミュレータはホストの `localhost` にそのまま到達する**ので、Android のような
+  `adb reverse` は不要。`localhost` は WKWebView がセキュアコンテキスト扱いなので http でも
+  GPS（`navigator.geolocation`）が使える。
+- 本番サイトに戻すときは `npm run sim`（CAP_DEV なし）で再ビルドするだけ。
+- 実機を同一LANで使う等で別URLにしたいときは `CAP_DEV_URL` で上書き：
+  `CAP_DEV_URL=http://192.168.1.50:3000 npm run sim:dev`（ただし http の生IPは GPS 不可）。
+- dev は http なので `cleartext` を自動で許可している（本番 https では無効）。
+
+`npm run sim` / `sim:dev` の実体は [run-sim.sh](run-sim.sh)（Homebrew 版 pod を優先・Booted 中の
+シミュレータがあれば再利用、無ければ利用可能な iPhone を自動起動）。素のコマンドで手動実行する
+場合の内訳:
+
+| ステップ | コマンド |
+|---|---|
+| URL 焼き込み | `npx cap sync ios`（ローカルWebは `CAP_DEV=1 npx cap sync ios`） |
+| シミュレータ起動 | `xcrun simctl boot 'iPhone 17'` → `open -a Simulator` |
+| ビルド | `cd ios/App && xcodebuild -workspace App.xcworkspace -scheme App -destination 'id=<UDID>' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build` |
+| インストール | `xcrun simctl install <UDID> ios/App/build/Build/Products/Debug-iphonesimulator/App.app` |
+| アプリ起動 | `xcrun simctl launch <UDID> jp.chizunurie.app` |
+
+### 初回だけ必要な環境セットアップ（iOS）
+
+`npm run sim` が動かない場合はこれらが未了のことが多い：
+
+```bash
+# 1) アクティブな開発ディレクトリを Xcode 本体へ（CommandLineTools のままだとビルド不可）
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -runFirstLaunch                 # 追加コンポーネント導入
+
+# 2) iOS シミュレータのプラットフォームを導入（"iOS xx.x is not installed" 対策・数GB）
+xcodebuild -downloadPlatform iOS
+
+# 3) CocoaPods は Homebrew 版を使う（システムの /usr/local/bin/pod は Apple Silicon で壊れている）
+brew install cocoapods                           # run-sim.sh が /opt/homebrew/bin を優先する
+```
+
+### シミュレータで GPS（現在地）を使う
+
+実GPSが無いので位置を注入する（Android の `geo.sh` に相当）：
+
+```bash
+# GUI：Simulator メニュー → Features → Location → Custom Location… で緯度経度を入力
+# CLI：起動中のシミュレータに座標を流す（経度 緯度 ではなく 緯度,経度 の順）
+xcrun simctl location booted set 35.6812,139.7671   # 例：東京駅
+```
+
+- 位置情報の許可ダイアログが出たら Allow。バックグラウンド塗りは下の専用セクション参照。
+
 ## 申請前に必ず潰すこと
 
 - **GPS の権限文言**
-  - iOS: `ios/App/App/Info.plist` に `NSLocationWhenInUseUsageDescription`（日本語の用途説明）を追加
+  - iOS: `ios/App/App/Info.plist` に `NSLocationWhenInUseUsageDescription` /
+    `NSLocationAlwaysAndWhenInUseUsageDescription`（日本語の用途説明）＋ `UIBackgroundModes=location`
+    を追加済み（バックグラウンドGPS塗りに必須。これが無いと起動直後にクラッシュする）
   - Android: `android/app/src/main/AndroidManifest.xml` に `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION`
 - **Apple 審査リスク（ガイドライン 4.2「ガワアプリ」）**: 単なるWebラッパーはリジェクトされやすい。
   GPS連動やプッシュ通知など“ネイティブらしさ”を1つ足すと通りやすい（Capacitor の
@@ -122,8 +199,9 @@ bash geo.sh 34.6873 135.5259   # 例：大阪城
   - 認証後は `/api/auth/callback/google`（自ドメイン）へ戻り Cookie が WebView に入りログイン成立。
   - 注意：Google はポリシー上、埋め込みWebViewでのOAuthを推奨していない。現状は通るが将来
     弾かれた場合は Custom Tab(`@capacitor/browser`)＋ディープリンク＋トークン受け渡しに切り替える。
-- **iOS は未対応**：上記2設定のうち UA上書きは iOS でも `ios.overrideUserAgent` で同様に効くが、
-  iOS の WKWebView は OAuth 周りの挙動が別。iOS 対応時に実機で要確認。
+- **iOS の OAuth は要実機確認**：上記2設定のうち UA上書きは iOS でも `ios.overrideUserAgent` で
+  同様に効くが、iOS の WKWebView は OAuth 周りの Cookie 挙動が Android と別。アプリ自体は
+  ビルド・起動できるが、Google ログインの動作は実機で要確認（必要なら Custom Tab 方式へ）。
 
 ## エミュレータでのデバッグ Tips（Android）
 
@@ -136,10 +214,12 @@ bash geo.sh 34.6873 135.5259   # 例：大阪城
   `adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>` → `http://localhost:9222/json/list`
   で Chrome DevTools プロトコルに繋がる（PC版Chromeの `chrome://inspect` でも可）。
 
-> `mobile/ios`・`mobile/node_modules` は .gitignore 済み（`cap add` で再生成可）。
-> **`mobile/android` はコミット対象**：ネイティブの手書きコード（`UnityAdsPlugin.java`・
+> `mobile/node_modules` は .gitignore 済み。
+> **`mobile/ios`・`mobile/android` はコミット対象**：ネイティブの手書きコード／設定
+> （iOS の `Info.plist`〔バックグラウンド位置情報〕・Android の `UnityAdsPlugin.java`・
 > `MainActivity.java`・`app/build.gradle`・`AndroidManifest.xml` 等）を含み `cap add` では
-> 再生成できないため。ビルド生成物・`keystore.properties` は `android/.gitignore` が除外する。
+> 再生成できないため。ビルド生成物・Pods・`keystore.properties`・URL を焼き込む
+> `capacitor.config.json` は各 `ios/.gitignore`・`android/.gitignore` が除外する。
 
 ## Unity Ads（リワード動画）
 
@@ -178,7 +258,7 @@ bash geo.sh 34.6873 135.5259   # 例：大阪城
   「バナー表示を再試行」ボタン付き。取得ついでに止まっていたプリロードも再起動する。
 - Game ID `6133603`（Android）・Placement `Rewarded_Android` は UnityAdsPlugin.java に定数で記載。
 
-## バックグラウンドGPS塗り（Android）
+## バックグラウンドGPS塗り（Android / iOS）
 
 アプリ版のみ、画面OFF・アプリ裏でも歩いた場所を塗れる（Web/PWA の `watchPosition` は
 バックグラウンドで止まるため Web 版は Wake Lock＝画面点けっぱなしの緩和策のみ）。
@@ -193,6 +273,11 @@ bash geo.sh 34.6873 135.5259   # 例：大阪城
   届いた位置は実GPSと同じ `handleGpsPosition` → `paintGpsAt` に流す（`distanceFilter: 25m`・
   前面では watchPosition と二重に届くがセル・細セル単位の間引きで実害なし）。
 - 追跡中は「現在地を記録中」の通知（i18n の `bgGeoTitle`/`bgGeoMessage`）が出る。
-  Web 版・プラグイン未搭載の旧 APK では no-op。iOS は未対応（Info.plist 未設定）。
-- 動作確認：`npm run play:dev` で起動 → GPSボタンで追跡開始 → ホームボタンでアプリを
+  Web 版・プラグイン未搭載の旧 APK では no-op。
+- **iOS**：`ios/App/App/Info.plist` の `UIBackgroundModes=location` ＋ Always 用の利用説明文で
+  有効化済み（これが無いと `setAllowsBackgroundLocationUpdates(true)` で起動直後にクラッシュする）。
+  `cap add ios` でプロジェクトを作り直したら Info.plist へ再追加すること。完全な裏動作は
+  実機での確認推奨（シミュレータでは権限ダイアログ→通常の前面追跡まで確認済み）。
+- 動作確認（Android）：`npm run play:dev` で起動 → GPSボタンで追跡開始 → ホームボタンでアプリを
   裏に回し `bash geo.sh <緯度> <経度>` で位置を動かす → アプリに戻ると塗られている。
+  iOS は `npm run sim:dev` で起動 → Features → Location で座標を動かして確認。
