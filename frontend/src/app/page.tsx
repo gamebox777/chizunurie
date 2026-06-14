@@ -56,7 +56,18 @@ export default function Home() {
   }, [session]);
 
   return (
-    <div className="flex flex-col" style={{ height: '100dvh' }}>
+    <div
+      className="flex flex-col"
+      style={{
+        height: '100dvh',
+        // iOS のステータスバー/ホームインジケータ（セーフエリア）と UI が被らないように、
+        // 上下にセーフエリア分の余白を確保する（viewport-fit=cover と対）。border-box なので
+        // 100dvh の内側に余白を取り、地図エリア（flex-1）が縮む。非ノッチ端末では env() は 0。
+        boxSizing: 'border-box',
+        paddingTop: 'env(safe-area-inset-top)',
+        paddingBottom: 'env(safe-area-inset-bottom)',
+      }}
+    >
       <Header />
       <div className="flex-1 overflow-hidden">
         <Map />

@@ -391,11 +391,15 @@ better-auth の `user`/`session`/`account`/`verification` に加えて：
   だけ経由する Cookie 同期ホップ）＋ `overrideUserAgent`（"; wv" を消して disallowed_useragent
   拒否を回避）。これらを外すとアプリ内ログインが壊れる。
 - `geo.sh` でエミュに GPS 位置を注入（引数は「緯度 経度」順・内部で adb の「経度 緯度」順へ変換）。
-- **バックグラウンドGPS塗り（アプリ版のみ・Android）**：`@capgo/background-geolocation`
-  （mobile/ に npm 導入・フォアグラウンドサービス＋通知方式で `ACCESS_BACKGROUND_LOCATION`
+- **バックグラウンドGPS塗り（アプリ版・Android / iOS）**：`@capgo/background-geolocation`
+  （mobile/ に npm 導入・Android はフォアグラウンドサービス＋通知方式で `ACCESS_BACKGROUND_LOCATION`
   不要＝Play 審査が軽い）。frontend 側は `lib/nativeBackgroundGeolocation.ts` が
   `window.Capacitor.Plugins.BackgroundGeolocation` を呼び、Map.tsx が GPS 追跡の開始/終了
   （`trackuserlocationstart`/`end`）に合わせて並走させる。届いた位置は実GPSと同じ
   `handleGpsPosition` → `paintGpsAt` へ流れる（前面では watchPosition と二重に届くが、
-  セル・細セル単位の間引きで実害なし）。Web 版・旧 APK では no-op。iOS は未対応。
+  セル・細セル単位の間引きで実害なし）。Web 版・旧 APK では no-op。
+  **iOS は `mobile/ios/App/App/Info.plist` に `UIBackgroundModes=location` ＋
+  `NSLocationWhenInUseUsageDescription` / `NSLocationAlwaysAndWhenInUseUsageDescription` を
+  追加して有効化**（これが無いと `setAllowsBackgroundLocationUpdates(true)` で起動直後に
+  アサート＝クラッシュする）。`cap add ios` でプロジェクトを作り直したら再追加すること。
 - appId は `jp.chizunurie.app`・ストア素材は `mobile/play-store/`。

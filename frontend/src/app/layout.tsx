@@ -70,6 +70,10 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   themeColor: "#ffffff",
+  // iOS（ノッチ/ホームインジケータ）やネイティブアプリ（Capacitor の全画面 WebView）で
+  // コンテンツが画面端まで広がるようにし、env(safe-area-inset-*) を有効化する。
+  // これと各画面のセーフエリア padding（page.tsx 等）でステータスバーとの被りを防ぐ。
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
