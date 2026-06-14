@@ -11,6 +11,7 @@ import {
   type BgmTrack,
 } from './sound';
 import { isHapticsEnabled, setHapticsEnabled } from './haptics';
+import { isNotificationsEnabled, setNotificationsEnabled } from './nativeNotifications';
 import {
   isBasemapEnabled,
   setBasemapEnabled,
@@ -26,6 +27,7 @@ export type UserSettings = {
   se?: boolean; // 効果音 ON/OFF
   bgm?: BgmTrack; // BGM 曲番号（0=OFF）
   haptics?: boolean; // バイブ ON/OFF
+  notifications?: boolean; // ローカル通知（毎日リマインド）ON/OFF
   basemap?: boolean; // 地理院オーバーレイ ON/OFF
   basemapOpacity?: number; // 絵付きの地図（ラスター）の不透明度（0〜1）
   gpsAddress?: boolean; // 現在地の住所ラベル ON/OFF
@@ -39,6 +41,7 @@ export function collectSettings(lang: Lang): UserSettings {
     se: isSeEnabled(),
     bgm: getBgmTrack(),
     haptics: isHapticsEnabled(),
+    notifications: isNotificationsEnabled(),
     basemap: isBasemapEnabled(),
     basemapOpacity: getBasemapOpacity(),
     gpsAddress: isGpsAddressEnabled(),
@@ -53,6 +56,9 @@ export function applyLocalSettings(s: UserSettings): void {
   if (typeof s.se === 'boolean') setSeEnabled(s.se);
   if (s.bgm === 0 || s.bgm === 1 || s.bgm === 2 || s.bgm === 3) setBgmTrack(s.bgm);
   if (typeof s.haptics === 'boolean') setHapticsEnabled(s.haptics);
+  // 通知はフラグのみ反映する。実際の予約/許可要求は SettingsMenu の syncNotifications が
+  // 「権限が既にあるときだけ」行う（ここで勝手にOS許可を要求しない）。
+  if (typeof s.notifications === 'boolean') setNotificationsEnabled(s.notifications);
   if (typeof s.basemap === 'boolean') setBasemapEnabled(s.basemap);
   if (typeof s.basemapOpacity === 'number') setBasemapOpacity(s.basemapOpacity);
   if (typeof s.gpsAddress === 'boolean') setGpsAddressEnabled(s.gpsAddress);

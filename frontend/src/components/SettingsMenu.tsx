@@ -14,6 +14,14 @@ import {
 } from '@/lib/sound';
 import { isHapticsEnabled, setHapticsEnabled, isHapticsSupported } from '@/lib/haptics';
 import {
+  isNotificationsEnabled,
+  isNativeNotificationsAvailable,
+  enableNotifications,
+  disableNotifications,
+  syncNotifications,
+  type NotifyTexts,
+} from '@/lib/nativeNotifications';
+import {
   isBasemapEnabled,
   setBasemapEnabled,
   getBasemapOpacity,
@@ -55,6 +63,9 @@ export default function SettingsMenu({ name, email, role, onEditNickname, onSign
   // バイブ（触覚フィードバック）。対応端末でのみ項目を出す。
   const [hapticsOn, setHapticsOn] = useState(true);
   const [hapticsSupported, setHapticsSupported] = useState(false);
+  // ローカル通知（毎日リマインド）。既定 OFF・アプリ版（プラグイン搭載）でのみ項目を出す。
+  const [notificationsOn, setNotificationsOn] = useState(false);
+  const [notificationsSupported, setNotificationsSupported] = useState(false);
   // 地理院「標準地図」を薄く重ねるオーバーレイ（既定 OFF）。
   const [basemapOn, setBasemapOn] = useState(false);
   // 地理院オーバーレイ（ラスター）の不透明度（0〜1・既定 0.5）。スライダーで調整。
@@ -77,16 +88,29 @@ export default function SettingsMenu({ name, email, role, onEditNickname, onSign
     setSeOn(isSeEnabled());
     setTrack(getBgmTrack());
     setHapticsOn(isHapticsEnabled());
+    setNotificationsOn(isNotificationsEnabled());
     setBasemapOn(isBasemapEnabled());
     setBasemapOpacityState(getBasemapOpacity());
     setGpsAddressOn(isGpsAddressEnabled());
     setIconSizeState(getIconSize());
   };
+  // 通知に出す文言（現在の言語で組み立てる）。
+  const notifyTexts = (): NotifyTexts => ({
+    reminderTitle: t('notifyReminderTitle'),
+    reminderBody: t('notifyReminderBody'),
+    confirmTitle: t('notifyEnabledTitle'),
+    confirmBody: t('notifyEnabledBody'),
+  });
   useEffect(() => {
     setHapticsSupported(isHapticsSupported());
+    setNotificationsSupported(isNativeNotificationsAvailable());
     syncFromLocal(); // まず手元の値で即描画
     // サーバー保存ぶん（別端末での変更など）を取り込んで反映し直す。
-    hydrateSettings(setLang).then(syncFromLocal);
+    hydrateSettings(setLang).then(() => {
+      syncFromLocal();
+      // 通知が ON なら、権限が既にある場合だけ毎日リマインドを予約し直す（プロンプトは出さない）。
+      void syncNotifications(notifyTexts());
+    });
     // 実行環境とアプリ版バージョン（アプリ内のみ・非同期で後から埋まる）。
     setVariant(isNativeApp() ? 'app' : isPwa() ? 'pwa' : 'browser');
     nativeAppVersion().then(setAppVersion);
@@ -106,6 +130,21 @@ export default function SettingsMenu({ name, email, role, onEditNickname, onSign
     setHapticsOn(next);
     setHapticsEnabled(next);
     if (next && typeof navigator !== 'undefined') navigator.vibrate?.(20); // ON にした瞬間に確認のビビッ
+    pushSettings(lang);
+  };
+  // 通知トグル。ON にするときは OS の許可を要求し、拒否されたら元に戻して案内する。
+  const toggleNotifications = async () => {
+    if (!notificationsOn) {
+      const ok = await enableNotifications(notifyTexts());
+      if (!ok) {
+        if (typeof window !== 'undefined') window.alert(t('notifyDenied'));
+        return; // 権限拒否：トグルは OFF のまま
+      }
+      setNotificationsOn(true);
+    } else {
+      await disableNotifications();
+      setNotificationsOn(false);
+    }
     pushSettings(lang);
   };
   const toggleBasemap = () => {
@@ -368,6 +407,27 @@ export default function SettingsMenu({ name, email, role, onEditNickname, onSign
                     <span
                       className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                         hapticsOn ? 'translate-x-4' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </span>
+                </button>
+              )}
+              {notificationsSupported && (
+                <button
+                  type="button"
+                  onClick={toggleNotifications}
+                  aria-pressed={notificationsOn}
+                  className="flex items-center justify-between text-sm text-gray-700"
+                >
+                  <span>{t('notifications')}</span>
+                  <span
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                      notificationsOn ? 'bg-blue-500' : 'bg-gray-300'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        notificationsOn ? 'translate-x-4' : 'translate-x-0.5'
                       }`}
                     />
                   </span>

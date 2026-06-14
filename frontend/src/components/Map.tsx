@@ -26,7 +26,14 @@ import {
   suspendAudioForHidden,
   resumeAudioFromHidden,
 } from '@/lib/sound';
-import { vibratePaint } from '@/lib/haptics';
+import { playHaptic } from '@/lib/haptics';
+import {
+  isNativeNotificationsAvailable,
+  isNotificationsEnabled,
+  onNotificationsChange,
+  scheduleRecovery,
+  cancelRecovery,
+} from '@/lib/nativeNotifications';
 import { isBasemapEnabled, onBasemapChange, getBasemapOpacity, onBasemapOpacityChange } from '@/lib/basemap';
 import { isGpsAddressEnabled, onGpsAddressChange } from '@/lib/gpsAddress';
 import { getIconSize, onIconSizeChange } from '@/lib/iconSize';
@@ -1874,6 +1881,44 @@ export default function MapView() {
     return () => window.clearInterval(iv);
   }, [userId, applyPointsState]);
 
+  // 塗りポイント全回復の通知を、現在の残高・最大値・次回復時刻から予約/取り消しする共通処理。
+  // 通知OFF・非対応端末・満タンなら取り消し、そうでなければ「全回復する時刻」に1回鳴る通知を予約。
+  const syncRecoveryNotification = useCallback(() => {
+    if (!isNativeNotificationsAvailable() || !isNotificationsEnabled()) {
+      void cancelRecovery();
+      return;
+    }
+    const r = regenAtRef.current;
+    const max = maxPointsRef.current;
+    const p = pointsRef.current;
+    if (r === null || p >= max) {
+      void cancelRecovery(); // 既に満タン：予約を取り消す
+      return;
+    }
+    // r は「次の1ポイント回復時刻」。残り (max - p - 1) ポイント分の間隔を足すと全回復時刻。
+    const fullAt = r + (max - p - 1) * REGEN_INTERVAL_MS;
+    void scheduleRecovery(fullAt, {
+      title: tRef.current('notifyRecoveryTitle'),
+      body: tRef.current('notifyRecoveryBody'),
+    });
+  }, []);
+
+  // 全回復の通知予約（アプリ版・通知ONのときだけ）。塗るたびに全回復予定が動くので、変化が
+  // 落ち着いてから（1.5秒デバウンス）予約し直す。連続塗りで何度も予約し直さないため。
+  useEffect(() => {
+    if (!userId) return;
+    if (!isNativeNotificationsAvailable() || !isNotificationsEnabled()) return;
+    const tk = window.setTimeout(syncRecoveryNotification, 1500);
+    return () => window.clearTimeout(tk);
+  }, [userId, points, regenAt, maxPoints, syncRecoveryNotification]);
+
+  // 設定で通知を ON/OFF した瞬間に即反映する（ON 直後にその時点の残高で全回復通知を予約、
+  // OFF で取り消し）。デバウンスは挟まず、ユーザー操作に即応する。
+  useEffect(() => {
+    if (!userId) return;
+    return onNotificationsChange(syncRecoveryNotification);
+  }, [userId, syncRecoveryNotification]);
+
   // 合計プレイ時間の計測。前回計上からの経過秒をサーバーへ送って加算する。
   // 約1分ごと（HEARTBEAT_INTERVAL_MS）＋タブを離れる／閉じるときに送る。
   // タブが非表示の間は計上しない（経過分は破棄してアンカーを進める）。
@@ -2105,8 +2150,9 @@ export default function MapView() {
       }, COMBO_WINDOW_MS);
       // 塗り音（連鎖が伸びるほど音程が上がる）
       playPaint(comboRef.current);
-      // スマホの触覚フィードバック（現地塗り・となり塗りでビビッ。設定OFF・非対応端末では無視）
-      vibratePaint();
+      // スマホの触覚フィードバック（設定OFF・非対応端末では無視）。GPS訪問は強めの成功パターン、
+      // となり塗り（手動）は軽い単発で区別する。
+      playHaptic(mode === 'gps' ? 'success' : 'light');
 
       // 制覇判定（市区町村 → 都道府県）。塗り数は commitLocalPaint で加算済み。
       if (muniKey && !completedMuniRef.current.has(muniKey)) {

@@ -9,9 +9,10 @@ import LogsPanel from './LogsPanel';
 import PaintedLogPanel from './PaintedLogPanel';
 import VideoStatsPanel from './VideoStatsPanel';
 import SettingsPanel from './SettingsPanel';
+import HapticsPanel from './HapticsPanel';
 import { RUN_MODE, RUN_MODE_LABEL, RUN_MODE_BADGE } from '@/lib/runtime-env';
 
-type Tab = 'stats' | 'users' | 'logs' | 'painted' | 'video' | 'settings';
+type Tab = 'stats' | 'users' | 'logs' | 'painted' | 'video' | 'settings' | 'haptics';
 
 // 中央寄せのメッセージ画面（読み込み中・権限なし用）。
 function Centered({ children }: { children: React.ReactNode }) {
@@ -78,6 +79,7 @@ export default function AdminPage() {
             ['painted', '塗りログ'],
             ['video', '動画広告'],
             ['settings', '設定'],
+            ['haptics', '触覚'],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -101,6 +103,7 @@ export default function AdminPage() {
         {tab === 'painted' && <PaintedLogPanel />}
         {tab === 'video' && <VideoStatsPanel />}
         {tab === 'settings' && <SettingsPanel />}
+        {tab === 'haptics' && <HapticsPanel />}
       </main>
     </div>
   );
