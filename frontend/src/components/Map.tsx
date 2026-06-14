@@ -358,8 +358,7 @@ function subCellCenter(code: number, subIndex: number): [number, number] {
 // queryRenderedFeatures（タイルは zoom ごとに簡略化が違う）ではなく、build-muni-stats
 // が分母を数えるときと「同一のジオメトリ・同一のアルゴリズム」で判定する。これにより
 // 分子＝分母が厳密に一致し、どのズームで塗っても市区町村は必ず 100% に到達する。
-// 判定用ポリゴンは muni-classify.geojson（build-muni-classify が生成・遅延ロード）。
-const MUNI_CLASSIFY_URL = '/data/muni-classify.geojson';
+// const MUNI_CLASSIFY_URL = '/data/muni-classify.geojson'; // パターンA移行により廃止
 
 // 帰属判定用の市区町村。parts は build-muni-stats と同じ {rings, bbox}（polysWithBbox で生成）。
 type MuniPoly = { key: string; address: string; parts: PolyWithBbox[] };
@@ -845,6 +844,13 @@ export default function MapView() {
   const maxPointsRef = useRef(DEFAULT_MAX_POINTS);
   const levelRef = useRef<number | null>(null); // 直近のレベル（レベルアップ検出用・未取得は null）
   const lastBeatRef = useRef<number>(0); // 合計プレイ時間：前回ハートビートで計上した時刻(ms)
+  // GPS自動塗り用の送信キュー（10秒バッチ用）
+  const gpsQueueRef = useRef<{
+    id: number;
+    region?: { key: string; a3: string } | null;
+    revisit?: boolean;
+    subIndex?: number | null;
+  }[]>([]);
   const [nowTick, setNowTick] = useState(() => Date.now()); // カウントダウン再描画用
   // レベルアップ演出（{ to: 到達レベル } を一時表示）
   const [levelUp, setLevelUp] = useState<{ to: number } | null>(null);
@@ -876,9 +882,9 @@ export default function MapView() {
   const [webRewardEnabled, setWebRewardEnabled] = useState(true);
   // 初回は AdSenseLoader と共有のキャッシュ（getMyWebAds）を使い、ユーザーが変わったら取り直す。
   const webAdsFetchedRef = useRef(false);
-  // GPS を「掴んでいる」か（位置が届いている間 true）。false の間は右下に小さく GPS OFF を
+  // GPS を「掴んでいる」か（位置が届いている間 green または yellow）。off の間は右下に小さく GPS OFF を
   // 表示する。手動で追跡を止めた・許可していない・自動追跡が途絶えた、のいずれも含む。
-  const [gpsHeld, setGpsHeld] = useState(false);
+  const [gpsHeld, setGpsHeld] = useState<'green' | 'yellow' | 'off'>('off');
   // 進行中フェーズ：null=非表示 / 'loading'=広告準備中 / 'claiming'=報酬請求中。
   // 実際の広告 UI（全画面）は GPT が生成するため、こちらは前後のローディング表示専用。
   const [videoPhase, setVideoPhase] = useState<'loading' | 'claiming' | null>(
@@ -948,6 +954,7 @@ export default function MapView() {
   // requestAnimationFrame でセルの実ピクセル幅（--size）に追従させ、ズームと一緒に拡大させる。
   const fxItemsRef = useRef<Array<{ el: HTMLDivElement; lng: number; marker: maplibregl.Marker }>>([]);
   const fxRafRef = useRef<number | null>(null);
+  const lastRippleTickRef = useRef<number>(0);
   // 波紋の演出パラメータ（広がるスピード・サイズ・表示時間・色・半透明値）。塗り方
   // （隣塗り＝manual／GPS塗り＝gps）ごとに別設定。管理画面（app_settings）で調整できる。
   // 起動時に公開エンドポイントから1回だけ取得してここにキャッシュし、波紋を出すたびに
@@ -965,13 +972,19 @@ export default function MapView() {
       fxRafRef.current = null;
       return;
     }
+
+    fxRafRef.current = requestAnimationFrame(tickRipples);
+
+    const now = performance.now();
+    if (now - lastRippleTickRef.current < 33.3) return; // 30 FPS制限
+    lastRippleTickRef.current = now;
+
     for (const it of items) {
       const c = map.project([it.lng, 35]);
       const e = map.project([it.lng + 1 / MESH_LON_DIV, 35]); // 隣セルとの差＝セル横幅px
       const size = Math.max(12, Math.abs(e.x - c.x));
       it.el.style.setProperty('--size', `${size}px`);
     }
-    fxRafRef.current = requestAnimationFrame(tickRipples);
   }, []);
 
   // 塗ったセル中心（地理座標）に派手な波紋を出す。mode（隣塗り＝manual／GPS塗り＝gps）で
@@ -2356,6 +2369,7 @@ export default function MapView() {
     if (!containerRef.current || mapRef.current) return;
 
     let cancelled = false;
+    let cleanupGpsBatch: (() => void) | null = null;
 
     // PMTilesプロトコルを登録
     const protocol = new Protocol();
@@ -2998,7 +3012,7 @@ export default function MapView() {
         if (paintModeRef.current === 'tonari') map.dragPan.enable();
       });
 
-      const syncPaint = (
+      const sendSyncPaint = (
         method: 'POST' | 'DELETE',
         id: number,
         mode?: PaintMode,
@@ -3007,8 +3021,8 @@ export default function MapView() {
         bulk = false,
         // GPS歩き塗りで踏んだ細セル番号（0..63）。サーバーが walked_mask の該当ビットを立てる。
         subIndex: number | null = null
-      ) => {
-        if (!userIdRef.current) return;
+      ): Promise<void> => {
+        if (!userIdRef.current) return Promise.resolve();
         // POST のときは塗った位置の文脈（セル中心の緯度経度・市区町村・州県コード）を添える。
         // ip/ua はサーバー側で取得する。DELETE には付けない。
         // bulk=true は外国まとめ塗りの残りセル（代表1セルが課金＆経験値を得て、残りは無料・経験値なし）。
@@ -3033,11 +3047,12 @@ export default function MapView() {
             (ctx.region ? stateMetaRef.current.get(ctx.region)?.adm0_a3 : null) ??
             (ctx.municipality ? 'JPN' : null);
         }
-        fetch(PAINT_API, {
+        return fetch(PAINT_API, {
           method,
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sourceLayer: 'mesh', keyCode: String(id), mode, ...(bulk ? { bulk: true } : {}), ...(subIndex !== null ? { subIndex } : {}), ...ctx }),
+          keepalive: true, // ページ離脱時もリクエストを完了させる
         })
           .then(async (res) => {
             // POST（GPS塗り・となり塗り）はサーバーが経験値・レベルを返す。反映してレベルアップ演出も出す。
@@ -3051,8 +3066,47 @@ export default function MapView() {
             const data = (await res.json().catch(() => null)) as {
               points?: ServerPoints;
               gainedExp?: number;
+              municipality?: string | null;
+              region?: string | null;
+              country?: string | null;
             } | null;
             if (data?.points) applyServerPoints(data.points);
+
+            const localMuniKey = muniKeyFor(id);
+            // サーバー側で解決された正式な市区町村キーをクライアント側に同期する（パターンA）
+            if (data?.municipality && data.municipality !== localMuniKey) {
+              if (localMuniKey) {
+                const prevCount = paintedByMuniRef.current.get(localMuniKey) ?? 0;
+                paintedByMuniRef.current.set(localMuniKey, Math.max(0, prevCount - 1));
+              }
+              muniByPaintedCellRef.current.set(id, data.municipality);
+              const nextCount = paintedByMuniRef.current.get(data.municipality) ?? 0;
+              paintedByMuniRef.current.set(data.municipality, nextCount + 1);
+              refreshHoverStat();
+              scheduleLabelRefresh();
+            }
+
+            // 同様に州県・国コードもサーバー側の解決結果と同期する
+            if (data?.region && (!region || region.key !== data.region)) {
+              if (region) {
+                const prevCount = paintedByStateRef.current.get(region.key) ?? 0;
+                paintedByStateRef.current.set(region.key, Math.max(0, prevCount - 1));
+                if (region.a3) {
+                  const prevCountryCount = paintedByCountryRef.current.get(region.a3) ?? 0;
+                  paintedByCountryRef.current.set(region.a3, Math.max(0, prevCountryCount - 1));
+                }
+              }
+              regionByPaintedCellRef.current.set(id, data.region);
+              const nextCount = paintedByStateRef.current.get(data.region) ?? 0;
+              paintedByStateRef.current.set(data.region, nextCount + 1);
+              
+              if (data.country) {
+                const nextCountryCount = paintedByCountryRef.current.get(data.country) ?? 0;
+                paintedByCountryRef.current.set(data.country, nextCountryCount + 1);
+              }
+              refreshHoverStat();
+              scheduleLabelRefresh();
+            }
             // 新規塗りの経験値は塗ったセルのふわっと表示（spawnFloatText）で見せる。ここで出すのは
             // 再訪（既訪セルへ入り直して時間経過ボーナスが入った）ときだけ。再訪は新規塗りではないので
             // ふわっと表示が出ず、トーストと波紋で知らせる。
@@ -3069,7 +3123,52 @@ export default function MapView() {
           })
           .catch((err) => {
             console.warn('failed to sync painted region', err);
+            throw err;
           });
+      };
+
+      const syncPaint = (
+        method: 'POST' | 'DELETE',
+        id: number,
+        mode?: PaintMode,
+        region?: { key: string; a3: string } | null,
+        revisit = false,
+        bulk = false,
+        subIndex: number | null = null
+      ) => {
+        if (!userIdRef.current) return;
+        // GPS自動塗りは即時送信せず、10秒バッチのキューへ積む
+        if (method === 'POST' && mode === 'gps') {
+          gpsQueueRef.current.push({ id, region, revisit, subIndex });
+          return;
+        }
+        // manual塗りやDELETE等は即時送信する
+        sendSyncPaint(method, id, mode, region, revisit, bulk, subIndex).catch(() => {});
+      };
+
+      const flushGpsQueue = async () => {
+        if (gpsQueueRef.current.length === 0) return;
+        const queue = [...gpsQueueRef.current];
+        gpsQueueRef.current = [];
+
+        for (const item of queue) {
+          try {
+            await sendSyncPaint(
+              'POST',
+              item.id,
+              'gps',
+              item.region,
+              item.revisit,
+              false,
+              item.subIndex
+            );
+          } catch (err) {
+            console.warn('failed to send batch item, returning to queue', err);
+            // 失敗時はキューの先頭に戻して以降の送信を次回へ見送る
+            gpsQueueRef.current.unshift(item);
+            break;
+          }
+        }
       };
 
       // 指定モードでローカル（state）にだけ塗る。サーバー同期はしない。塗りの描画は
@@ -3740,12 +3839,13 @@ export default function MapView() {
       // 位置が届くたびに ON にし、しばらく途絶えたら inactive（OFF）に戻す。
       // エラー時はエラー種別を reason に乗せて即 OFF。
       let gpsHeldTimer: number | null = null;
-      const markGpsHeld = () => {
-        setGpsHeld(true);
-        setGpsStatus({ held: true });
+      const markGpsHeld = (accuracy?: number) => {
+        const quality = accuracy !== undefined && accuracy > 30 ? 'yellow' : 'green';
+        setGpsHeld(quality);
+        setGpsStatus({ held: true, quality });
         if (gpsHeldTimer !== null) window.clearTimeout(gpsHeldTimer);
         gpsHeldTimer = window.setTimeout(() => {
-          setGpsHeld(false);
+          setGpsHeld('off');
           setGpsStatus({ held: false, reason: 'inactive' });
         }, GPS_HELD_STALE_MS);
       };
@@ -3754,13 +3854,13 @@ export default function MapView() {
           window.clearTimeout(gpsHeldTimer);
           gpsHeldTimer = null;
         }
-        setGpsHeld(false);
+        setGpsHeld('off');
         setGpsStatus({ held: false, reason });
       };
       // 実GPS（maplibre の watchPosition）とアプリ版のバックグラウンド追跡の両方から呼ぶ
       // 共通処理。塗り・自国判定・現在地共有・初回ログまでを1か所にまとめる。
-      const handleGpsPosition = (lng: number, lat: number) => {
-        markGpsHeld();
+      const handleGpsPosition = (lng: number, lat: number, accuracy?: number) => {
+        markGpsHeld(accuracy);
         paintGpsAt([lng, lat]);
         resolveHomeCountry(lng, lat);
         reportCountry(lng, lat);
@@ -3774,7 +3874,7 @@ export default function MapView() {
         }
       };
       geolocate.on('geolocate', (pos: GeolocationPosition) => {
-        handleGpsPosition(pos.coords.longitude, pos.coords.latitude);
+        handleGpsPosition(pos.coords.longitude, pos.coords.latitude, pos.coords.accuracy);
       });
       // 同じ位置情報エラーが連続で飛んでくる（watch がエラーを吐き続ける）ので、
       // トーストはコードが変わったとき or 15秒経過後にだけ出して連発を防ぐ。
@@ -3853,10 +3953,13 @@ export default function MapView() {
       geolocate.on('trackuserlocationstart', () => {
         wantWakeLock = true;
         void requestWakeLock();
+        showToast(tRef.current('gpsTrackingStarted'));
       });
-      geolocate.on('trackuserlocationend', releaseWakeLock);
-      // 追跡を止めた（手動・自動とも）ら即 GPS OFF 表示に戻す。
-      geolocate.on('trackuserlocationend', markGpsOff);
+      geolocate.on('trackuserlocationend', () => {
+        releaseWakeLock();
+        markGpsOff();
+        showToast(tRef.current('gpsTrackingStopped'));
+      });
 
       // ── アプリ版のみ：バックグラウンドGPS追跡（@capgo/background-geolocation）──
       // ブラウザ／PWA の watchPosition は画面OFF・アプリ裏で止まる（上の Wake Lock は
@@ -3872,8 +3975,8 @@ export default function MapView() {
             backgroundMessage: tRef.current('bgGeoMessage'),
             // 125m細セルを取りこぼさない程度に間引く（歩き想定・電池節約）。
             distanceFilter: 25,
-            onLocation: (lng, lat) => {
-              if (!cancelled) handleGpsPosition(lng, lat);
+            onLocation: (lng, lat, accuracy) => {
+              if (!cancelled) handleGpsPosition(lng, lat, accuracy);
             },
             onError: (error) => {
               // 権限拒否（NOT_AUTHORIZED）等。実GPS側の error ハンドラが別途トーストを
@@ -3928,6 +4031,7 @@ export default function MapView() {
         debugSavedWatchState = gc._watchState ?? 'OFF';
         if (gc._geolocationWatchID != null) gc._clearWatch?.();
         gc._watchState = 'BACKGROUND';
+        map.keyboard.disable(); // 十字キー移動中のキーボードパンとの衝突を防ぐ
       };
 
       // デバッグ終了：GPS追跡状態をクリーンな OFF に戻す（壊れた BACKGROUND 状態を解消）。
@@ -3939,6 +4043,8 @@ export default function MapView() {
         const wasActive = debugSavedWatchState !== 'OFF';
         debugSavedWatchState = null;
         gc._watchState = 'OFF';
+        map.keyboard.enable();
+        map.keyboard.disableRotation();
         if (resume && wasActive) geolocate.trigger();
       };
 
@@ -3978,13 +4084,17 @@ export default function MapView() {
         feedGps(pos);
       };
 
+      let lastStepTs = 0;
       const debugStep = (ts: number) => {
         if (!debugPos) {
           debugRaf = 0;
           return;
         }
-        const dt = debugLastTs ? Math.min((ts - debugLastTs) / 1000, 0.1) : 0;
-        debugLastTs = ts;
+        debugRaf = debugKeys.size > 0 ? requestAnimationFrame(debugStep) : 0;
+
+        const dt = lastStepTs ? Math.min((ts - lastStepTs) / 1000, 0.1) : 0;
+        lastStepTs = ts;
+
         let vx = 0;
         let vy = 0;
         if (debugKeys.has('ArrowUp')) vy += 1;
@@ -4006,13 +4116,11 @@ export default function MapView() {
           map.setCenter(next); // フレームごとに追従（easeTo はカクつくので setCenter）
           paintDebugCell(next);
         }
-        // 十字キーが押されている限りループ継続
-        debugRaf = debugKeys.size > 0 ? requestAnimationFrame(debugStep) : 0;
       };
 
       const startDebugLoop = () => {
         if (debugRaf) return;
-        debugLastTs = 0;
+        lastStepTs = 0;
         debugRaf = requestAnimationFrame(debugStep);
       };
 
@@ -4119,6 +4227,30 @@ export default function MapView() {
       };
       tryTrigger();
 
+      // 10秒ごとにGPSペイントキューをフラッシュするタイマー
+      const gpsBatchInterval = window.setInterval(flushGpsQueue, 10000);
+
+      // タブの表示状態が変わった際（非表示になる時）に残ったキューを送信する
+      const onGpsBatchVisibility = () => {
+        if (document.visibilityState === 'hidden') {
+          void flushGpsQueue();
+        }
+      };
+      document.addEventListener('visibilitychange', onGpsBatchVisibility);
+
+      // ページ離脱時（beforeunload）にも残ったキューを確実に送信する
+      const onGpsBatchBeforeUnload = () => {
+        void flushGpsQueue();
+      };
+      window.addEventListener('beforeunload', onGpsBatchBeforeUnload);
+
+      cleanupGpsBatch = () => {
+        window.clearInterval(gpsBatchInterval);
+        document.removeEventListener('visibilitychange', onGpsBatchVisibility);
+        window.removeEventListener('beforeunload', onGpsBatchBeforeUnload);
+        void flushGpsQueue(); // 最後のフラッシュ
+      };
+
       setMapReady(true);
     });
 
@@ -4140,6 +4272,10 @@ export default function MapView() {
       debugCleanupRef.current = null;
       wakeCleanupRef.current?.();
       wakeCleanupRef.current = null;
+
+      // GPSバッチ関連のクリーンアップと最後の送信
+      cleanupGpsBatch?.();
+
       map.remove();
       maplibregl.removeProtocol('pmtiles');
       mapRef.current = null;
@@ -4427,41 +4563,8 @@ export default function MapView() {
     };
   }, [mapReady, rebuildPaintedByMuni, applyLabelStats]);
 
-  // 塗りセルの市区町村帰属を判定する共有ポリゴン（muni-classify.geojson・gzip約1.5MB）を
-  // 遅延ロードする。build-muni-stats（分母）と同一ファイル・同一 PiP で判定するため、
-  // 塗り％の分子＝分母が厳密一致し、どのズームで塗っても必ず 100% に到達する。
-  // ロード後は既存の塗りも新判定で数え直す（reclassifyPaintedMuni）。
-  useEffect(() => {
-    if (!mapReady || muniPolysRef.current.length > 0) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(MUNI_CLASSIFY_URL);
-        if (!res.ok) return;
-        const data = (await res.json()) as { features: GeoJSON.Feature[] };
-        if (cancelled) return;
-        const feats: MuniPoly[] = [];
-        for (const f of data.features) {
-          const p = (f.properties ?? {}) as Record<string, string>;
-          const pref = p.N03_001 ?? '';
-          const city = `${p.N03_004 ?? ''}${p.N03_005 ?? ''}`;
-          if (!city) continue;
-          const parts = polysWithBbox(f.geometry);
-          if (parts.length === 0) continue;
-          feats.push({ key: `${pref}|${city}`, address: `${pref}${city}`, parts });
-        }
-        if (cancelled) return;
-        muniPolysRef.current = feats;
-        muniIndexRef.current = buildMuniIndex(feats);
-        reclassifyPaintedMuni(); // 既存の塗りを新判定で数え直す
-      } catch (err) {
-        console.warn('failed to load muni classify', err);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [mapReady, reclassifyPaintedMuni]);
+  // パターンA移行に伴い、muni-classify.geojson のダウンロードおよびクライアント側 PiP 判定処理は廃止されました。
+  // 塗りセルの市区町村帰属判定は、すべてサーバー側で事前計算テーブル（mesh_muni_mappings）を引いて決定されます。
 
   // 世界版の塗り％の分母（州・県／国ごとの総セル数）と地名メタを遅延ロード（約500KB）。
   // build-world-stats.mjs が生成。日本の muni-stats と独立に扱う。
@@ -4530,14 +4633,18 @@ export default function MapView() {
     if (!map) return;
     let raf = 0;
     let start = 0;
+    let lastTs = 0;
     const tick = (ts: number) => {
+      raf = requestAnimationFrame(tick);
+      if (lastTs && ts - lastTs < 33.3) return; // 30 FPS制限
+      lastTs = ts;
+
       if (!start) start = ts;
       const phase = ((ts - start) / 1400) * Math.PI * 2; // 約1.4秒周期
       const o = 0.45 + 0.25 * (0.5 + 0.5 * Math.sin(phase));
       if (map.getLayer('muni-complete-glow-blur')) {
         map.setPaintProperty('muni-complete-glow-blur', 'line-opacity', o);
       }
-      raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
@@ -4930,20 +5037,30 @@ export default function MapView() {
       {/* zoom 表示を右下に置く（設定の歯車はヘッダー右側に戻した）。
           優先度は最低（マップよりは上だが、ランキング・データ詳細などのパネルより下）。 */}
       <div className="absolute bottom-4 right-4 z-[5] flex flex-col items-end gap-2">
-        {/* GPS 状態インジケーター：常時表示。ON=緑 / OFF=灰色 */}
+        {/* GPS 状態インジケーター：常時表示。ON=緑/黄 / OFF=灰色 */}
         <div
           className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 shadow text-[10px] font-semibold ${
-            gpsHeld
+            gpsHeld === 'green'
               ? 'bg-white/90 text-emerald-600'
-              : 'bg-white/80 text-gray-500'
+              : gpsHeld === 'yellow'
+                ? 'bg-white/90 text-amber-600'
+                : 'bg-white/80 text-gray-500'
           }`}
         >
           <span
             className={`inline-block h-2 w-2 rounded-full ${
-              gpsHeld ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'
+              gpsHeld === 'green'
+                ? 'bg-emerald-500 animate-pulse'
+                : gpsHeld === 'yellow'
+                  ? 'bg-amber-500 animate-pulse'
+                  : 'bg-gray-400'
             }`}
           />
-          {gpsHeld ? 'GPS' : t('gpsOff')}
+          {gpsHeld === 'green'
+            ? 'GPS'
+            : gpsHeld === 'yellow'
+              ? t('gpsLowAccuracy')
+              : t('gpsOff')}
         </div>
         <div className="bg-white rounded-lg px-3 py-2 shadow text-sm font-mono text-gray-600">
           zoom: <span ref={zoomLabelRef}>4.5</span>

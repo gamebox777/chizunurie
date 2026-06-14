@@ -11,7 +11,8 @@
     "db:migrate": "node --env-file=.env ./node_modules/.bin/drizzle-kit migrate",
     "db:push": "node --env-file=.env ./node_modules/.bin/drizzle-kit push",
     "db:studio": "node --env-file=.env ./node_modules/.bin/drizzle-kit studio",
-    "seed:rankings": "tsx --env-file=.env scripts/seed-rankings.ts"
+    "seed:rankings": "tsx --env-file=.env scripts/seed-rankings.ts",
+    "seed:mesh-muni": "tsx --env-file=.env scripts/seed-mesh-muni.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

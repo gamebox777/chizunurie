@@ -64,7 +64,7 @@ export async function startNativeBgGeo(opts: {
   backgroundTitle: string;
   backgroundMessage: string;
   distanceFilter?: number;
-  onLocation: (lng: number, lat: number) => void;
+  onLocation: (lng: number, lat: number, accuracy?: number) => void;
   onError?: (error: BgError) => void;
 }): Promise<boolean> {
   const plugin = getPlugin();
@@ -87,7 +87,7 @@ export async function startNativeBgGeo(opts: {
           opts.onError?.(error);
           return;
         }
-        if (position) opts.onLocation(position.longitude, position.latitude);
+        if (position) opts.onLocation(position.longitude, position.latitude, position.accuracy);
       }
     );
     return true;

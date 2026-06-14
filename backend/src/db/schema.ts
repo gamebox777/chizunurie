@@ -156,6 +156,14 @@ export const appSettings = pgTable("app_settings", {
     .defaultNow(),
 });
 
+// 3次メッシュセルIDから市区町村キー（"PREF|CITY"）への事前計算マッピング。
+// 日本国内の約38万セル分の対応を保持し、サーバー側で高速かつ正確に市区町村を判定する。
+export const meshMuniMappings = pgTable("mesh_muni_mappings", {
+  cellId: integer("cell_id").primaryKey(), // 8桁の3次メッシュコード（例: 53394622）
+  municipality: text("municipality").notNull(), // "PREF|CITY"
+});
+
+
 // 開発者確認用のユーザー行動ログ。塗り以外の主要アクション（ログイン/ログアウト/
 // 新規登録/セッション開始/検索/現在地取得）を1アクション1行で記録する。
 // 塗りは painted_regions 側に文脈列を持たせ、ここには記録しない（DB負担対策）。

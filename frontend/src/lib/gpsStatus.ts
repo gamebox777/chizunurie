@@ -12,7 +12,7 @@ export type GpsStatusReason =
   | 'timeout'; // タイムアウト（code 3）
 
 export type GpsStatus =
-  | { held: true }
+  | { held: true; quality: 'green' | 'yellow' }
   | { held: false; reason: GpsStatusReason };
 
 const GPS_STATUS_EVENT = 'chizunurie:gps-status';

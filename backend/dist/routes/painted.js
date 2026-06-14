@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
 import { getSessionUser, isDeveloper } from "../lib/auth.js";
 import { db } from "../db/index.js";
-import { paintedRegions, user as userTable } from "../db/schema.js";
+import { paintedRegions, user as userTable, meshMuniMappings } from "../db/schema.js";
 import { ALLOWED_COSTS, COST_ADJACENT, addExp, ensurePoints, getExpConfig, spendPoints, } from "../lib/points.js";
 export const paintedRouter = new Hono();
 // 'mesh' が現行の塗り単位。'municipalities'/'chocho' は旧データ互換のため許可
@@ -100,14 +100,34 @@ paintedRouter.post("/", async (c) => {
         return c.json({ error: "forbidden" }, 403);
     }
     const now = Date.now();
+    // 3次メッシュのときはサーバー側で事前計算テーブルから市区町村と国コードを解決する（パターンA）
+    let resolvedMuni = parsed.municipality;
+    let resolvedCountry = parsed.country;
+    if (parsed.sourceLayer === "mesh" && /^\d{8}$/.test(parsed.keyCode)) {
+        const cellId = parseInt(parsed.keyCode, 10);
+        try {
+            const mapping = await db
+                .select({ municipality: meshMuniMappings.municipality })
+                .from(meshMuniMappings)
+                .where(eq(meshMuniMappings.cellId, cellId))
+                .limit(1);
+            if (mapping.length > 0) {
+                resolvedMuni = mapping[0].municipality;
+                resolvedCountry = "JPN";
+            }
+        }
+        catch (err) {
+            console.warn("Failed to lookup municipality from precomputed DB", err);
+        }
+    }
     // 塗った時点の文脈（新規 insert のときだけ保存）。
     // ip/ua はデータ量削減のため塗りログには保存しない。
     const context = {
         lat: parsed.lat,
         lng: parsed.lng,
-        municipality: parsed.municipality,
+        municipality: resolvedMuni,
         region: parsed.region,
-        country: parsed.country,
+        country: resolvedCountry,
     };
     // 経験値・レベル設定を1回だけ読む（トランザクション内で渡して再読みを防ぐ）。
     const expCfg = await getExpConfig();
@@ -215,7 +235,12 @@ paintedRouter.post("/", async (c) => {
             const state = await ensurePoints(user.id, now, tx, expCfg);
             return { ok: true, points: state, gainedExp: 0 };
         });
-        return c.json(result);
+        return c.json({
+            ...result,
+            municipality: context.municipality,
+            region: context.region,
+            country: context.country,
+        });
     }
     // manual：新規セルのみ塗りポイントを消費する。残高不足ならロールバックして 402 を返す。
     // 既存セルへの再 POST（idempotent）は課金しない。新規かつ有料（cost>0）なら経験値 expPaint を付与。
@@ -252,7 +277,12 @@ paintedRouter.post("/", async (c) => {
             const state = await addExp(user.id, expCfg.expPaint, now, tx, expCfg);
             return { ok: true, points: state, gainedExp: expCfg.expPaint };
         });
-        return c.json(result);
+        return c.json({
+            ...result,
+            municipality: context.municipality,
+            region: context.region,
+            country: context.country,
+        });
     }
     catch (err) {
         if (err instanceof InsufficientPointsError) {

@@ -230,6 +230,10 @@ const ja: Dict = {
   geoInsecure: '位置情報は https か localhost でしか使えません（IPアドレス等のhttp接続では取得できません）',
   // GPS を掴んでいない（追跡停止中・位置が届いていない）ときの小さなインジケーター
   gpsOff: 'GPS OFF',
+  gpsLowAccuracy: 'GPS精度低下',
+  geoWarningLowAccuracy: 'GPS精度が低下しています。トンネルやビルの谷間などでは正確に塗られない場合があります。',
+  gpsTrackingStarted: '現在地の追跡（自動スクロール）を開始しました',
+  gpsTrackingStopped: '現在地の追跡を停止しました',
   // アプリ版バックグラウンドGPS追跡のフォアグラウンドサービス通知（Android）
   bgGeoTitle: '現在地を記録中',
   bgGeoMessage: '歩いた場所を塗るため、バックグラウンドでも現在地を取得しています',
@@ -458,6 +462,10 @@ const en: Dict = {
   geoInsecure: 'Location works only over https or localhost (not over plain http such as an IP address)',
   // small indicator shown while no GPS fix is held (tracking off / no position coming in)
   gpsOff: 'GPS OFF',
+  gpsLowAccuracy: 'Weak GPS',
+  geoWarningLowAccuracy: 'GPS accuracy is low. It may not paint accurately inside tunnels or between buildings.',
+  gpsTrackingStarted: 'Started tracking location (auto-scroll)',
+  gpsTrackingStopped: 'Stopped tracking location',
   // foreground-service notification for the app's background GPS tracking (Android)
   bgGeoTitle: 'Tracking your location',
   bgGeoMessage: 'Recording where you walk to paint the map, even in the background',

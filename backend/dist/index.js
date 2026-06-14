@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { compress } from "hono/compress";
 import { auth } from "./lib/auth.js";
 import { paintedRouter } from "./routes/painted.js";
 import { pointsRouter } from "./routes/points.js";
@@ -12,6 +13,7 @@ import { accessRouter } from "./routes/access.js";
 import { rankingsRouter } from "./routes/rankings.js";
 import { settingsRouter } from "./routes/settings.js";
 const app = new Hono();
+app.use(compress());
 app.use(logger());
 app.use(cors({
     origin: [process.env.FRONTEND_URL ?? "http://localhost:3000"],

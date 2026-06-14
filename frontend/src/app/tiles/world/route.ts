@@ -14,7 +14,7 @@ function baseHeaders(): Headers {
   return new Headers({
     'Accept-Ranges': 'bytes',
     'Content-Type': 'application/octet-stream',
-    'Cache-Control': 'public, max-age=3600',
+    'Cache-Control': 'public, max-age=31536000, immutable',
   });
 }
 

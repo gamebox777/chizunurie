@@ -488,6 +488,19 @@ export default function SettingsMenu({ name, email, role, onEditNickname, onSign
               アプリ版はリモートURL方式で APK と Web の版が独立に上がるため両方併記する。 */}
           {/* GPS がオフの場合、原因をメニュー下部に表示する（inactive=理由なし・単に停止中）。
               denied/unavailable/timeout は対処が必要なケースなので原因を出す。 */}
+          {gpsStatus.held && gpsStatus.quality === 'yellow' && (
+            <div className="px-4 pt-2 pb-1.5 border-t border-gray-100 flex items-start gap-1.5">
+              <span className="mt-0.5 shrink-0 text-amber-500">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                  <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+              </span>
+              <p className="text-[11px] text-amber-700 leading-tight">
+                {t('geoWarningLowAccuracy')}
+              </p>
+            </div>
+          )}
           {!gpsStatus.held && gpsStatus.reason !== 'inactive' && (
             <div className="px-4 pt-2 pb-1.5 border-t border-gray-100 flex items-start gap-1.5">
               <span className="mt-0.5 shrink-0 text-amber-500">

@@ -20,6 +20,19 @@ const nextConfig: NextConfig = {
   // 既定でこの「別ホスト」からの dev リソース(/_next/*・HMR)アクセスをブロックするため、
   // マップ等のチャンクが読めず画面が出ない。dev で許可するホストを明示する（本番は無影響）。
   allowedDevOrigins: ["10.0.2.2"],
+  async headers() {
+    return [
+      {
+        source: "/data/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+        ],
+      },
+    ];
+  },
   async rewrites() {
     const backendUrl = process.env.BACKEND_URL ?? "http://localhost:3001";
     return [
