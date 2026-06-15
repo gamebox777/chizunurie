@@ -3190,6 +3190,14 @@ export default function MapView() {
         if (!userIdRef.current) return;
         // GPS自動塗りは即時送信せず、10秒バッチのキューへ積む
         if (method === 'POST' && mode === 'gps') {
+          // ただし画面が裏（hidden）のときは即時送信する。バックグラウンドでは WebView の
+          // setInterval が凍結して 10秒フラッシュが動かず、歩いて塗ったセルがキューに滞留し、
+          // OS にプロセスを回収されると永久に保存されない（＝バックグラウンド塗りが消える）。
+          // sendSyncPaint は keepalive 付き fetch なので裏でも完了しやすい。
+          if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+            sendSyncPaint('POST', id, 'gps', region, revisit, false, subIndex).catch(() => {});
+            return;
+          }
           gpsQueueRef.current.push({ id, region, revisit, subIndex });
           return;
         }
