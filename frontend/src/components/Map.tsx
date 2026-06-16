@@ -50,6 +50,8 @@ import {
 import { showNativeBanner } from '@/lib/nativeBannerAd';
 import {
   isNativeBgGeoAvailable,
+  isNativeHttpAvailable,
+  nativeHttpPostJson,
   startNativeBgGeo,
   stopNativeBgGeo,
 } from '@/lib/nativeBackgroundGeolocation';
@@ -681,6 +683,63 @@ class RankingsControl implements maplibregl.IControl {
   }
 }
 
+// アプリ版のみ：バックグラウンドGPS塗りの ON/OFF を切り替えるトグルボタン。
+// 画面OFF・アプリ裏でも歩いた場所を塗るかどうかをユーザーが選べる。ON のときだけ
+// アイコンを濃く（COLOR_GPS）表示し、OFF のときは斜線を重ねて灰色にする。
+class BgGeoControl implements maplibregl.IControl {
+  private enabled: boolean;
+  private onToggle: (enabled: boolean) => void;
+  private title: () => { on: string; off: string };
+  private container?: HTMLDivElement;
+  private btn?: HTMLButtonElement;
+  constructor(
+    initialEnabled: boolean,
+    onToggle: (enabled: boolean) => void,
+    title: () => { on: string; off: string }
+  ) {
+    this.enabled = initialEnabled;
+    this.onToggle = onToggle;
+    this.title = title;
+  }
+  private render() {
+    if (!this.btn) return;
+    const label = this.enabled ? this.title().on : this.title().off;
+    this.btn.title = label;
+    this.btn.setAttribute('aria-label', label);
+    this.btn.setAttribute('aria-pressed', this.enabled ? 'true' : 'false');
+    this.btn.style.color = this.enabled ? '#e8504e' : '#9aa0a6';
+    // 足あと（歩き塗り）のアイコン。OFF のときは斜線を重ねて「無効」を示す。
+    const slash = this.enabled
+      ? ''
+      : '<line x1="3" y1="3" x2="21" y2="21" stroke="#9aa0a6" stroke-width="2.4"/>';
+    this.btn.innerHTML =
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:auto">' +
+      '<circle cx="12" cy="10" r="3"/>' +
+      '<path d="M12 2a8 8 0 0 0-8 8c0 5.4 8 12 8 12s8-6.6 8-12a8 8 0 0 0-8-8z"/>' +
+      slash +
+      '</svg>';
+  }
+  onAdd(): HTMLElement {
+    this.container = document.createElement('div');
+    this.container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+    this.btn = document.createElement('button');
+    this.btn.type = 'button';
+    this.btn.addEventListener('click', () => {
+      this.enabled = !this.enabled;
+      this.render();
+      this.onToggle(this.enabled);
+    });
+    this.container.appendChild(this.btn);
+    this.render();
+    return this.container;
+  }
+  onRemove(): void {
+    this.container?.parentNode?.removeChild(this.container);
+    this.container = undefined;
+    this.btn = undefined;
+  }
+}
+
 type PaintedState = Record<string, PaintMode>;
 
 // ユーザー対戦ランキングの種類。前半5種は /rankings、後半2種（都道府県毎・国毎の
@@ -856,13 +915,6 @@ export default function MapView() {
   const maxPointsRef = useRef(DEFAULT_MAX_POINTS);
   const levelRef = useRef<number | null>(null); // 直近のレベル（レベルアップ検出用・未取得は null）
   const lastBeatRef = useRef<number>(0); // 合計プレイ時間：前回ハートビートで計上した時刻(ms)
-  // GPS自動塗り用の送信キュー（10秒バッチ用）
-  const gpsQueueRef = useRef<{
-    id: number;
-    region?: { key: string; a3: string } | null;
-    revisit?: boolean;
-    subIndex?: number | null;
-  }[]>([]);
   const [nowTick, setNowTick] = useState(() => Date.now()); // カウントダウン再描画用
   // レベルアップ演出（{ to: 到達レベル } を一時表示）
   const [levelUp, setLevelUp] = useState<{ to: number } | null>(null);
@@ -1106,6 +1158,12 @@ export default function MapView() {
   const hoverPaintModeRef = useRef(false);
   const debugCleanupRef = useRef<(() => void) | null>(null);
   const wakeCleanupRef = useRef<(() => void) | null>(null); // 画面スリープ防止の後始末
+  // アプリ版：バックグラウンドGPS塗りの ON/OFF（既定 ON・localStorage に保存）。
+  // map init effect 内の GeolocateControl ハンドラから同期参照するため ref で持つ。
+  const bgGeoEnabledRef = useRef(true);
+  const gpsTrackingActiveRef = useRef(false); // GeolocateControl が現在追跡中か
+  // トグルボタン（BgGeoControl）が押されたときの処理。map init effect 内で実体を差す。
+  const bgGeoToggleRef = useRef<(enabled: boolean) => void>(() => {});
   const addressMarkerRef = useRef<maplibregl.Marker | null>(null); // 現在地の住所ラベル
   const gpsAddressEnabledRef = useRef(true); // 現在地の住所ラベル表示 ON/OFF（設定・既定 ON）
   // 塗り方の操作モード。genchi=現地塗り（GPSの現在地のみ自動で塗る）/
@@ -2420,7 +2478,6 @@ export default function MapView() {
     if (!containerRef.current || mapRef.current) return;
 
     let cancelled = false;
-    let cleanupGpsBatch: (() => void) | null = null;
 
     // PMTilesプロトコルを登録
     const protocol = new Protocol();
@@ -2468,6 +2525,26 @@ export default function MapView() {
       new RankingsControl(() => openRankingsRef.current()),
       'top-right'
     );
+
+    // アプリ版のみ：バックグラウンドGPS塗りの ON/OFF トグル（スマホのネイティブアプリで
+    // バックグラウンド位置プラグインが使えるときだけ表示）。保存値を localStorage から復元。
+    if (isNativeBgGeoAvailable()) {
+      try {
+        const saved = window.localStorage.getItem('bgGeoEnabled');
+        bgGeoEnabledRef.current = saved !== '0'; // 既定 ON
+      } catch {}
+      map.addControl(
+        new BgGeoControl(
+          bgGeoEnabledRef.current,
+          (enabled) => bgGeoToggleRef.current(enabled),
+          () => ({
+            on: tRef.current('bgGeoToggleOnTitle'),
+            off: tRef.current('bgGeoToggleOffTitle'),
+          })
+        ),
+        'top-right'
+      );
+    }
 
     // スマホ：コントロールボタン（+/-・GPS 等）のタッチがマップの HandlerManager へ
     // バブルしてズームが乱れる問題を防ぐ。stopPropagation のみで preventDefault は不要。
@@ -3098,11 +3175,35 @@ export default function MapView() {
             (ctx.region ? stateMetaRef.current.get(ctx.region)?.adm0_a3 : null) ??
             (ctx.municipality ? 'JPN' : null);
         }
+        const payload = { sourceLayer: 'mesh', keyCode: String(id), mode, ...(bulk ? { bulk: true } : {}), ...(subIndex !== null ? { subIndex } : {}), ...ctx };
+        // アプリ版でバックグラウンド（画面 hidden）のときは WebView の fetch を使わず
+        // ネイティブ HTTP（CapacitorHttp）で送る。Android は WebView がバックグラウンドで
+        // 約5分すると WebView 発の HTTP（keepalive fetch 含む）をスロットルし、歩き塗りの
+        // 保存が失われる。ネイティブ層から投げればこの制約を受けない。レスポンスの
+        // 経験値・ポイント反映は画面が見えないので不要（前面復帰時に再読込で揃う）。
+        if (
+          method === 'POST' &&
+          typeof document !== 'undefined' &&
+          document.visibilityState === 'hidden' &&
+          isNativeHttpAvailable()
+        ) {
+          return nativeHttpPostJson(PAINT_API, payload).then((ok) => {
+            // ネイティブ送信に失敗したら通常の fetch にフォールバック（keepalive 付き）。
+            if (ok) return;
+            void fetch(PAINT_API, {
+              method,
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+              keepalive: true,
+            }).catch(() => {});
+          });
+        }
         return fetch(PAINT_API, {
           method,
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sourceLayer: 'mesh', keyCode: String(id), mode, ...(bulk ? { bulk: true } : {}), ...(subIndex !== null ? { subIndex } : {}), ...ctx }),
+          body: JSON.stringify(payload),
           keepalive: true, // ページ離脱時もリクエストを完了させる
         })
           .then(async (res) => {
@@ -3188,46 +3289,13 @@ export default function MapView() {
         subIndex: number | null = null
       ) => {
         if (!userIdRef.current) return;
-        // GPS自動塗りは即時送信せず、10秒バッチのキューへ積む
-        if (method === 'POST' && mode === 'gps') {
-          // ただし画面が裏（hidden）のときは即時送信する。バックグラウンドでは WebView の
-          // setInterval が凍結して 10秒フラッシュが動かず、歩いて塗ったセルがキューに滞留し、
-          // OS にプロセスを回収されると永久に保存されない（＝バックグラウンド塗りが消える）。
-          // sendSyncPaint は keepalive 付き fetch なので裏でも完了しやすい。
-          if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-            sendSyncPaint('POST', id, 'gps', region, revisit, false, subIndex).catch(() => {});
-            return;
-          }
-          gpsQueueRef.current.push({ id, region, revisit, subIndex });
-          return;
-        }
-        // manual塗りやDELETE等は即時送信する
+        // GPS自動塗り・となり塗り・DELETE すべて即時送信する。以前は通信・電池節約のため
+        // GPS塗りを10秒バッチに溜めていたが、(1)バックグラウンドでは setInterval が凍結して
+        // フラッシュが動かず保存が失われる、(2)アプリ終了・プロセス回収で溜めたぶんが消える、
+        // という取りこぼしが起きるため廃止した。塗り対象はセル／細セル単位で間引かれている
+        // （paintGpsAt が別の細セルへ移った時だけ呼ぶ）ので、常時送信でも通信量は限定的。
+        // hidden（バックグラウンド）時の送信は sendSyncPaint がネイティブ HTTP に切り替える。
         sendSyncPaint(method, id, mode, region, revisit, bulk, subIndex).catch(() => {});
-      };
-
-      const flushGpsQueue = async () => {
-        if (gpsQueueRef.current.length === 0) return;
-        const queue = [...gpsQueueRef.current];
-        gpsQueueRef.current = [];
-
-        for (const item of queue) {
-          try {
-            await sendSyncPaint(
-              'POST',
-              item.id,
-              'gps',
-              item.region,
-              item.revisit,
-              false,
-              item.subIndex
-            );
-          } catch (err) {
-            console.warn('failed to send batch item, returning to queue', err);
-            // 失敗時はキューの先頭に戻して以降の送信を次回へ見送る
-            gpsQueueRef.current.unshift(item);
-            break;
-          }
-        }
       };
 
       // 指定モードでローカル（state）にだけ塗る。サーバー同期はしない。塗りの描画は
@@ -4035,7 +4103,9 @@ export default function MapView() {
       // 前面では maplibre 自身の watch と二重に届くが、paintGpsAt がセル・細セル単位で
       // 間引くので実害はない。Web 版・プラグイン未搭載の旧 APK では no-op。
       if (isNativeBgGeoAvailable()) {
-        geolocate.on('trackuserlocationstart', () => {
+        // 実際にバックグラウンド追跡を開始する（トグルが ON のときだけ）。
+        const startBgGeoSession = () => {
+          if (!bgGeoEnabledRef.current) return;
           void startNativeBgGeo({
             backgroundTitle: tRef.current('bgGeoTitle'),
             backgroundMessage: tRef.current('bgGeoMessage'),
@@ -4050,10 +4120,30 @@ export default function MapView() {
               if (error?.code === 'NOT_AUTHORIZED') void stopNativeBgGeo();
             },
           });
+        };
+        geolocate.on('trackuserlocationstart', () => {
+          gpsTrackingActiveRef.current = true;
+          startBgGeoSession();
         });
         geolocate.on('trackuserlocationend', () => {
+          gpsTrackingActiveRef.current = false;
           void stopNativeBgGeo();
         });
+        // トグルボタンが押されたとき：保存＋トースト＋追跡中なら即時に開始/停止する。
+        bgGeoToggleRef.current = (enabled) => {
+          bgGeoEnabledRef.current = enabled;
+          try {
+            window.localStorage.setItem('bgGeoEnabled', enabled ? '1' : '0');
+          } catch {}
+          showToast(
+            enabled ? tRef.current('bgGeoEnabledToast') : tRef.current('bgGeoDisabledToast')
+          );
+          if (enabled) {
+            if (gpsTrackingActiveRef.current) startBgGeoSession();
+          } else {
+            void stopNativeBgGeo();
+          }
+        };
       }
 
       wakeCleanupRef.current = () => {
@@ -4293,30 +4383,6 @@ export default function MapView() {
       };
       tryTrigger();
 
-      // 10秒ごとにGPSペイントキューをフラッシュするタイマー
-      const gpsBatchInterval = window.setInterval(flushGpsQueue, 10000);
-
-      // タブの表示状態が変わった際（非表示になる時）に残ったキューを送信する
-      const onGpsBatchVisibility = () => {
-        if (document.visibilityState === 'hidden') {
-          void flushGpsQueue();
-        }
-      };
-      document.addEventListener('visibilitychange', onGpsBatchVisibility);
-
-      // ページ離脱時（beforeunload）にも残ったキューを確実に送信する
-      const onGpsBatchBeforeUnload = () => {
-        void flushGpsQueue();
-      };
-      window.addEventListener('beforeunload', onGpsBatchBeforeUnload);
-
-      cleanupGpsBatch = () => {
-        window.clearInterval(gpsBatchInterval);
-        document.removeEventListener('visibilitychange', onGpsBatchVisibility);
-        window.removeEventListener('beforeunload', onGpsBatchBeforeUnload);
-        void flushGpsQueue(); // 最後のフラッシュ
-      };
-
       setMapReady(true);
     });
 
@@ -4338,9 +4404,6 @@ export default function MapView() {
       debugCleanupRef.current = null;
       wakeCleanupRef.current?.();
       wakeCleanupRef.current = null;
-
-      // GPSバッチ関連のクリーンアップと最後の送信
-      cleanupGpsBatch?.();
 
       map.remove();
       maplibregl.removeProtocol('pmtiles');

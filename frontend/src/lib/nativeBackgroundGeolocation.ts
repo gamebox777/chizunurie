@@ -52,6 +52,68 @@ export function isNativeBgGeoAvailable(): boolean {
   return !!getPlugin();
 }
 
+// CapacitorHttp（Capacitor コア同梱のネイティブ HTTP プラグイン）の最小型。
+// ネイティブの OkHttp/URLSession でリクエストするので、WebView の fetch と違い
+// 「バックグラウンド5分でスロットルされる」制約を受けない。Cookie は WebView と
+// 同じネイティブ Cookie ストアを共有するため、セッション Cookie もそのまま付く。
+type CapacitorHttpPlugin = {
+  request: (options: {
+    url: string;
+    method?: string;
+    headers?: Record<string, string>;
+    data?: unknown;
+  }) => Promise<{ status: number }>;
+};
+
+function getHttpPlugin(): CapacitorHttpPlugin | undefined {
+  if (typeof window === "undefined") return undefined;
+  const cap = (
+    window as unknown as {
+      Capacitor?: { Plugins?: { CapacitorHttp?: CapacitorHttpPlugin } };
+    }
+  ).Capacitor;
+  return cap?.Plugins?.CapacitorHttp;
+}
+
+/** ネイティブ HTTP（CapacitorHttp）が使えるか（Web・旧 APK では false）。 */
+export function isNativeHttpAvailable(): boolean {
+  return !!getHttpPlugin();
+}
+
+/**
+ * バックグラウンドでも確実に届くネイティブ HTTP で JSON を POST する。
+ * url は相対パス可（WebView のオリジンに解決する）。成功で true、ネイティブ HTTP が
+ * 無い／例外で false（呼び出し側は false のとき通常の fetch にフォールバックする）。
+ *
+ * なぜ必要か：Android は WebView がバックグラウンドに入って約5分すると WebView 発の
+ * HTTP（keepalive fetch も含む）をスロットル（事実上停止）する。歩き塗りの保存リク
+ * エストがここで失われ「バックグラウンドで塗っても保存されない」原因になる。ネイティブ
+ * 層から投げればこの制約を受けない（@capgo/background-geolocation の README が推奨する解法）。
+ */
+export async function nativeHttpPostJson(
+  url: string,
+  body: unknown
+): Promise<boolean> {
+  const http = getHttpPlugin();
+  if (!http) return false;
+  try {
+    const absolute =
+      typeof window !== "undefined" && url.startsWith("/")
+        ? new URL(url, window.location.origin).toString()
+        : url;
+    const res = await http.request({
+      url: absolute,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      data: body,
+    });
+    return res.status >= 200 && res.status < 300;
+  } catch (e) {
+    console.warn("native http post failed", e);
+    return false;
+  }
+}
+
 // プラグインは単一ウォッチ（start/stop）なので、二重 start を防ぐフラグを持つ。
 let active = false;
 

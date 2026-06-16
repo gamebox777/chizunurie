@@ -245,6 +245,11 @@ const ja: Dict = {
   // アプリ版バックグラウンドGPS追跡のフォアグラウンドサービス通知（Android）
   bgGeoTitle: '現在地を記録中',
   bgGeoMessage: '歩いた場所を塗るため、バックグラウンドでも現在地を取得しています',
+  // アプリ版：バックグラウンドGPS塗りの ON/OFF トグル（ボタンのツールチップ・トースト）
+  bgGeoToggleOnTitle: 'バックグラウンド塗り：ON',
+  bgGeoToggleOffTitle: 'バックグラウンド塗り：OFF',
+  bgGeoEnabledToast: 'バックグラウンド塗りをONにしました。アプリを閉じても歩いた場所を塗り続けます',
+  bgGeoDisabledToast: 'バックグラウンド塗りをOFFにしました。アプリを開いている間だけ塗ります',
 
   // Map: ホバー中の市区町村塗り％
   hoverStat: (city: string, pct: string, p: number, total: number) =>
@@ -485,6 +490,10 @@ const en: Dict = {
   // foreground-service notification for the app's background GPS tracking (Android)
   bgGeoTitle: 'Tracking your location',
   bgGeoMessage: 'Recording where you walk to paint the map, even in the background',
+  bgGeoToggleOnTitle: 'Background painting: ON',
+  bgGeoToggleOffTitle: 'Background painting: OFF',
+  bgGeoEnabledToast: 'Background painting ON. Keeps painting where you walk even with the app closed',
+  bgGeoDisabledToast: 'Background painting OFF. Only paints while the app is open',
 
   // Map: hover municipality paint %
   hoverStat: (city: string, pct: string, p: number, total: number) =>
